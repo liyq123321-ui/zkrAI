@@ -1,0 +1,4 @@
+Assess whether the submitted Project Brief has an explicit goal, coherent scope,
+usable evidence, identified human decisions, recorded assumptions, and verifiable
+acceptance criteria. Return clarification questions when it is not ready.
+

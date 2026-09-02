@@ -1,0 +1,52 @@
+import { apiClient } from './client';
+import type {
+  PrdCommentDto,
+  PrdCommentableLinesDto,
+  PrdDocumentDto,
+  PublishReviewAcceptedDto,
+  ReviewTaskDto,
+} from './dto';
+
+export const getLatestPrd = (wi: string, signal?: AbortSignal) =>
+  apiClient.request<PrdDocumentDto>(`/prd/${wi}`, { signal });
+
+export const listPrdVersions = (wi: string, signal?: AbortSignal) =>
+  apiClient.request<PrdDocumentDto[]>(`/prd/${wi}/versions`, { signal });
+
+export const getCommentableLines = (wi: string, signal?: AbortSignal) =>
+  apiClient.request<PrdCommentableLinesDto>(`/prd/${wi}/commentable-lines`, { signal });
+
+export const listPrdComments = (wi: string, signal?: AbortSignal) =>
+  apiClient.request<PrdCommentDto[]>(`/prd/${wi}/comments`, { signal });
+
+export const createPrdComment = (
+  wi: string,
+  input: { line: number; text: string; anchor?: string },
+  signal?: AbortSignal,
+) => apiClient.request<void>(`/prd/${wi}/comments`, { method: 'POST', body: input, signal });
+
+export const replyPrdComment = (
+  wi: string,
+  commentId: number,
+  text: string,
+  signal?: AbortSignal,
+) => apiClient.request<void>(`/prd/${wi}/comments/${commentId}/reply`, {
+  method: 'POST', body: { text, author_type: 'human' }, signal,
+});
+
+export const resolvePrdComment = (
+  wi: string,
+  commentId: number,
+  resolved: boolean,
+  signal?: AbortSignal,
+) => apiClient.request<void>(`/prd/${wi}/comments/${commentId}/resolve`, {
+  method: 'POST', body: { resolved }, signal,
+});
+
+export const publishPrdReview = (wi: string, signal?: AbortSignal) =>
+  apiClient.request<PublishReviewAcceptedDto>(`/prd/${wi}/reviews/publish`, {
+    method: 'POST', body: {}, signal,
+  });
+
+export const getReviewTask = (taskId: string, signal?: AbortSignal) =>
+  apiClient.request<ReviewTaskDto>(`/tasks/${taskId}`, { signal });

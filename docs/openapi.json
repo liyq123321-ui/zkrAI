@@ -1,0 +1,2577 @@
+{
+  "components": {
+    "schemas": {
+      "AgentSpecRead": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "additionalProperties": true,
+            "title": "Content",
+            "type": "object"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dependency_work_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependency Work Item Ids",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "source_spec_version_id": {
+            "title": "Source Spec Version Id",
+            "type": "string"
+          },
+          "work_item_id": {
+            "title": "Work Item Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "work_item_id",
+          "source_spec_version_id",
+          "dependency_work_item_ids",
+          "content",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "AgentSpecRead",
+        "type": "object"
+      },
+      "AuditEventRead": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "session_id",
+          "event_type",
+          "actor_id",
+          "payload",
+          "created_at"
+        ],
+        "title": "AuditEventRead",
+        "type": "object"
+      },
+      "ChatRequest": {
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "legacy-user",
+            "title": "Actor Id"
+          },
+          "agent": {
+            "default": "planner",
+            "title": "Agent",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "workflow": {
+            "default": "spec_only",
+            "title": "Workflow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "ChatRequest",
+        "type": "object"
+      },
+      "ClarificationQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_areas": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Affected Areas",
+            "type": "array"
+          },
+          "blocking": {
+            "title": "Blocking",
+            "type": "boolean"
+          },
+          "question": {
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "question_id": {
+            "minLength": 1,
+            "title": "Question Id",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id",
+          "question",
+          "reason",
+          "affected_areas",
+          "blocking"
+        ],
+        "title": "ClarificationQuestion",
+        "type": "object"
+      },
+      "CommandAction": {
+        "enum": [
+          "message",
+          "create_spec",
+          "revise",
+          "approve",
+          "reject",
+          "rework",
+          "publish_review",
+          "convert_to_work_item",
+          "restore_spec_version"
+        ],
+        "title": "CommandAction",
+        "type": "string"
+      },
+      "CommandResult": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "created_resource_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Created Resource Ids",
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionState"
+          }
+        },
+        "required": [
+          "command_id",
+          "state"
+        ],
+        "title": "CommandResult",
+        "type": "object"
+      },
+      "CommentCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor"
+          },
+          "line": {
+            "exclusiveMinimum": 0.0,
+            "title": "Line",
+            "type": "integer"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "text"
+        ],
+        "title": "CommentCreateRequest",
+        "type": "object"
+      },
+      "CommentReplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "author_type": {
+            "const": "human",
+            "title": "Author Type",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "author_type"
+        ],
+        "title": "CommentReplyRequest",
+        "type": "object"
+      },
+      "CommentResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "resolved": {
+            "title": "Resolved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "resolved"
+        ],
+        "title": "CommentResolveRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PrdCommentRead": {
+        "additionalProperties": false,
+        "properties": {
+          "author_type": {
+            "enum": [
+              "human",
+              "agent"
+            ],
+            "title": "Author Type",
+            "type": "string"
+          },
+          "body": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "id": {
+            "exclusiveMinimum": 0.0,
+            "title": "Id",
+            "type": "integer"
+          },
+          "line": {
+            "exclusiveMinimum": 0.0,
+            "title": "Line",
+            "type": "integer"
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "replies": {
+            "items": {
+              "$ref": "#/components/schemas/PrdCommentReplyRead"
+            },
+            "title": "Replies",
+            "type": "array"
+          },
+          "resolved": {
+            "title": "Resolved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "line",
+          "author_type",
+          "body",
+          "resolved",
+          "replies"
+        ],
+        "title": "PrdCommentRead",
+        "type": "object"
+      },
+      "PrdCommentReplyRead": {
+        "additionalProperties": false,
+        "description": "A read-only reply nested under its authoritative Gitea comment.",
+        "properties": {
+          "author_type": {
+            "enum": [
+              "human",
+              "agent"
+            ],
+            "title": "Author Type",
+            "type": "string"
+          },
+          "body": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "id": {
+            "exclusiveMinimum": 0.0,
+            "title": "Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "author_type",
+          "body"
+        ],
+        "title": "PrdCommentReplyRead",
+        "type": "object"
+      },
+      "PrdCommentableLineRead": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "context",
+              "addition"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "line": {
+            "exclusiveMinimum": 0.0,
+            "title": "Line",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "kind",
+          "text"
+        ],
+        "title": "PrdCommentableLineRead",
+        "type": "object"
+      },
+      "PrdCommentableLinesRead": {
+        "additionalProperties": false,
+        "properties": {
+          "commit_sha": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Commit Sha",
+            "type": "string"
+          },
+          "filename": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/PrdCommentableLineRead"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "wi": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Wi",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wi",
+          "version",
+          "filename",
+          "commit_sha",
+          "lines"
+        ],
+        "title": "PrdCommentableLinesRead",
+        "type": "object"
+      },
+      "PrdDocumentRead": {
+        "additionalProperties": false,
+        "properties": {
+          "change_summary": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Summary"
+          },
+          "commit_sha": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
+          "content": {
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "filename": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "pr_number": {
+            "exclusiveMinimum": 0.0,
+            "title": "Pr Number",
+            "type": "integer"
+          },
+          "version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "wi": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Wi",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wi",
+          "version",
+          "filename",
+          "pr_number",
+          "content"
+        ],
+        "title": "PrdDocumentRead",
+        "type": "object"
+      },
+      "ProjectBrief": {
+        "additionalProperties": false,
+        "properties": {
+          "exclusions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exclusions",
+            "type": "array"
+          },
+          "expected_deliverables": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Expected Deliverables",
+            "type": "array"
+          },
+          "final_approver": {
+            "minLength": 1,
+            "title": "Final Approver",
+            "type": "string"
+          },
+          "final_objective": {
+            "minLength": 1,
+            "title": "Final Objective",
+            "type": "string"
+          },
+          "known_scope": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Known Scope",
+            "type": "array"
+          },
+          "motivation": {
+            "minLength": 1,
+            "title": "Motivation",
+            "type": "string"
+          },
+          "project_manager_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Project Manager Ids",
+            "type": "array"
+          },
+          "reference_materials": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reference Materials",
+            "type": "array"
+          },
+          "root_owner_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Root Owner Ids",
+            "type": "array"
+          },
+          "staffing_constraints": {
+            "title": "Staffing Constraints",
+            "type": "string"
+          },
+          "time_constraints": {
+            "title": "Time Constraints",
+            "type": "string"
+          }
+        },
+        "required": [
+          "motivation",
+          "final_objective",
+          "known_scope",
+          "exclusions",
+          "reference_materials",
+          "expected_deliverables",
+          "time_constraints",
+          "staffing_constraints",
+          "final_approver"
+        ],
+        "title": "ProjectBrief",
+        "type": "object"
+      },
+      "ProjectPhase": {
+        "enum": [
+          "INTAKE",
+          "NEED_CLARIFICATION",
+          "SPECIFICATION",
+          "REVIEW",
+          "DECOMPOSITION",
+          "AGENT_SPECS_READY"
+        ],
+        "title": "ProjectPhase",
+        "type": "string"
+      },
+      "PublishReviewAccepted": {
+        "additionalProperties": false,
+        "description": "The frozen task identity returned before background publication.",
+        "properties": {
+          "base_version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Base Version",
+            "type": "integer"
+          },
+          "comment_count": {
+            "exclusiveMinimum": 0.0,
+            "title": "Comment Count",
+            "type": "integer"
+          },
+          "task_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "base_version",
+          "comment_count"
+        ],
+        "title": "PublishReviewAccepted",
+        "type": "object"
+      },
+      "PublishReviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          }
+        },
+        "title": "PublishReviewRequest",
+        "type": "object"
+      },
+      "ReviewFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "blocks_progress": {
+            "title": "Blocks Progress",
+            "type": "boolean"
+          },
+          "code": {
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "severity": {
+            "pattern": "^(BLOCKER|MAJOR|MINOR|INFO)$",
+            "title": "Severity",
+            "type": "string"
+          },
+          "spec_path": {
+            "minLength": 1,
+            "title": "Spec Path",
+            "type": "string"
+          },
+          "suggested_resolution": {
+            "minLength": 1,
+            "title": "Suggested Resolution",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "spec_path",
+          "message",
+          "suggested_resolution",
+          "blocks_progress"
+        ],
+        "title": "ReviewFinding",
+        "type": "object"
+      },
+      "ReviewRead": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
+          "comments": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comments"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_spec_hash": {
+            "title": "Input Spec Hash",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "reviewer_id": {
+            "title": "Reviewer Id",
+            "type": "string"
+          },
+          "spec_version_id": {
+            "title": "Spec Version Id",
+            "type": "string"
+          },
+          "verdict": {
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "spec_version_id",
+          "kind",
+          "reviewer_id",
+          "input_spec_hash",
+          "verdict",
+          "findings",
+          "comments",
+          "command_id",
+          "created_at"
+        ],
+        "title": "ReviewRead",
+        "type": "object"
+      },
+      "ReviewTaskRead": {
+        "additionalProperties": false,
+        "description": "Public task progress, intentionally excluding internal failure detail.",
+        "properties": {
+          "base_version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Base Version",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "new_commit_sha": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Commit Sha"
+          },
+          "new_version": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Version"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "processing",
+              "done",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          },
+          "wi": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Wi",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "wi",
+          "status",
+          "base_version"
+        ],
+        "title": "ReviewTaskRead",
+        "type": "object"
+      },
+      "SessionCommandRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/CommandAction"
+          },
+          "actor_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "command_id": {
+            "minLength": 1,
+            "title": "Command Id",
+            "type": "string"
+          },
+          "expected_state_version": {
+            "minimum": 0.0,
+            "title": "Expected State Version",
+            "type": "integer"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "required": [
+          "command_id",
+          "action",
+          "expected_state_version"
+        ],
+        "title": "SessionCommandRequest",
+        "type": "object"
+      },
+      "SessionCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "brief": {
+            "$ref": "#/components/schemas/ProjectBrief"
+          },
+          "request_id": {
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "brief"
+        ],
+        "title": "SessionCreateRequest",
+        "type": "object"
+      },
+      "SessionState": {
+        "additionalProperties": false,
+        "properties": {
+          "current_spec_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpecStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_spec_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Spec Version Id"
+          },
+          "legal_actions": {
+            "items": {
+              "$ref": "#/components/schemas/CommandAction"
+            },
+            "title": "Legal Actions",
+            "type": "array"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "outstanding_questions": {
+            "items": {
+              "$ref": "#/components/schemas/ClarificationQuestion"
+            },
+            "title": "Outstanding Questions",
+            "type": "array"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/ProjectPhase"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "review_findings": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewFinding"
+            },
+            "title": "Review Findings",
+            "type": "array"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "state_version": {
+            "title": "State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "project_id",
+          "phase",
+          "state_version",
+          "current_spec_version_id",
+          "current_spec_status",
+          "legal_actions",
+          "next_action",
+          "outstanding_questions",
+          "review_findings"
+        ],
+        "title": "SessionState",
+        "type": "object"
+      },
+      "SpecStatus": {
+        "enum": [
+          "DRAFT",
+          "AUTO_REVIEW",
+          "HUMAN_REVIEW",
+          "APPROVED",
+          "REWORK",
+          "NEED_CLARIFICATION",
+          "REJECTED"
+        ],
+        "title": "SpecStatus",
+        "type": "string"
+      },
+      "SpecVersionRead": {
+        "additionalProperties": false,
+        "properties": {
+          "change_summary": {
+            "title": "Change Summary",
+            "type": "string"
+          },
+          "content": {
+            "additionalProperties": true,
+            "title": "Content",
+            "type": "object"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "generation_source": {
+            "title": "Generation Source",
+            "type": "string"
+          },
+          "generator_agent_session_id": {
+            "title": "Generator Agent Session Id",
+            "type": "string"
+          },
+          "generator_call_id": {
+            "title": "Generator Call Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Refs",
+            "type": "array"
+          },
+          "markdown": {
+            "title": "Markdown",
+            "type": "string"
+          },
+          "parent_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Version Id"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewRead"
+            },
+            "title": "Reviews",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "revision",
+          "content",
+          "markdown",
+          "generation_source",
+          "input_refs",
+          "generator_agent_session_id",
+          "generator_call_id",
+          "parent_version_id",
+          "change_summary",
+          "content_hash",
+          "status",
+          "reviews",
+          "created_at"
+        ],
+        "title": "SpecVersionRead",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WorkItemRead": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance_criteria": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acceptance Criteria"
+          },
+          "department": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department"
+          },
+          "dependency_work_item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependency Work Item Ids",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "exclusions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusions"
+          },
+          "executable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executable"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputs"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "local_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Key"
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective"
+          },
+          "outputs": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outputs"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "required_skills": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Skills"
+          },
+          "responsible_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responsible Role"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "suggested_assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Assignee"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "project_id",
+          "parent_id",
+          "type",
+          "department",
+          "local_key",
+          "kind",
+          "executable",
+          "title",
+          "description",
+          "spec",
+          "objective",
+          "status",
+          "scope",
+          "exclusions",
+          "inputs",
+          "outputs",
+          "acceptance_criteria",
+          "required_skills",
+          "responsible_role",
+          "suggested_assignee"
+        ],
+        "title": "WorkItemRead",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "FastAPI",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/chat": {
+      "post": {
+        "operationId": "chat_chat_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-session-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Session-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chat"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "health_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Health Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/prd/{wi}": {
+      "get": {
+        "operationId": "latest_prd_prd__wi__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrdDocumentRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Latest Prd",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
+    "/prd/{wi}/commentable-lines": {
+      "get": {
+        "operationId": "prd_commentable_lines_prd__wi__commentable_lines_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrdCommentableLinesRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prd Commentable Lines",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
+    "/prd/{wi}/comments": {
+      "get": {
+        "operationId": "prd_comments_prd__wi__comments_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PrdCommentRead"
+                  },
+                  "title": "Response Prd Comments Prd  Wi  Comments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prd Comments",
+        "tags": [
+          "prd-review"
+        ]
+      },
+      "post": {
+        "operationId": "create_comment_prd__wi__comments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Comment",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
+    "/prd/{wi}/comments/{comment_id}/reply": {
+      "post": {
+        "operationId": "reply_comment_prd__wi__comments__comment_id__reply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "comment_id",
+            "required": true,
+            "schema": {
+              "title": "Comment Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentReplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reply Comment",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
+    "/prd/{wi}/comments/{comment_id}/resolve": {
+      "post": {
+        "operationId": "resolve_comment_prd__wi__comments__comment_id__resolve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "comment_id",
+            "required": true,
+            "schema": {
+              "title": "Comment Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve Comment",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
+    "/prd/{wi}/reviews/publish": {
+      "post": {
+        "operationId": "publish_review_prd__wi__reviews_publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishReviewAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Review",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
+    "/prd/{wi}/v/{number}": {
+      "get": {
+        "operationId": "prd_version_prd__wi__v__number__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrdDocumentRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prd Version",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
+    "/prd/{wi}/versions": {
+      "get": {
+        "operationId": "prd_versions_prd__wi__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PrdDocumentRead"
+                  },
+                  "title": "Response Prd Versions Prd  Wi  Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prd Versions",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
+    "/sessions": {
+      "post": {
+        "operationId": "create_session_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/agent-specs": {
+      "get": {
+        "operationId": "list_agent_specs_sessions__session_id__agent_specs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentSpecRead"
+                  },
+                  "title": "Response List Agent Specs Sessions  Session Id  Agent Specs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Agent Specs",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/agent-specs/{agent_spec_id}": {
+      "get": {
+        "operationId": "get_agent_spec_sessions__session_id__agent_specs__agent_spec_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent_spec_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Spec Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSpecRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Spec",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/commands": {
+      "post": {
+        "operationId": "execute_command_sessions__session_id__commands_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Command",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/events": {
+      "get": {
+        "operationId": "list_events_sessions__session_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEventRead"
+                  },
+                  "title": "Response List Events Sessions  Session Id  Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Events",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/specs": {
+      "get": {
+        "operationId": "list_specs_sessions__session_id__specs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SpecVersionRead"
+                  },
+                  "title": "Response List Specs Sessions  Session Id  Specs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Specs",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/specs/{version}": {
+      "get": {
+        "operationId": "get_spec_sessions__session_id__specs__version__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecVersionRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Spec",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/state": {
+      "get": {
+        "operationId": "get_state_sessions__session_id__state_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get State",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/work-items": {
+      "get": {
+        "operationId": "list_work_items_sessions__session_id__work_items_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkItemRead"
+                  },
+                  "title": "Response List Work Items Sessions  Session Id  Work Items Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Work Items",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/work-items/{work_item_id}": {
+      "get": {
+        "operationId": "get_work_item_sessions__session_id__work_items__work_item_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "work_item_id",
+            "required": true,
+            "schema": {
+              "title": "Work Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Work Item",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/tasks/{task_id}": {
+      "get": {
+        "operationId": "review_task_tasks__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewTaskRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review Task",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    }
+  }
+}

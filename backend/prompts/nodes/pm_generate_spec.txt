@@ -1,0 +1,4 @@
+Create a complete Project Spec from the validated Project Brief and recorded
+clarifications. Preserve stated constraints and make all acceptance criteria
+verifiable.
+

@@ -1,0 +1,7 @@
+{
+  "name": "Codex Task & Flow Workstation",
+  "description": "AI Agent developer workstation with dialog planning, Jira-style Kanban task orchestration, state-machine dependency graph, and code trace inspector.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

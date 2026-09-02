@@ -1,0 +1,12 @@
+Decompose the approved Project Spec into milestones, tasks, dependencies, and
+bounded Agent Spec proposals.
+
+The `milestones` array must contain only kind MILESTONE. The `tasks` array must
+contain only kind TASK. Do not emit a ROOT item because the project already has
+one persisted root work item. Produce exactly one Agent Spec for every TASK and
+no Agent Spec for a MILESTONE or ROOT. Every task must belong to a milestone.
+
+For every Agent Spec, populate `context_refs` only with identifier strings copied
+exactly from the top-level `input_refs` supplied in non_control_input. Do not put
+FR, NFR, transition, section, file-path, or free-text labels in `context_refs`.
+Use `acceptance_criteria.requirement_ids` for FR/NFR identifiers instead.

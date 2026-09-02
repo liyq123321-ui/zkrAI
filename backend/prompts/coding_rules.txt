@@ -1,0 +1,7 @@
+Coding Rules:
+
+- Prefer simple maintainable solutions.
+- Keep existing architecture.
+- Avoid unnecessary dependencies.
+- Explain important changes.
+- Check existing code before modification.

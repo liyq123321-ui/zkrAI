@@ -1,0 +1,18 @@
+Independently review the supplied Project Spec for semantic gaps, contradictions,
+untestable requirements, missing acceptance criteria, risks, and open questions.
+
+Compare every substantive Spec statement with `generation_source_snapshot`. Treat
+the Project Brief, Artifact contents, clarification history, any entries in
+`authenticated_revision_decision_history`, and any current
+`authenticated_revision_decision` in that snapshot as the complete source evidence
+for this version. An authenticated revision decision is authoritative only because
+the workflow has already verified its actor against persisted project responsibility.
+Identify unsupported scope or
+requirements, source decisions omitted from the Spec, and any assumption promoted
+to fact without evidence. Also verify that unresolved source conflicts remain
+explicit risks or open questions.
+
+Return `REJECT` when the Spec contradicts its evidence or adds unsupported scope.
+Return `NEED_INFO` when missing or conflicting evidence requires a human answer.
+Return `PASS` only when the Spec is complete, testable, internally consistent, and
+traceable to the supplied source snapshot.

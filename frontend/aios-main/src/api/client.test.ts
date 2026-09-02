@@ -1,0 +1,65 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiClient } from './client';
+import { ApiError } from './errors';
+import { createSession } from './sessions';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe('ApiClient', () => {
+  it('parses JSON success and supports 204 responses', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ApiClient('http://backend.test');
+
+    await expect(client.request('/healthz')).resolves.toEqual({ status: 'ok' });
+    await expect(client.request('/comment', { method: 'POST' })).resolves.toBeUndefined();
+  });
+
+  it('normalizes the backend stable error envelope', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ detail: { code: 'STALE_STATE', message: 'refresh', errors: [] } }),
+          { status: 409, statusText: 'Conflict' },
+        ),
+      ),
+    );
+    const client = new ApiClient('http://backend.test');
+
+    const error = await client.request('/sessions/1/commands').catch((reason) => reason);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 409, code: 'STALE_STATE', retryable: false });
+  });
+
+  it('never injects a browser actor into session creation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          session_id: 's1', project_id: 'p1', phase: 'INTAKE', state_version: 1,
+          current_spec_version_id: null, current_spec_status: null, legal_actions: [],
+          next_action: 'wait', outstanding_questions: [], review_findings: [],
+        }),
+        { status: 201 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createSession('request-1', {
+      motivation: 'm', final_objective: 'o', known_scope: [], exclusions: [],
+      reference_materials: [], expected_deliverables: [], time_constraints: 'none',
+      staffing_constraints: 'none', final_approver: 'owner-1',
+      project_manager_ids: ['owner-1'], root_owner_ids: ['owner-1'],
+    });
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(request.body as string) as Record<string, unknown>;
+    expect(body).not.toHaveProperty('actor_id');
+  });
+});
