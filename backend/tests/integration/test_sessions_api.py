@@ -5,7 +5,13 @@ from collections import deque
 from fastapi.testclient import TestClient
 
 from app.agents.codex import AgentExecutionError, AgentOutputError
-from app.database.models import AgentCall, ClarificationRequest, ClarificationResponse, Project
+from app.database.models import (
+    AgentCall,
+    AuditEvent,
+    ClarificationRequest,
+    ClarificationResponse,
+    Project,
+)
 from app.domain.types import ClarificationAnalysis, ReviewVerdict, SemanticReview
 from app.services.decomposition_service import BreakdownValidationError, DecompositionService
 from main import create_app
@@ -86,6 +92,84 @@ def test_session_creation_returns_state(session_factory):
     assert body["session_id"]
     assert body["phase"] in {"NEED_CLARIFICATION", "SPECIFICATION"}
     assert body["state_version"] == 1
+
+
+def test_user_can_skip_intake_clarification_and_generate_spec_with_agent_assumptions(
+    session_factory,
+):
+    """Skipping must close the question without another PM-analysis loop."""
+
+    agent = ScriptedAgentGateway(
+        analyze_results=deque([
+            _blocking_analysis("Q-SKIP-1", "Which edge-case policy should apply?")
+        ]),
+        generate_results=deque([make_valid_spec()]),
+        review_results=deque([make_passing_semantic_review()]),
+    )
+    with TestClient(
+        create_app(agent_gateway=agent, session_factory=session_factory)
+    ) as client:
+        created = client.post(
+            "/sessions",
+            json={
+                "request_id": "skip-clarification",
+                "actor_id": "approver-1",
+                "brief": make_complete_brief().model_dump(mode="json"),
+            },
+        ).json()
+
+        assert created["phase"] == "NEED_CLARIFICATION"
+        assert created["legal_actions"] == ["message", "skip_clarification"]
+
+        skipped_response = client.post(
+            f"/sessions/{created['session_id']}/commands",
+            json={
+                "command_id": "skip-clarification-command",
+                "action": "skip_clarification",
+                "expected_state_version": created["state_version"],
+                "actor_id": "approver-1",
+                "payload": {},
+            },
+        )
+        skipped = skipped_response.json()["state"]
+
+        assert skipped_response.status_code == 200
+        assert skipped["phase"] == "SPECIFICATION"
+        assert skipped["outstanding_questions"] == []
+        assert skipped["legal_actions"] == ["create_spec"]
+
+        generated_response = client.post(
+            f"/sessions/{created['session_id']}/commands",
+            json={
+                "command_id": "generate-after-skip",
+                "action": "create_spec",
+                "expected_state_version": skipped["state_version"],
+                "actor_id": "approver-1",
+                "payload": {},
+            },
+        )
+
+    assert generated_response.status_code == 200
+    assert generated_response.json()["state"]["phase"] == "REVIEW"
+    assert [operation for operation, _ in agent.calls] == [
+        "analyze_brief",
+        "generate_spec",
+        "review_spec",
+    ]
+    generation_payload = next(
+        payload for operation, payload in agent.calls if operation == "generate_spec"
+    )
+    skip_response = generation_payload["clarification_history"][0]["responses"][0]
+    assert skip_response["answers"]["decision"] == "SKIP_CLARIFICATION"
+    assert skip_response["answers"]["assumption_policy"] == "AGENT_DISCRETION"
+
+    with session_factory() as db:
+        response = db.query(ClarificationResponse).one()
+        event = db.query(AuditEvent).filter_by(
+            event_type="CLARIFICATION_SKIPPED"
+        ).one()
+        assert response.actor_id == "approver-1"
+        assert event.actor_id == "approver-1"
 
 
 def test_public_events_include_safe_agent_trace_without_raw_inputs_or_outputs(session_factory):

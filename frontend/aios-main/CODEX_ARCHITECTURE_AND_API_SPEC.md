@@ -2,16 +2,17 @@
 
 > **当前实现状态（2026-09-02）**：本文后续主体最初用于描述 Mock 原型。真实第一阶段实现以 `src/api/` 和 `docs/openapi.json` 为准。使用 `VITE_DATA_MODE=api` 与 `VITE_API_BASE_URL=http://127.0.0.1:8088` 启动真实模式；该模式动态隔离 `MockApp.tsx`，只调用现有 FastAPI `/sessions`、`/prd`、`/tasks` 与 `/chat`，后端不可用时不会回退到 Mock。本文提到但 OpenAPI 中不存在的 `/v1/*`、代码执行、部署、提交浏览和原始 thought chain 均仍是未来范围。
 >
-> 当前真实 UI 已支持 Session 创建/恢复、澄清、由 `legal_actions` 驱动的 Spec 审核、只读 WorkItem、历史版本创建 n+1、Gitea diff 行批注/回复/解决、异步 PRD 发布恢复，以及安全 Agent 阶段摘要。浏览器不提交可信 `actor_id`，身份由后端注入。
+> 当前真实 UI 已支持 Session 创建/恢复、多轮澄清、显式跳过澄清并自动生成 PRD、由 `legal_actions` 驱动的 Spec 审核、主 WorkItem PRD 入口、子 WorkItem Agent Spec 展示、历史版本创建 n+1、Gitea diff 行批注/回复/解决、异步 PRD 发布恢复，以及安全 Agent 阶段摘要。浏览器不提交可信 `actor_id`，身份由后端注入。
 
 > **文档性质**: 工程实施标准 / 源码级架构解读 / 后端与 CodeX 编排引擎对接指南  
-> **文档版本**: `v2.0.0-ENTERPRISE-SPEC`  
-> **前端技术栈**: React 19 + TypeScript 5.7 + Vite 6 + Tailwind CSS 4 + Lucide Icons + Google Drive API v3 + Firebase Auth  
+> **文档版本**: `v2.1.0-REAL-INTEGRATION`
+> **前端技术栈**: 真实模式使用 React 19 + TypeScript 5.8 + Vite 6 + Vitest + Tailwind CSS 4 + Lucide Icons；Google Drive 与 Firebase 仅属于隔离的旧 Mock 功能
 > **目标读者**: CodeX 后端工程师、Agent 核心架构师、全栈研发与运维测试团队  
 
 ---
 
 ## 目录
+0. [当前真实前后端实现](#0-当前真实前后端实现)
 1. [系统总体架构与数据流转拓扑](#1-系统总体架构与数据流转拓扑)
 2. [源码级工程目录结构与职责解耦](#2-源码级工程目录结构与职责解耦)
 3. [核心数据模型与 TypeScript 类型体系设计 (`src/types.ts`)](#3-核心数据模型与-typescript-类型体系设计-srctypests)
@@ -30,6 +31,81 @@
 5. [组件间协作与逻辑关系调用图 (Component Interaction Flow)](#5-组件间协作与逻辑关系调用图)
 6. [CodeX 后端标准接口契约规范 (RESTful / SSE / WebSocket)](#6-codex-后端标准接口契约规范)
 7. [后端对接与工程落地建议 (Best Practices)](#7-后端对接与工程落地建议)
+
+---
+
+## 0. 当前真实前后端实现
+
+### 0.1 模式边界
+
+`src/main.tsx` 根据 `VITE_DATA_MODE` 动态选择根应用：
+
+- `api`：加载 `src/api/ApiWorkspace.tsx`，所有业务事实来自 FastAPI；失败时明确报错，不回退 Mock。
+- `mock`：加载旧 `MockApp.tsx`，仅用于原型演示，不能作为接口或业务状态的证据。
+
+真实模式的浏览器配置只有公开地址和非可信显示提示。Gitea token、Agent provider 配置和可信 `actor_id` 均留在后端。
+
+### 0.2 真实模块结构
+
+```text
+src/api/
+├── ApiWorkspace.tsx       # Session 工作区、只读 Kanban、动作编排和安全进度
+├── PrdReviewPanel.tsx     # 主 WorkItem 的 PRD、Gitea 行批注和异步发布恢复
+├── client.ts              # fetch、超时、统一 JSON/204/error 处理
+├── config.ts              # api/mock 模式与 Base URL 校验
+├── dto.ts                 # 与 OpenAPI 对齐的前端 DTO 和 CommandAction
+├── errors.ts              # 网络与业务错误归一化
+├── sessions.ts            # /sessions 状态、Spec、WorkItem、Agent Spec、事件
+├── prd.ts                 # /prd、评论、有效 diff 行和 /tasks
+├── chat.ts                # 兼容 /chat 阶段流
+├── workflowUi.ts          # 纯 UI 决策：动作位置、恢复、卡片语义、跳过意图
+├── client.test.ts         # HTTP 客户端合同测试
+└── workflowUi.test.ts     # 工作流展示和明确跳过意图测试
+```
+
+### 0.3 当前用户流程
+
+```text
+创建/恢复 Session
+  -> NEED_CLARIFICATION
+       -> 提交答案(message)，可多轮
+       -> 跳过澄清(skip_clarification)
+            -> 自动 create_spec
+  -> 主 WorkItem 卡片打开 PRD
+       -> 有批注：发布审核并等待异步任务
+       -> 无批注：approve
+  -> convert_to_work_item
+  -> 点击子 WorkItem 查看 Agent Spec
+```
+
+跳过澄清有两个入口：按钮“跳过澄清并生成 PRD”，以及澄清框中的明确短语（例如“跳过澄清”“不用澄清”“直接生成 PRD”）。短语识别只负责把明确意图映射为后端 `skip_clarification` 命令；真正的权限、状态版本、合法动作、审计和状态迁移均由后端执行。
+
+跳过命令成功后，页面使用返回的新 `state_version` 自动发送 `create_spec`。如果 PRD 生成失败，不回滚已经记录的跳过决定，页面刷新后可从 `SPECIFICATION` 重试生成。
+
+### 0.4 Kanban 与审核入口
+
+- ROOT 卡片：唯一的 PRD 审核入口；没有 PRD 时禁用打开。
+- MILESTONE 卡片：展示规划层次和依赖，不允许拖拽修改后端状态。
+- TASK 卡片：展示后端拆解结果；若存在 Agent Spec，卡片详情显示完整结构化内容。
+- PRD 有未解决评论时，确认优先发布评论；没有评论时才批准并进入拆解。
+- 所有通用按钮来自 `SessionState.legal_actions`。PRD 专属动作只显示在 ROOT 卡片详情，防止从侧栏绕过人工审核。
+
+### 0.5 当前真实接口
+
+| 前端能力 | 后端接口 |
+| --- | --- |
+| 健康检查 | `GET /healthz` |
+| 创建与恢复 Session | `POST /sessions`、`GET /sessions/{id}/state` |
+| 澄清、跳过、审核、拆解 | `POST /sessions/{id}/commands` |
+| Spec / WorkItem / Agent Spec / 审计 | `GET /sessions/{id}/specs|work-items|agent-specs|events` |
+| PRD 和有效行 | `GET /prd/{wi}`、`GET /prd/{wi}/commentable-lines` |
+| 评论、回复、解决 | `POST /prd/{wi}/comments...` |
+| 发布 PRD 审核 | `POST /prd/{wi}/reviews/publish`、`GET /tasks/{task_id}` |
+| 兼容安全阶段流 | `POST /chat` |
+
+公开 `CommandAction` 包含：`message`、`skip_clarification`、`create_spec`、`revise`、`approve`、`reject`、`rework`、`convert_to_work_item` 和 `restore_spec_version`。`publish_review` 是后端内部动作，不应由通用 Session 按钮直接伪造。
+
+当前真实范围在生成子 WorkItem 和明确 Agent Spec 后结束；不执行子 Agent、代码、提交或部署，也不展示原始推理链。
 
 ---
 

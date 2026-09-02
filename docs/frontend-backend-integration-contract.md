@@ -16,6 +16,7 @@
 5. 历史版本恢复通过“基于历史 revision 创建新的 n+1 revision”实现，不移动或覆盖历史版本。
 6. 前端只显示安全的阶段进度和审计摘要。
 7. 后台保存可审计执行轨迹，不依赖、展示或持久化模型私有原始思维链。
+8. 用户可在初始澄清阶段显式跳过澄清；模糊地带由 Agent 采用保守假设处理，并在 PRD 中交给人类批改。
 
 ## 3. 第一阶段边界
 
@@ -23,6 +24,7 @@
 
 - 创建项目 Session。
 - 回答澄清问题。
+- 通过按钮或明确自然语言意图跳过初始澄清并直接生成 PRD。
 - 创建、修订、批准、驳回或要求返工 Spec。
 - 从已批准 Spec 生成 WorkItem、依赖和 Agent Spec。
 - 查询 Session 状态、Spec、WorkItem、Agent Spec 和安全审计事件。
@@ -200,6 +202,7 @@ src/api/
 | 后端 action | UI 动作 |
 | --- | --- |
 | `message` | 回答澄清 |
+| `skip_clarification` | 记录用户接受 Agent 假设，并进入 PRD 生成 |
 | `create_spec` | 生成/恢复自动审核 |
 | `approve` | 人工通过 |
 | `reject` | 人工驳回 |
@@ -207,7 +210,7 @@ src/api/
 | `revise` | 生成修订版 |
 | `convert_to_work_item` | 生成 WorkItem 与 Agent Spec |
 
-不得因为 UI 认为“下一步合理”而绕过 `legal_actions`。
+不得因为 UI 认为“下一步合理”而绕过 `legal_actions`。WebGUI 只在后端同时公开 `skip_clarification` 时识别明确的跳过短语；识别后发送该命令，并使用返回的新状态自动发送 `create_spec`。后端负责权限、CAS、幂等和审计。
 
 ## 9. WorkItem 与前端视图映射
 
@@ -426,7 +429,7 @@ VITE_DATA_MODE=api
 
 1. API 模式启动后不加载 `INITIAL_*` mock 业务数据。
 2. 浏览器请求中不包含可信 actor、Gitea token 或 Agent provider key。
-3. 用户可创建 Session、回答澄清并按照 `legal_actions` 完成 Spec 流程。
+3. 用户可创建 Session、回答或显式跳过澄清，并按照 `legal_actions` 完成 Spec 流程。
 4. `STALE_STATE` 会刷新状态并要求用户确认，不静默重放写命令。
 5. WorkItem 和 DAG 来自后端拆解结果，不包含虚构执行状态。
 6. PRD 只在有效 diff 行允许批注；后端仍执行最终校验。
@@ -437,3 +440,4 @@ VITE_DATA_MODE=api
 11. 历史恢复创建 n+1，并保留完整 parent/source/审核证据。
 12. UI 不展示私有推理或受限诊断内容。
 13. 前后端契约具备单元、集成和至少一条 fake-boundary E2E 覆盖。
+14. 跳过澄清不会再次触发 PM 分析；PRD 生成输入包含 `AGENT_DISCRETION`，且产生 `CLARIFICATION_SKIPPED` 审计事件。

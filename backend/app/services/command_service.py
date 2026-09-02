@@ -20,7 +20,7 @@ from app.database.models import (
 from app.domain.types import CommandAction, ProjectPhase, ReviewKind, ReviewVerdict, SpecStatus
 from app.domain.workflow import IllegalAction, WorkflowSnapshot, assert_action_allowed
 from app.schemas.workflow import CommandResult, SessionCommandRequest, SessionState
-from app.services.state_projection import project_state
+from app.services.state_projection import active_clarification_request, project_state
 
 
 class CommandConflict(Exception): code = "COMMAND_CONFLICT"
@@ -341,6 +341,8 @@ class CommandService:
         try:
             if request.action in self._HUMAN:
                 return self._human(session_id, request, input_hash)
+            if request.action is CommandAction.SKIP_CLARIFICATION:
+                return self._skip_clarification(session_id, request, input_hash)
             attempt, prepare_context = self._claim_or_load_attempt(
                 session_id, request, input_hash
             )
@@ -586,6 +588,86 @@ class CommandService:
                 db.add(AuditEvent(id=_new_id(),project_id=project.id,session_id=session_id,event_type={CommandAction.APPROVE:"SPEC_HUMAN_APPROVED",CommandAction.REWORK:"SPEC_HUMAN_REWORKED",CommandAction.REJECT:"SPEC_HUMAN_REJECTED"}[request.action],actor_id=request.actor_id,payload={"command_id":request.command_id,"spec_version_id":version.id,"spec_review_id":review.id,"prior_state_version":request.expected_state_version,"new_state_version":state.state_version,"comments":self._comments(request)}))
             return out
     _execute_human_review = _human
+
+    def _skip_clarification(
+        self,
+        session_id: str,
+        request: SessionCommandRequest,
+        input_hash: str,
+    ) -> CommandResult:
+        """Record explicit ambiguity acceptance and advance without another PM loop."""
+
+        with self._session_factory() as db:
+            with db.begin():
+                receipt = self._receipt(
+                    db, session_id, request.command_id, input_hash
+                )
+                if receipt:
+                    return receipt
+                project = self._project(db, session_id)
+                if project.state_version != request.expected_state_version:
+                    raise StaleState("expected state version is no longer current")
+                self._assert_legal(db, project, request.action)
+                self._assert_reviewer(project, request.actor_id)
+                clarification = active_clarification_request(db, project)
+                if clarification is None:
+                    raise IllegalAction(request.action, ())
+
+                self._advance_project(db, project, request.expected_state_version)
+                db.refresh(project)
+                response = ClarificationResponse(
+                    id=_new_id(),
+                    project_id=project.id,
+                    clarification_request_id=clarification.id,
+                    response_slot="PRIMARY",
+                    actor_id=request.actor_id,
+                    answers={
+                        "message": (
+                            "The user explicitly skipped clarification and accepted "
+                            "reasonable Agent assumptions for human PRD review."
+                        ),
+                        "decision": "SKIP_CLARIFICATION",
+                        "assumption_policy": "AGENT_DISCRETION",
+                    },
+                )
+                project.phase = ProjectPhase.SPECIFICATION.value
+                db.add(response)
+                db.flush()
+                state = self._state(db, project)
+                output = CommandResult(
+                    command_id=request.command_id,
+                    state=state,
+                    created_resource_ids=[response.id],
+                )
+                db.add(
+                    ProcessedCommand(
+                        id=_new_id(),
+                        session_id=session_id,
+                        command_id=request.command_id,
+                        input_hash=input_hash,
+                        state_version=state.state_version,
+                        result=output.model_dump(mode="json"),
+                        side_effect_refs=[f"clarification_response:{response.id}"],
+                    )
+                )
+                db.add(
+                    AuditEvent(
+                        id=_new_id(),
+                        project_id=project.id,
+                        session_id=session_id,
+                        event_type="CLARIFICATION_SKIPPED",
+                        actor_id=request.actor_id,
+                        payload={
+                            "command_id": request.command_id,
+                            "clarification_request_id": clarification.id,
+                            "clarification_response_id": response.id,
+                            "prior_state_version": request.expected_state_version,
+                            "new_state_version": state.state_version,
+                            "assumption_policy": "AGENT_DISCRETION",
+                        },
+                    )
+                )
+            return output
 
     def _validate_prepared_evidence(self, project_id: str, request: SessionCommandRequest, input_hash: str, prepared: PreparedCommand, *, success: bool) -> None:
         if prepared.agent_backed and not prepared.agent_call_ids: raise ValueError("agent-backed preparation requires AgentCall references")

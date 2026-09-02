@@ -13,7 +13,11 @@ from app.domain.workflow import (
 @pytest.mark.parametrize(
     ("phase", "spec_status", "expected"),
     [
-        (ProjectPhase.NEED_CLARIFICATION, None, (CommandAction.MESSAGE,)),
+        (
+            ProjectPhase.NEED_CLARIFICATION,
+            None,
+            (CommandAction.MESSAGE, CommandAction.SKIP_CLARIFICATION),
+        ),
         (ProjectPhase.SPECIFICATION, None, (CommandAction.CREATE_SPEC,)),
         (
             ProjectPhase.REVIEW,

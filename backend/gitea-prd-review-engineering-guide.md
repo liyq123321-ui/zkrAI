@@ -4,9 +4,9 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档目的 | 说明 Gitea PRD 评审子系统的接口、数据、状态、核心逻辑、一致性、恢复、安全、部署和测试方法 |
+| 文档目的 | 说明 Session、跳过澄清、Spec、WorkItem、Agent Spec 与 Gitea PRD 评审子系统的接口、数据、状态、核心逻辑、一致性、恢复、安全、部署和测试方法 |
 | 适用读者 | 后端开发、代码审查者、测试工程师、部署运维人员、后续维护者 |
-| 实现基线 | `codex/gitea-prd-review-mvp@472af4980cb66792dd7a557f97fefc39ca668d85` |
+| 实现基线 | `codex/frontend-backend-webgui`，2026-09-02 工作树 |
 | 技术栈 | Python 3.12、FastAPI、Pydantic v2、SQLAlchemy、SQLite、httpx、pytest |
 | 主要入口 | `main.py`、`app/api/prd_review.py` |
 | 设计来源 | `docs/superpowers/specs/2026-09-01-gitea-prd-review-mvp-design.md` |
@@ -20,26 +20,29 @@
 
 ### 2.1 解决的问题
 
-该子系统把 firstFlight 内部不可变 `SpecVersion` 映射为 Gitea 仓库中的 Markdown PRD 文件，并使用一个长期打开的 Pull Request 承载行内批注。授权评审人可以：
+该系统先把用户需求推进为不可变 `SpecVersion`，再映射为 Gitea 仓库中的 Markdown PRD 文件，并使用一个长期打开的 Pull Request 承载行内批注。授权参与者或评审人可以：
 
-1. 查看当前或历史 PRD；
-2. 在 PRD diff 的有效新文件行上创建批注；
-3. 回复、解决或恢复批注；
-4. 冻结当前未解决批注，触发一次 PM Agent 改写；
-5. 生成不可变的下一版 `SpecVersion`；
-6. 运行既有 RULE + Reviewer Agent 自动审核；
-7. 把新版本写回 Gitea，并逐条发布可验证的 Agent 回复；
-8. 查询发布任务的最终状态。
+1. 创建 Session，并根据 `legal_actions` 回答一轮或多轮澄清；
+2. 在尚无 Spec 的初始澄清阶段显式跳过澄清，由 Agent 接管模糊决策；
+3. 生成、审核或从历史版本复制出新的不可变 Spec；
+4. 查看当前或历史 PRD；
+5. 在 PRD diff 的有效新文件行上创建批注；
+6. 回复、解决或恢复批注；
+7. 冻结当前未解决批注，触发一次 PM Agent 改写；
+8. 把新版本写回 Gitea，并逐条发布可验证的 Agent 回复；
+9. 批准 PRD 后拆解只读 WorkItem 和 Agent Spec；
+10. 查询发布任务和安全审计事件。
 
 ### 2.2 明确非目标
 
-- 不提供前端页面。
+- 不在后端包内实现前端页面；真实 WebGUI 位于 `frontend/aios-main/src/api/`。
 - 不使用 Webhook、SSE、WebSocket 或轮询监听 Gitea 事件。
 - 不使用消息队列或跨进程任务执行器。
 - 不执行由 Agent Spec 描述的子 Agent。
 - 不在 PRD 接口中执行人工 `approve`、`reject`、`rework` 或 `convert_to_work_item`。
 - 不把 Gitea token 暴露给客户端。
 - 不支持多进程或多个 uvicorn worker 共同处理发布任务。
+- 不向 WebGUI 返回原始 Agent 推理链；前端只消费安全阶段摘要和审计事件。
 
 ### 2.3 权威边界
 
@@ -766,6 +769,35 @@ PRD publish 调用 `SpecService.prepare_external_revision(..., require_new_revis
 
 ## 13. 状态机
 
+### 13.0 Session 主流程
+
+第一阶段公开状态由 `app/domain/workflow.py::ACTION_TABLE` 控制，WebGUI 不自行推导下一步：
+
+```text
+INTAKE
+  -> NEED_CLARIFICATION
+       -> message -> NEED_CLARIFICATION | SPECIFICATION
+       -> skip_clarification -> SPECIFICATION
+  -> SPECIFICATION
+       -> create_spec -> REVIEW
+  -> REVIEW/HUMAN_REVIEW
+       -> approve -> APPROVED
+       -> rework/reject -> 修订路径
+  -> APPROVED
+       -> convert_to_work_item -> DECOMPOSED
+```
+
+`skip_clarification` 只在 `NEED_CLARIFICATION` 且项目尚无当前 Spec 时公开。它是本地短事务，不触发第二次 PM 澄清分析：
+
+1. 校验 `expected_state_version`、动作合法性和参与者身份；
+2. 为当前未回答的 `ClarificationRequest` 创建一条 `ClarificationResponse`；
+3. 响应内容写入 `decision=SKIP_CLARIFICATION` 和 `assumption_policy=AGENT_DISCRETION`；
+4. Project 迁移到 `SPECIFICATION`，状态版本加一；
+5. 写入 `ProcessedCommand` 和 `CLARIFICATION_SKIPPED` 审计事件；
+6. 后续 `create_spec` 把这条澄清历史传给生成 Agent，提示词要求停止追问、采用保守假设并把重要假设写进 PRD。
+
+WebGUI 同时提供显式按钮和严格的自然语言快捷识别。自然语言只匹配少量明确短语，普通澄清回答仍发送 `message`。按钮或短语触发后，前端用新的 command ID 自动执行 `create_spec`；若生成失败，后端状态安全停留在 `SPECIFICATION`，可独立重试。
+
 ### 13.1 ReviewTask
 
 ```mermaid
@@ -1045,6 +1077,7 @@ task_id + "\n" + comment_id + "\n" + visible_body
 | Integration API | 九个路由、状态码、安全错误、BackgroundTasks | `tests/integration/test_prd_review_api.py` |
 | Integration Pipeline | 快照、actor、文件、投影、回复、恢复矩阵 | `tests/integration/test_review_publish_pipeline.py` |
 | Command Integration | PREPARING/PREPARED、AgentCall 证据、CAS | `tests/integration/test_command_service.py`、`tests/integration/test_pm_rewrite_command.py` |
+| Session Workflow | 跳过澄清、状态门禁、幂等、假设策略传递 | `tests/unit/test_workflow_policy.py`、`tests/integration/test_sessions_api.py` |
 | E2E Fake Boundary | 真实服务组合 + 真实 GiteaClient + MockTransport + FakeAgent | `tests/e2e/test_gitea_prd_review.py` |
 
 ### 21.2 关键回归场景
@@ -1142,6 +1175,8 @@ PYTHONPYCACHEPREFIX=/tmp/firstflight-doc-pycache \
 | 命令两阶段和恢复 | `app/services/command_service.py::CommandService` |
 | 工作流动作策略 | `app/domain/workflow.py` |
 | 领域枚举和 Agent DTO | `app/domain/types.py` |
+| 跳过澄清事务和审计 | `app/services/command_service.py::CommandService._skip_clarification` |
+| PRD 生成假设策略 | `prompts/nodes/pm_generate_spec.txt` |
 | ORM 模型 | `app/database/models.py` |
 | SQLite 初始化与迁移 | `app/database/database.py` |
 | Gitea 单元测试 | `tests/unit/test_gitea_service.py` |
@@ -1170,4 +1205,3 @@ PYTHONPYCACHEPREFIX=/tmp/firstflight-doc-pycache \
 | Fail closed | 无法证明证据完整或外部调用是否发生时拒绝继续，而不是猜测并重试 |
 | Stable binding | command、input、task、session、project、base Spec、commit、snapshot 等不可变关联字段 |
 | Long-lived PR | 同一根 WorkItem 多个 `vN.md` 版本共同使用的长期评审 Pull Request |
-

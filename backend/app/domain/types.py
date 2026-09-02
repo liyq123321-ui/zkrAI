@@ -38,6 +38,7 @@ class SpecStatus(StrEnum):
 
 class CommandAction(StrEnum):
     MESSAGE = "message"
+    SKIP_CLARIFICATION = "skip_clarification"
     CREATE_SPEC = "create_spec"
     REVISE = "revise"
     APPROVE = "approve"

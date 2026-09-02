@@ -1,5 +1,6 @@
 export type CommandAction =
   | 'message'
+  | 'skip_clarification'
   | 'create_spec'
   | 'revise'
   | 'approve'

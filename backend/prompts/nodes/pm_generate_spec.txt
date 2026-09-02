@@ -2,3 +2,7 @@ Create a complete Project Spec from the validated Project Brief and recorded
 clarifications. Preserve stated constraints and make all acceptance criteria
 verifiable.
 
+If clarification history contains decision `SKIP_CLARIFICATION` with assumption
+policy `AGENT_DISCRETION`, do not ask more questions. Resolve ambiguity with the
+most conservative reasonable assumptions, list every material assumption in the
+Spec, and leave the resulting PRD ready for human correction.

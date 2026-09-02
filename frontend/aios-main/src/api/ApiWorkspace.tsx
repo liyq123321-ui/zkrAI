@@ -23,10 +23,17 @@ import {
   listSpecs,
   listWorkItems,
 } from './sessions';
+import {
+  actionPlacement,
+  isSkipClarificationIntent,
+  normalizeSessionId,
+  workItemPresentation,
+} from './workflowUi';
 
 const SESSION_KEY = 'firstflight.active-session-id';
 const actionLabels: Record<CommandAction, string> = {
   message: '提交澄清',
+  skip_clarification: '跳过澄清并生成 PRD',
   create_spec: '生成 Spec',
   revise: '生成修订版',
   approve: '人工通过',
@@ -91,7 +98,6 @@ export function ApiWorkspace() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [answer, setAnswer] = useState('');
-  const [reviewComment, setReviewComment] = useState('');
   const [restoreRevision, setRestoreRevision] = useState('');
   const [restoreReason, setRestoreReason] = useState('');
   const [motivation, setMotivation] = useState('');
@@ -101,6 +107,9 @@ export function ApiWorkspace() {
   const [ownerId, setOwnerId] = useState(
     import.meta.env.VITE_LOCAL_ACTOR_HINT?.trim() || 'owner-1',
   );
+  const [resumeSessionId, setResumeSessionId] = useState('');
+  const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
+  const [workflowProgress, setWorkflowProgress] = useState<string | null>(null);
   const pendingCommandIds = useRef(new Map<string, string>());
 
   const refreshResources = useCallback(async (sessionId: string, signal?: AbortSignal) => {
@@ -111,8 +120,10 @@ export function ApiWorkspace() {
       listAgentSpecs(sessionId, signal),
       listEvents(sessionId, signal),
     ]);
+    const bundle = { specs, workItems, agentSpecs, events };
     setState(nextState);
-    setResources({ specs, workItems, agentSpecs, events });
+    setResources(bundle);
+    return { state: nextState, resources: bundle };
   }, []);
 
   useEffect(() => {
@@ -142,6 +153,18 @@ export function ApiWorkspace() {
   const rootWorkItem = useMemo(
     () => resources.workItems.find((item) => item.kind === 'ROOT'),
     [resources.workItems],
+  );
+  const selectedWorkItem = useMemo(
+    () => resources.workItems.find((item) => item.id === selectedWorkItemId) ?? null,
+    [resources.workItems, selectedWorkItemId],
+  );
+  const selectedAgentSpecs = useMemo(
+    () => resources.agentSpecs.filter((item) => item.work_item_id === selectedWorkItemId),
+    [resources.agentSpecs, selectedWorkItemId],
+  );
+  const placedActions = useMemo(
+    () => actionPlacement(state?.legal_actions ?? []),
+    [state?.legal_actions],
   );
 
   async function onCreate(event: FormEvent) {
@@ -173,24 +196,74 @@ export function ApiWorkspace() {
     }
   }
 
+  async function resumeExistingSession() {
+    setBusy(true);
+    setError(null);
+    try {
+      const sessionId = normalizeSessionId(resumeSessionId);
+      const refreshed = await refreshResources(sessionId);
+      localStorage.setItem(SESSION_KEY, sessionId);
+      setResumeSessionId('');
+      const root = refreshed.resources.workItems.find((item) => item.kind === 'ROOT');
+      if (root) setSelectedWorkItemId(root.id);
+    } catch (reason) {
+      setError(reason instanceof Error && reason.message.includes('Session ID')
+        ? reason.message
+        : errorText(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitCommand(
+    baseState: SessionStateDto,
+    action: CommandAction,
+    message?: string,
+    payload: Record<string, unknown> = {},
+  ) {
+    const fingerprint = JSON.stringify({
+      action,
+      stateVersion: baseState.state_version,
+      message,
+      payload,
+    });
+    const commandId = pendingCommandIds.current.get(fingerprint) ?? crypto.randomUUID();
+    pendingCommandIds.current.set(fingerprint, commandId);
+    const result = await executeCommand(baseState.session_id, {
+      commandId,
+      action,
+      expectedStateVersion: baseState.state_version,
+      message,
+      payload,
+    });
+    pendingCommandIds.current.delete(fingerprint);
+    setState(result.state);
+    return result.state;
+  }
+
   async function runAction(action: CommandAction) {
     if (!state) return;
-    const message = action === 'message'
+    const effectiveAction = action === 'message'
+      && state.legal_actions.includes('skip_clarification')
+      && isSkipClarificationIntent(answer)
+      ? 'skip_clarification'
+      : action;
+    const message = effectiveAction === 'message'
       ? answer
-      : action === 'restore_spec_version'
+      : effectiveAction === 'restore_spec_version'
         ? restoreReason
-        : reviewComment || undefined;
-    if (action === 'message' && !message?.trim()) {
+        : undefined;
+    if (effectiveAction === 'message' && !message?.trim()) {
       setError('请先填写澄清答案。');
       return;
     }
-    if (action === 'rework' && !message?.trim()) {
+    if (effectiveAction === 'rework' && !message?.trim()) {
       setError('要求返工时必须填写审核意见。');
       return;
     }
     const sourceRevision = Number(restoreRevision);
     if (
-      action === 'restore_spec_version'
+      effectiveAction === 'restore_spec_version'
       && (!Number.isInteger(sourceRevision) || sourceRevision <= 0 || !message?.trim())
     ) {
       setError('请选择历史版本并填写创建新版的原因。');
@@ -200,30 +273,23 @@ export function ApiWorkspace() {
     setError(null);
     try {
       const payload =
-        action === 'rework'
+        effectiveAction === 'rework'
           ? { comments: message }
-          : action === 'restore_spec_version'
+          : effectiveAction === 'restore_spec_version'
             ? { source_revision: sourceRevision }
             : {};
-      const fingerprint = JSON.stringify({
-        action,
-        stateVersion: state.state_version,
-        message,
-        payload,
-      });
-      const commandId = pendingCommandIds.current.get(fingerprint) ?? crypto.randomUUID();
-      pendingCommandIds.current.set(fingerprint, commandId);
-      const result = await executeCommand(state.session_id, {
-        commandId,
-        action,
-        expectedStateVersion: state.state_version,
-        message,
-        payload,
-      });
-      pendingCommandIds.current.delete(fingerprint);
-      setState(result.state);
+      if (effectiveAction === 'skip_clarification') {
+        setWorkflowProgress('正在记录跳过澄清，由 Agent 接管模糊决策…');
+      }
+      let nextState = await submitCommand(state, effectiveAction, message, payload);
+      if (
+        effectiveAction === 'skip_clarification'
+        && nextState.legal_actions.includes('create_spec')
+      ) {
+        setWorkflowProgress('正在根据现有信息和合理假设生成 PRD…');
+        nextState = await submitCommand(nextState, 'create_spec');
+      }
       setAnswer('');
-      setReviewComment('');
       setRestoreRevision('');
       setRestoreReason('');
       await refreshResources(state.session_id);
@@ -237,6 +303,40 @@ export function ApiWorkspace() {
         setError(errorText(reason));
       }
     } finally {
+      setWorkflowProgress(null);
+      setBusy(false);
+    }
+  }
+
+  async function confirmPrdAndDecompose(reviewNote: string) {
+    if (!state) return;
+    setBusy(true);
+    setError(null);
+    let nextState = state;
+    try {
+      if (nextState.legal_actions.includes('approve')) {
+        setWorkflowProgress('正在确认当前 PRD…');
+        nextState = await submitCommand(nextState, 'approve', reviewNote || undefined);
+      }
+      if (nextState.legal_actions.includes('convert_to_work_item')) {
+        setWorkflowProgress('PRD 已确认，正在拆解子 WorkItem 和 Agent Spec…');
+        nextState = await submitCommand(nextState, 'convert_to_work_item');
+      }
+      const refreshed = await refreshResources(nextState.session_id);
+      const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
+      if (firstTask) setSelectedWorkItemId(firstTask.id);
+    } catch (reason) {
+      const normalized = normalizeNetworkError(reason);
+      if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
+        pendingCommandIds.current.clear();
+        await refreshResources(state.session_id).catch(() => undefined);
+        setError('状态已被其他操作更新。页面已刷新，请确认最新 PRD 后重新提交。');
+      } else {
+        setError(errorText(reason));
+      }
+      throw reason;
+    } finally {
+      setWorkflowProgress(null);
       setBusy(false);
     }
   }
@@ -254,10 +354,15 @@ export function ApiWorkspace() {
     }
   }
 
+  const refreshCurrentResources = useCallback(async () => {
+    if (state) await refreshResources(state.session_id);
+  }, [refreshResources, state?.session_id]);
+
   function clearSession() {
     localStorage.removeItem(SESSION_KEY);
     setState(null);
     setResources(emptyResources);
+    setSelectedWorkItemId(null);
     setError(null);
   }
 
@@ -292,6 +397,11 @@ export function ApiWorkspace() {
               <button disabled={busy || health !== 'ok'} className="flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 font-medium text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />} 创建并分析
               </button>
+              <div className="border-t border-slate-800 pt-4">
+                <p className="mb-3 text-xs leading-5 text-slate-400">已有后端 Session 时可直接恢复，不会创建新的 Agent 运行。</p>
+                <Field label="已有 Session ID" value={resumeSessionId} onChange={setResumeSessionId} />
+                <button type="button" disabled={busy || health !== 'ok'} onClick={resumeExistingSession} className="mt-3 w-full rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200 disabled:opacity-50">恢复并打开</button>
+              </div>
             </form>
           ) : (
             <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-5">
@@ -301,11 +411,11 @@ export function ApiWorkspace() {
 
               {state.outstanding_questions.length > 0 && <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3"><h3 className="text-sm font-medium text-amber-200">待澄清</h3>{state.outstanding_questions.map((question) => <div key={question.question_id} className="mt-3 text-sm"><p>{question.question}</p><p className="mt-1 text-xs text-slate-400">{question.reason}</p></div>)}</div>}
               {state.legal_actions.includes('message') && <Field label="澄清答案" value={answer} onChange={setAnswer} multiline />}
-              {(state.legal_actions.includes('rework') || state.legal_actions.includes('reject')) && <Field label="审核意见" value={reviewComment} onChange={setReviewComment} multiline />}
               {state.legal_actions.includes('restore_spec_version') && <div className="space-y-2 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3"><p className="text-xs text-violet-200">历史不会被覆盖；系统会复制所选内容并创建新的 n+1 版本，重新进入审核。</p><select value={restoreRevision} onChange={(event) => setRestoreRevision(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"><option value="">选择历史版本</option>{resources.specs.filter((spec) => spec.id !== state.current_spec_version_id).map((spec) => <option key={spec.id} value={spec.revision}>v{spec.revision} · {spec.status}</option>)}</select><Field label="创建新版的原因" value={restoreReason} onChange={setRestoreReason} multiline /></div>}
               <div className="grid gap-2">
-                {state.legal_actions.map((action) => <button key={action} disabled={busy} onClick={() => runAction(action)} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50">{actionLabels[action]}</button>)}
+                {placedActions.sidebar.map((action) => <button key={action} disabled={busy} onClick={() => runAction(action)} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50">{actionLabels[action]}</button>)}
               </div>
+              {placedActions.prd.length > 0 && <p className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs leading-5 text-slate-400">PRD 审核和任务拆解已收拢到主 WorkItem 卡片，避免绕过 Gitea 人工审核。</p>}
               <button onClick={clearSession} className="w-full text-xs text-slate-500 hover:text-slate-300">关闭本地 Session 记录</button>
             </section>
           )}
@@ -313,11 +423,28 @@ export function ApiWorkspace() {
 
         <section className="space-y-5">
           {error && <div className="flex gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200"><AlertCircle className="h-5 w-5 shrink-0" /><span>{error}</span></div>}
+          {workflowProgress && <div className="flex items-center gap-3 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-sm text-cyan-100"><Loader2 className="h-5 w-5 animate-spin" /><span>{workflowProgress}</span></div>}
           {!state ? <div className="grid min-h-80 place-items-center rounded-2xl border border-dashed border-slate-800 text-sm text-slate-500">创建或恢复 Session 后，这里显示真实 Spec、WorkItem 和审计记录。</div> : <>
-            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="mb-4 flex items-center justify-between"><h2 className="font-medium">最新 Spec</h2><span className="text-xs text-slate-400">{resources.specs.length} 个不可变版本</span></div>{currentSpec ? <><div className="mb-3 flex gap-2 text-xs"><span className="rounded bg-slate-800 px-2 py-1">v{currentSpec.revision}</span><span className="rounded bg-slate-800 px-2 py-1">{currentSpec.status}</span></div><pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-950 p-4 text-sm leading-6 text-slate-200">{currentSpec.markdown}</pre></> : <p className="text-sm text-slate-500">尚未生成 Spec。</p>}</section>
-            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="mb-4 flex items-center justify-between"><h2 className="font-medium">规划 WorkItem</h2><span className="text-xs text-slate-400">只读，不代表已经执行</span></div><div className="grid gap-3 md:grid-cols-2">{resources.workItems.map((item) => <article key={item.id} className="rounded-xl border border-slate-800 bg-slate-950 p-4"><div className="flex items-start justify-between gap-2"><h3 className="font-medium">{item.title || item.id}</h3><span className="text-xs text-cyan-300">{item.kind || '未分类'}</span></div><p className="mt-2 text-sm text-slate-400">{item.objective || item.description || '未提供目标'}</p><p className="mt-3 text-xs text-slate-500">负责人：{item.suggested_assignee || '未提供'} · 依赖：{item.dependency_work_item_ids.join(', ') || '无'}</p></article>)}{resources.workItems.length === 0 && <p className="text-sm text-slate-500">通过 Spec 并执行拆解后显示。</p>}</div></section>
-            {resources.agentSpecs.length > 0 && <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="mb-4 flex items-center justify-between"><h2 className="font-medium">Agent Specs</h2><span className="text-xs text-slate-400">规划产物，不会自动执行</span></div><div className="space-y-3">{resources.agentSpecs.map((agentSpec) => <details key={agentSpec.id} className="rounded-xl border border-slate-800 bg-slate-950 p-4"><summary className="cursor-pointer text-sm">WorkItem {agentSpec.work_item_id}</summary><pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(agentSpec.content, null, 2)}</pre></details>)}</div></section>}
-            {rootWorkItem && <PrdReviewPanel wi={rootWorkItem.id} />}
+            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">规划 Kanban</h2><p className="mt-1 text-xs text-slate-500">主卡进入 PRD 审核；子卡查看拆解后的 Agent Spec。所有卡片只读，不代表已执行。</p></div>{currentSpec && <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">PRD v{currentSpec.revision} · {currentSpec.status}</span>}</div>
+              <div className="grid gap-4 xl:grid-cols-3">
+                {([
+                  { kind: 'ROOT', title: '主 WorkItem' },
+                  { kind: 'MILESTONE', title: '里程碑' },
+                  { kind: 'TASK', title: '子 WorkItem' },
+                ] as const).map((column) => {
+                  const items = resources.workItems.filter((item) => item.kind === column.kind);
+                  return <div key={column.kind} className="rounded-xl border border-slate-800 bg-slate-950/70 p-3"><div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-medium text-slate-200">{column.title}</h3><span className="text-xs text-slate-500">{items.length}</span></div><div className="space-y-3">{items.map((item) => {
+                    const hasAgentSpec = resources.agentSpecs.some((spec) => spec.work_item_id === item.id);
+                    const presentation = workItemPresentation(item.kind, hasAgentSpec);
+                    const disabled = presentation.detailKind === 'prd' && !currentSpec;
+                    return <button key={item.id} disabled={disabled} onClick={() => setSelectedWorkItemId(item.id)} className={`w-full rounded-xl border p-4 text-left transition ${selectedWorkItemId === item.id ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-600'} disabled:cursor-not-allowed disabled:opacity-50`}><div className="flex items-start justify-between gap-2"><h4 className="font-medium">{item.title || item.id}</h4><span className="text-[11px] text-cyan-300">{item.kind}</span></div><p className="mt-2 line-clamp-3 text-sm text-slate-400">{item.objective || item.description || '未提供目标'}</p><p className="mt-3 text-xs font-medium text-cyan-300">{disabled ? 'PRD 生成后可打开' : presentation.cardLabel}</p></button>;
+                  })}{items.length === 0 && <p className="rounded-lg border border-dashed border-slate-800 p-4 text-xs text-slate-600">当前阶段尚无卡片</p>}</div></div>;
+                })}
+              </div>
+            </section>
+            {selectedWorkItem?.kind === 'ROOT' && rootWorkItem && currentSpec && <PrdReviewPanel wi={rootWorkItem.id} sessionState={state} workflowBusy={busy} onConfirmAndDecompose={confirmPrdAndDecompose} onResourcesChanged={refreshCurrentResources} />}
+            {selectedWorkItem && selectedWorkItem.kind !== 'ROOT' && <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="mb-4 flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-medium">{selectedWorkItem.title || selectedWorkItem.id}</h2><p className="mt-1 text-xs text-slate-500">{selectedWorkItem.kind} · 负责人 {selectedWorkItem.suggested_assignee || selectedWorkItem.responsible_role || '未提供'}</p></div><span className="text-xs text-slate-500">依赖：{selectedWorkItem.dependency_work_item_ids.join(', ') || '无'}</span></div><p className="text-sm leading-6 text-slate-300">{selectedWorkItem.objective || selectedWorkItem.description || '未提供目标'}</p>{selectedAgentSpecs.length > 0 ? <div className="mt-4 space-y-3">{selectedAgentSpecs.map((agentSpec) => <div key={agentSpec.id} className="rounded-xl border border-cyan-500/20 bg-slate-950 p-4"><h3 className="text-sm font-medium text-cyan-200">任务 Agent Spec</h3><pre className="mt-3 max-h-[520px] overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-300">{JSON.stringify(agentSpec.content, null, 2)}</pre></div>)}</div> : <p className="mt-4 rounded-lg border border-dashed border-slate-800 p-4 text-sm text-slate-500">该卡片当前没有 Agent Spec。</p>}</section>}
             <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="mb-4 flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-400" /><h2 className="font-medium">安全审计摘要</h2></div><ol className="space-y-3">{resources.events.slice().reverse().slice(0, 30).map((event) => <li key={event.id} className="border-l border-slate-700 pl-4"><p className="text-sm text-slate-200">{event.event_type === 'AGENT_TRACE' ? String(event.payload.summary || event.payload.phase) : event.event_type}</p>{event.event_type === 'AGENT_TRACE' && <p className="text-xs text-cyan-300">{String(event.payload.status)} · {String(event.payload.phase)}</p>}<p className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()} · {event.actor_id || 'system'}</p></li>)}</ol></section>
           </>}
         </section>

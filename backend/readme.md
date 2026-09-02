@@ -210,7 +210,7 @@ POST /sessions/{session_id}/commands
 }
 ```
 
-`created_resource_ids` 不是该事务所有插入行的清单，而是动作的主资源：人工 `approve`/`reject`/`rework` 返回一个 Human SpecReview ID；`message` 返回 ClarificationResponse ID，若 PM 仍要求澄清则还返回新 ClarificationRequest ID；首次 `create_spec` 和内容实际改变的 `revise` 返回新 SpecVersion ID；自动审核恢复和无变更 `revise` 返回空数组；`convert_to_work_item` 只返回 AgentSpec IDs，不返回 WorkItem 或依赖 ID。
+`created_resource_ids` 不是该事务所有插入行的清单，而是动作的主资源：人工 `approve`/`reject`/`rework` 返回一个 Human SpecReview ID；`message` 返回 ClarificationResponse ID，若 PM 仍要求澄清则还返回新 ClarificationRequest ID；`skip_clarification` 返回记录用户主动接受模糊性的 ClarificationResponse ID；首次 `create_spec` 和内容实际改变的 `revise` 返回新 SpecVersion ID；自动审核恢复和无变更 `revise` 返回空数组；`convert_to_work_item` 只返回 AgentSpec IDs，不返回 WorkItem 或依赖 ID。
 
 `state.phase`、`state.current_spec_status` 和 `state.legal_actions` 必须以服务返回值为准。以下是全部合法动作、其精确前置状态和请求体。
 
@@ -228,6 +228,22 @@ POST /sessions/{session_id}/commands
   "payload": {}
 }
 ```
+
+### 1.1 跳过初始澄清：`skip_clarification`
+
+仅在 `NEED_CLARIFICATION` 且尚无当前 Spec 时合法。系统不会再次调用 PM 分析，而是保存用户主动接受模糊性的审计证据，并进入 `SPECIFICATION`。后续 `create_spec` 会把 `AGENT_DISCRETION` 决策交给生成 Agent：Agent 使用保守、合理的假设补齐模糊地带，并在 PRD 中明确列出重要假设供人工批改。
+
+```json
+{
+  "command_id": "skip-q1",
+  "action": "skip_clarification",
+  "expected_state_version": 1,
+  "actor_id": "approver-1",
+  "payload": {}
+}
+```
+
+WebGUI 会在该命令成功后自动调用 `create_spec`，因此用户只需点击一次“跳过澄清并生成 PRD”。澄清框中的“跳过澄清”“我希望跳过澄清阶段”“不用澄清”“直接生成 PRD”等少量明确短语也会映射为同一命令；普通回答仍按 `message` 提交。若生成失败，状态会安全停留在 `SPECIFICATION`，可使用新的 command ID 重试 `create_spec`。
 
 ### 2. 生成或恢复自动审核：`create_spec`
 
