@@ -12,6 +12,7 @@ firstFlight 第一阶段是一个本地运行的需求澄清、PRD 人工审核�
    - 点击“跳过澄清并生成 PRD”；或
    - 在澄清框输入明确指令，例如“跳过澄清”“不用澄清”“直接生成 PRD”。
 4. 跳过后，Agent 使用保守且合理的假设补齐模糊地带，并在 PRD 中列出重要假设供人工修改。
+   如果已有 PRD 且审核再次要求澄清，可以点击“提交澄清”下方的“跳过澄清，确认当前 PRD 并拆分子任务”。该按钮会记录人工确认，直接按当前 PRD 拆分子任务；不会生成新版 PRD。若拆解失败，已确认的 PRD 会保留，可以继续重试拆解。
 5. 点击主 WorkItem 卡片打开 PRD；可在有效 Gitea diff 行添加批注、回复或解决批注。
 6. 有未解决批注时，确认操作会发布本轮审核并异步生成新版 PRD；没有批注时，确认操作会批准当前 PRD。
 7. PRD 批准后，系统自动拆解子 WorkItem 与 Agent Spec。点击子卡片即可查看该角色收到的任务规格。
@@ -105,6 +106,8 @@ WebGUI 只展示安全阶段进度和审计摘要，不展示原始推理内容�
 
 ## 工程文档
 
+- 修改日志：[`CHANGELOG.md`](CHANGELOG.md)
+- 本机部署记录：[`docs/local-deployment.md`](docs/local-deployment.md)
 - 后端运行与 API 示例：[`backend/readme.md`](backend/readme.md)
 - 后端工程框架：[`backend/gitea-prd-review-engineering-guide.md`](backend/gitea-prd-review-engineering-guide.md)
 - 前端架构与 API：[`frontend/aios-main/CODEX_ARCHITECTURE_AND_API_SPEC.md`](frontend/aios-main/CODEX_ARCHITECTURE_AND_API_SPEC.md)

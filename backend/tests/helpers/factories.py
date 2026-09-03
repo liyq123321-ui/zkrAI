@@ -154,6 +154,12 @@ def make_valid_breakdown() -> WorkBreakdown:
                 "criterion": "The session route works",
                 "verification_method": "HTTP test",
                 "expected_result": "Returns 201",
+            },
+            {
+                "requirement_ids": ["NFR-001"],
+                "criterion": "Repeated commands do not create duplicate work",
+                "verification_method": "Replay the same command twice",
+                "expected_result": "Both responses identify the same resources",
             }
         ],
         required_skills=["backend-development"],
@@ -171,4 +177,3 @@ def make_valid_breakdown() -> WorkBreakdown:
         tasks=[domain_task, api_task],
         agent_specs=[domain_agent_spec, api_agent_spec],
     )
-

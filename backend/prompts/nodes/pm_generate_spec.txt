@@ -2,6 +2,16 @@ Create a complete Project Spec from the validated Project Brief and recorded
 clarifications. Preserve stated constraints and make all acceptance criteria
 verifiable.
 
+Check the whole requirement-to-acceptance chain before returning. Every
+acceptance_criteria.requirement_ids value must exactly match a requirement_id
+defined in functional_requirements or non_functional_requirements. Every defined
+requirement needs verifiable acceptance coverage. Use FR-NNN / NFR-NNN identifiers
+only; never invent an undeclared deliverable or section identifier. If an existing
+deliverable needs its own requirement, define it from the supplied evidence and
+update all related acceptance references. Otherwise link to an existing matching
+requirement. Complete related omissions without expanding the agreed scope or
+inventing approvals, evidence, URLs, or completed implementation work.
+
 If clarification history contains decision `SKIP_CLARIFICATION` with assumption
 policy `AGENT_DISCRETION`, do not ask more questions. Resolve ambiguity with the
 most conservative reasonable assumptions, list every material assumption in the

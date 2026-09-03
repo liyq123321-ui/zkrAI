@@ -112,7 +112,7 @@ async def test_spec_reviewer_is_instructed_to_compare_spec_with_source_snapshot(
         def __init__(self):
             self.prompt = ""
 
-        async def run(self, prompt, output_type, cwd):
+        async def run(self, prompt, output_type, cwd, **kwargs):
             self.prompt = prompt
             return output_type.model_validate({"verdict": "PASS", "findings": []})
 
@@ -180,7 +180,7 @@ async def test_rewrite_prd_uses_pm_rewrite_node_and_records_scripted_call(tmp_pa
         def __init__(self):
             self.prompt = ""
 
-        async def run(self, prompt, output_type, cwd):
+        async def run(self, prompt, output_type, cwd, **kwargs):
             self.prompt = prompt
             return output_type.model_validate(
                 {
@@ -244,7 +244,7 @@ async def test_decomposition_prompt_enforces_work_item_kind_partitions(
         def __init__(self):
             self.prompt = ""
 
-        async def run(self, prompt, output_type, cwd):
+        async def run(self, prompt, output_type, cwd, **kwargs):
             self.prompt = prompt
             return valid_breakdown
 

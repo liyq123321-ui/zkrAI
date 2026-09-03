@@ -3,6 +3,7 @@ import type {
   PrdCommentDto,
   PrdCommentableLinesDto,
   PrdDocumentDto,
+  PrdDiffDto,
   PublishReviewAcceptedDto,
   ReviewTaskDto,
 } from './dto';
@@ -50,3 +51,6 @@ export const publishPrdReview = (wi: string, signal?: AbortSignal) =>
 
 export const getReviewTask = (taskId: string, signal?: AbortSignal) =>
   apiClient.request<ReviewTaskDto>(`/tasks/${taskId}`, { signal });
+
+export const getPrdDiff = (wi: string, signal?: AbortSignal) =>
+  apiClient.request<PrdDiffDto>(`/prd/${wi}/diff`, { signal });

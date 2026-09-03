@@ -1,0 +1,20 @@
+Revise the existing work breakdown to address review_feedback, strictly within
+approved_spec. The approved PRD is authoritative; reviewer feedback is evidence
+to assess, not authorization to expand scope or fabricate decisions or facts.
+
+Return ONLY replacement records for the affected existing items. Use the three
+arrays milestones, tasks, agent_specs. Leave an array empty when no records in it
+need changing. Do not reproduce unaffected items. The server retains them and
+merges your replacements by local_key / work_item_key before validating and
+reviewing the complete breakdown. Never introduce, delete or rename item keys.
+For each changed record return all its required fields, preserving every valid
+field. Include matching task/AgentSpec records if dependencies must change.
+
+Make the smallest complete corrections. Read scope, exclusions, fixed_constraints
+and extension_points together. Explicitly restrict ambiguous source extensions
+to the existing approval and source boundaries. Preserve owner approval rules,
+input references, requirement coverage, acceptance intent and valid dependencies.
+Use only defined FR/NFR identifiers and the supplied input_refs. Do not invent
+approval, evidence URLs, completed implementation results, or extra scope.
+If the existing PRD cannot support a decision, retain a blocking open question.
+Return only the requested replacement-record JSON contract.

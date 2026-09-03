@@ -10,6 +10,7 @@ from app.schemas.prd_review import (
     PrdCommentRead,
     PrdCommentableLinesRead,
     PrdDocumentRead,
+    PrdDiffRead,
     PublishReviewRequest,
     ReviewTaskRead,
 )
@@ -152,6 +153,13 @@ def build_router(
     async def prd_commentable_lines(wi: str) -> PrdCommentableLinesRead:
         try:
             return await service.commentable_lines(wi)
+        except Exception as error:
+            raise _http_error(error) from error
+
+    @router.get("/prd/{wi}/diff", response_model=PrdDiffRead)
+    async def prd_diff(wi: str) -> PrdDiffRead:
+        try:
+            return await service.diff(wi)
         except Exception as error:
             raise _http_error(error) from error
 

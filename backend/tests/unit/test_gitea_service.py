@@ -967,3 +967,54 @@ async def test_transport_failures_return_only_safe_public_error(
     assert "Authorization" not in str(captured.value)
     assert "transport" not in str(captured.value)
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_official_files_without_patch_use_raw_diff_and_keep_target_source_lines(gitea_settings):
+    """Gitea files only contain statistics; a different file's hunks must not leak in."""
+    seen = []
+    raw_diff = (
+        'diff --git a/other.md b/other.md\n--- a/other.md\n+++ b/other.md\n'
+        '@@ -0,0 +100 @@\n+unrelated\n'
+        'diff --git a/docs/prd/root/v1.md b/docs/prd/root/v1.md\n'
+        '--- a/docs/prd/root/v1.md\n+++ b/docs/prd/root/v1.md\n'
+        '@@ -1 +1 @@\n title\n@@ -10 +12,2 @@\n keep\n+new requirement\n'
+        'diff --git a/last.md b/last.md\n--- a/last.md\n+++ b/last.md\n'
+        '@@ -0,0 +200 @@\n+also unrelated\n'
+    )
+
+    def handler(request):
+        seen.append(request)
+        if request.url.path.endswith('/files'):
+            return httpx.Response(200, json=[{'filename':'docs/prd/root/v1.md', 'status':'modified', 'additions':1,'deletions':0,'changes':1}])
+        if request.url.path.endswith('/7.diff'):
+            return httpx.Response(200, text=raw_diff)
+        if request.method == 'POST' and request.url.path.endswith('/reviews'):
+            return httpx.Response(200, json={'id':4,'state':'COMMENT'})
+        raise AssertionError(str(request.url))
+
+    async with GiteaClient(gitea_settings, transport=httpx.MockTransport(handler)) as client:
+        assert await client.commentable_lines(7, 'docs/prd/root/v1.md') == [
+            (1, 'context', 'title'), (12, 'context', 'keep'), (13, 'addition', 'new requirement')
+        ]
+        await client.create_comment(7, 'docs/prd/root/v1.md', 13, 'Clarify this.', 'commit-sha')
+        assert json.loads(seen[-1].content)['comments'] == [{'body':'Clarify this.','path':'docs/prd/root/v1.md','new_position':13}]
+        posts_before = sum(request.method == 'POST' for request in seen)
+        with pytest.raises(CommentLineNotInDiff):
+            await client.create_comment(7, 'docs/prd/root/v1.md', 100, 'Wrong file.', 'commit-sha')
+        assert sum(request.method == 'POST' for request in seen) == posts_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('raw_diff', [
+    'diff --git a/other.md b/other.md\n--- a/other.md\n+++ b/other.md\n@@ -0,0 +1 @@\n+other\n',
+    ('diff --git a/docs/prd/root/v1.md b/docs/prd/root/v1.md\n--- /dev/null\n+++ b/docs/prd/root/v1.md\n@@ -0,0 +1 @@\n+duplicate\n') * 2,
+])
+async def test_raw_diff_refuses_missing_or_ambiguous_target_file(gitea_settings, raw_diff):
+    def handler(request):
+        if request.url.path.endswith('/files'):
+            return httpx.Response(200, json=[{'filename':'docs/prd/root/v1.md','status':'added','additions':1,'deletions':0,'changes':1}])
+        return httpx.Response(200, text=raw_diff)
+    async with GiteaClient(gitea_settings, transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(CommentLineNotInDiff):
+            await client.commentable_lines(7, 'docs/prd/root/v1.md')

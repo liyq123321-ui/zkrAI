@@ -47,6 +47,7 @@ export interface ProjectBriefDto {
 }
 
 export interface SpecReviewDto {
+  command_id?: string | null;
   id: string;
   kind: string;
   verdict: string;
@@ -56,6 +57,7 @@ export interface SpecReviewDto {
 }
 
 export interface SpecVersionDto {
+  generator_call_id?: string;
   id: string;
   project_id: string;
   revision: number;
@@ -156,4 +158,12 @@ export interface PublishReviewAcceptedDto {
   task_id: string;
   base_version: number;
   comment_count: number;
+}
+
+export interface PrdDiffDto {
+  wi: string;
+  version: number;
+  filename: string;
+  commit_sha: string;
+  patch: string;
 }

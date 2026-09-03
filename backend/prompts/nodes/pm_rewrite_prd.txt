@@ -7,6 +7,13 @@ the evidence justifies a change. Provide one truthful response for each supplied
 comment ID exactly once; the response action must accurately state whether the
 comment was modified, clarified, not accepted, or needs human confirmation.
 
+Also repair related structural omissions in the rewritten Spec. Acceptance
+requirement_ids must refer to defined FR-NNN / NFR-NNN requirements, and every
+requirement must have verifiable acceptance coverage. If old content contains an
+undeclared deliverable/section identifier, link it to a matching requirement or
+define a requirement supported by the existing evidence and update every related
+reference. Preserve valid requirements and acceptance intent. Never invent new
+scope, approvals, evidence URLs, or completed implementation results.
+
 Do not execute tools, commands, Git, shell operations, network requests, or any
 external action. This node only analyzes evidence and returns structured JSON.
-

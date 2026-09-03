@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.gateway import AgentGateway
 from app.database.models import AgentCall, AgentSession, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem, WorkItemDependency
-from app.domain.types import AgentSpecProposal, ProjectPhase, ProjectSpecPayload, ReviewVerdict, SpecStatus, WorkBreakdown, WorkItemKind
+from app.domain.types import AgentSpecProposal, ProjectPhase, ProjectSpecPayload, ReviewVerdict, SemanticReview, SpecStatus, WorkBreakdown, WorkItemKind
 
 
 class BreakdownValidationError(ValueError):
@@ -338,6 +338,17 @@ def validate_breakdown(
     if missing:
         _error("MISSING_AGENT_SPEC", sorted(missing)[0], "each task needs exactly one AgentSpec")
 
+    covered_ids = {
+        requirement_id
+        for proposal in breakdown.agent_specs
+        for criterion in proposal.acceptance_criteria
+        for requirement_id in criterion.requirement_ids
+    }
+    uncovered = allowed_requirement_ids - covered_ids
+    if uncovered:
+        _error("MISSING_ACCEPTANCE_COVERAGE", "agent_specs",
+               f"requirements without task acceptance coverage: {', '.join(sorted(uncovered))}")
+
 
 def _normalize_text(value: str) -> str:
     return " ".join(value.strip().split())
@@ -383,22 +394,139 @@ class DecompositionService:
             raise
 
     async def prepare(self, project_id: str, *, command_id: str | None = None, input_hash: str | None = None) -> PreparedDecomposition:
-        """Perform PM work outside the final write transaction and retain its evidence."""
+        """Revise against the approved snapshot, then independently review each result."""
         with self._session_factory() as db:
             project = self._project(db, project_id)
             version = self._approved_version(db, project)
-            pm = self._pm_session(db, project_id)
+            snapshot = ApprovedSpecSnapshot(
+                version.id, json.loads(json.dumps(version.content)), tuple(version.input_refs), version.content_hash,
+            )
+            seed = self._latest_rejected_review(db, project_id, snapshot, command_id, input_hash)
+
+        previous, first_round, prior_call_ids = seed or (None, 0, [])
+        if first_round > 2:
+            review = SemanticReview.model_validate(previous["review_feedback"])
+            raise SemanticReviewRejected(BreakdownValidationError(
+                "SEMANTIC_REVIEW_BLOCKED", self._review_implicated_path(review),
+                "Semantic revision budget exhausted for this command",
+            ), prior_call_ids)
+
+        # Initial proposal plus at most two semantic revisions. A persisted rejection
+        # already supplies the initial proposal, so retry revises it directly.
+        for repair_round in range(first_round, 3):
             payload = {
-                "project_id": project.id,
-                "spec_version_id": version.id,
-                "spec_content_hash": version.content_hash,
-                "approved_spec": version.content,
-                "input_refs": list(version.input_refs),
+                "project_id": project_id,
+                "spec_version_id": snapshot.id,
+                "spec_content_hash": snapshot.content_hash,
+                "approved_spec": json.loads(json.dumps(dict(snapshot.content))),
+                "input_refs": list(snapshot.input_refs),
+                "repair_round": repair_round,
             }
             if command_id is not None:
                 payload["command_id"] = command_id
             if input_hash is not None:
                 payload["input_hash"] = input_hash
+            if previous:
+                payload.update(previous)
+            breakdown, review, call_id, reviewer_call_id = await self._prepare_round(
+                project_id, snapshot, payload, command_id=command_id, input_hash=input_hash,
+            )
+            if not self._review_blocks(review):
+                return PreparedDecomposition(project_id, snapshot, breakdown, call_id, reviewer_call_id)
+
+            will_repair = repair_round < 2 and self._can_repair_review(review)
+            with self._session_factory() as db:
+                project = self._project(db, project_id)
+                db.add(AuditEvent(
+                    id=_new_id(), project_id=project_id, session_id=project.session_id,
+                    event_type="DECOMPOSITION_REVIEW_REJECTED", actor_id=None,
+                    payload={
+                        "spec_version_id": snapshot.id, "command_id": command_id,
+                        "agent_call_ids": [call_id, reviewer_call_id], "repair_round": repair_round,
+                        "will_repair": will_repair, "review": review.model_dump(mode="json"),
+                    },
+                ))
+                db.commit()
+            if not will_repair:
+                error = BreakdownValidationError(
+                    "SEMANTIC_REVIEW_BLOCKED", self._review_implicated_path(review),
+                    "Reviewer found a blocking semantic conflict",
+                )
+                raise SemanticReviewRejected(error, [call_id, reviewer_call_id])
+            previous = {
+                "previous_breakdown": breakdown.model_dump(mode="json"),
+                "review_feedback": review.model_dump(mode="json"),
+                "previous_review_call_id": reviewer_call_id,
+            }
+        raise RuntimeError("semantic repair budget exhausted without a review outcome")
+
+    @staticmethod
+    def _can_repair_review(review: SemanticReview) -> bool:
+        return review.verdict is not ReviewVerdict.NEED_INFO and bool(review.findings) and not any(
+            finding.code in {"NEEDS_HUMAN_DECISION", "NEEDS_DECISION", "UNACCEPTED_RISK"}
+            for finding in review.findings
+        )
+
+    def _latest_rejected_review(
+        self, db: Session, project_id: str, snapshot: ApprovedSpecSnapshot,
+        command_id: str | None, input_hash: str | None,
+    ):
+        """Reuse only durable feedback bound to this exact project and approved PRD."""
+        calls = db.query(AgentCall).filter_by(project_id=project_id, operation="review_breakdown").order_by(
+            AgentCall.started_at.desc(), AgentCall.id.desc(),
+        ).all()
+        # A newer command's feedback must not hide this command's consumed budget.
+        # Prefer its highest recorded round, retaining chronological order for ties.
+        def resume_priority(call: AgentCall) -> tuple[bool, int]:
+            same = command_id is not None and call.request.get("command_id") == command_id and call.request.get("input_hash") == input_hash
+            round_value = call.request.get("repair_round", 0)
+            return same, round_value if same and type(round_value) is int else 0
+
+        calls.sort(key=resume_priority, reverse=True)
+        for call in calls:
+            request = call.request
+            if (request.get("project_id") != project_id
+                    or request.get("source_spec_version_id") != snapshot.id
+                    or request.get("source_spec_content_hash") != snapshot.content_hash
+                    or request.get("approved_spec") != snapshot.content):
+                continue
+            if call.status != "RESULT_READY":
+                return None
+            try:
+                review = SemanticReview.model_validate(call.response)
+                breakdown = WorkBreakdown.model_validate(request.get("canonical_breakdown"))
+                validate_breakdown(breakdown, snapshot)
+            except ValueError:
+                return None
+            if not self._review_blocks(review) or not self._can_repair_review(review):
+                return None
+            same_attempt = command_id is not None and request.get("command_id") == command_id and request.get("input_hash") == input_hash
+            completed_round = request.get("repair_round", 0) if same_attempt else 0
+            if type(completed_round) is not int or not 0 <= completed_round <= 2:
+                raise DecompositionNotAllowed("invalid persisted semantic repair round")
+            evidence_ids = [call.id]
+            if same_attempt and request.get("pm_agent_call_id"):
+                evidence_ids.insert(0, request["pm_agent_call_id"])
+            return {
+                "previous_breakdown": breakdown.model_dump(mode="json"),
+                "review_feedback": review.model_dump(mode="json"),
+                "previous_review_call_id": call.id,
+            }, completed_round + 1, evidence_ids
+        return None
+
+    def _assert_snapshot_current(self, db: Session, project_id: str, snapshot: ApprovedSpecSnapshot) -> None:
+        version = self._approved_version(db, self._project(db, project_id))
+        if (version.id != snapshot.id or version.content_hash != snapshot.content_hash
+                or version.content != snapshot.content or tuple(version.input_refs) != snapshot.input_refs):
+            raise DecompositionNotAllowed("approved Spec changed during decomposition")
+
+    async def _prepare_round(
+        self, project_id: str, snapshot: ApprovedSpecSnapshot, payload: dict[str, object], *,
+        command_id: str | None, input_hash: str | None,
+    ) -> tuple[WorkBreakdown, SemanticReview, str, str]:
+        with self._session_factory() as db:
+            self._assert_snapshot_current(db, project_id, snapshot)
+            pm = self._pm_session(db, project_id)
             call = AgentCall(id=_new_id(), project_id=project_id, agent_session_id=pm.id, operation="decompose_spec", request=payload, status="PENDING")
             db.add(call)
             db.commit()
@@ -415,10 +543,10 @@ class DecompositionService:
                 raise RuntimeError("decomposition Agent call disappeared")
             call.status, call.response, call.completed_at = "RESULT_READY", breakdown.model_dump(mode="json"), _now()
             db.commit()
-        snapshot = ApprovedSpecSnapshot(version.id, version.content, tuple(version.input_refs), version.content_hash)
         try:
             validate_breakdown(breakdown, snapshot)
             with self._session_factory() as db:
+                self._assert_snapshot_current(db, project_id, snapshot)
                 self._assert_new_local_keys(db, project_id, breakdown)
         except BreakdownValidationError as error:
             self._record_failure(project_id, call_id, error)
@@ -427,6 +555,7 @@ class DecompositionService:
             self._record_failure(project_id, call_id, error)
             raise
         reviewer_payload = self._reviewer_payload(project_id, snapshot, breakdown, command_id=command_id, input_hash=input_hash)
+        reviewer_payload.update(pm_agent_call_id=call_id, repair_round=payload["repair_round"])
         with self._session_factory() as db:
             reviewer = self._reviewer_session(db, project_id)
             reviewer_call = AgentCall(
@@ -450,19 +579,14 @@ class DecompositionService:
             persisted_review_call.response = review.model_dump(mode="json")
             persisted_review_call.completed_at = _now()
             db.commit()
-        if self._review_blocks(review):
-            implicated = self._review_implicated_path(review)
-            error = BreakdownValidationError("SEMANTIC_REVIEW_BLOCKED", implicated, "Reviewer found a blocking semantic conflict")
-            raise SemanticReviewRejected(error, [call_id, reviewer_call_id])
-        return PreparedDecomposition(project_id, snapshot, breakdown, call_id, reviewer_call_id)
+        return breakdown, review, call_id, reviewer_call_id
 
     def _persist_direct(self, prepared: PreparedDecomposition) -> list[AgentSpec]:
         with self._session_factory() as db:
             with db.begin():
                 project = self._project(db, prepared.project_id)
+                self._assert_snapshot_current(db, project.id, prepared.approved_spec)
                 version = self._approved_version(db, project)
-                if version.id != prepared.approved_spec.id:
-                    raise DecompositionNotAllowed("approved Spec changed before conversion")
                 self._assert_new_local_keys(db, project.id, prepared.breakdown)
                 specs = self._persist(db.add, db.flush, project, prepared.approved_spec, prepared.breakdown)
                 project.phase = ProjectPhase.AGENT_SPECS_READY.value
@@ -491,6 +615,8 @@ class DecompositionService:
             "agent_spec_semantic_content": [
                 {
                     "work_item_key": proposal.work_item_key,
+                    "scope": proposal.scope,
+                    "exclusions": proposal.exclusions,
                     "fixed_constraints": proposal.fixed_constraints,
                     "configurable_parts": proposal.configurable_parts,
                     "extension_points": proposal.extension_points,
@@ -576,6 +702,9 @@ class DecompositionService:
                 if context.state.current_spec_version_id != prepared.payload["approved_spec_id"]:
                     raise DecompositionNotAllowed("approved Spec changed before conversion")
                 snapshot = ApprovedSpecSnapshot(str(prepared.payload["approved_spec_id"]), prepared.payload["approved_spec"], tuple(prepared.payload["input_refs"]), str(prepared.payload["spec_content_hash"]))
+                uow.assert_decomposition_spec_snapshot(
+                    snapshot.id, snapshot.content_hash, snapshot.content, snapshot.input_refs,
+                )
                 breakdown = WorkBreakdown.model_validate(prepared.payload["breakdown"])
                 return service._materialize_command(uow, context, snapshot, breakdown, prepared.agent_call_ids)
 
@@ -722,4 +851,3 @@ class DecompositionService:
 
 
 __all__ = ["ApprovedSpecSnapshot", "BreakdownValidationError", "DecompositionNotAllowed", "DecompositionService", "PreparedDecomposition", "validate_breakdown"]
-

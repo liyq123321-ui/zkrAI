@@ -161,12 +161,44 @@ class ClarificationQuestion(BaseModel):
         return normalized
 
 
+class ProjectBriefUpdates(BaseModel):
+    """Confirmed content changes; human authorization fields are not Agent-editable.
+
+    Null/omitted fields retain their current value. Lists replace the whole field,
+    so an explicit empty list clears it rather than resurrecting superseded scope.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    motivation: str | None = Field(default=None, min_length=1)
+    final_objective: str | None = Field(default=None, min_length=1)
+    known_scope: list[str] | None = None
+    exclusions: list[str] | None = None
+    reference_materials: list[str] | None = None
+    expected_deliverables: list[str] | None = None
+    time_constraints: str | None = None
+    staffing_constraints: str | None = None
+
+    @field_validator("motivation", "final_objective")
+    @classmethod
+    def normalize_required_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("Brief text must not be blank")
+        return value.strip()
+
+    def apply_to(self, brief: dict[str, object]) -> dict[str, object]:
+        return {**brief, **self.model_dump(mode="json", exclude_none=True)}
+
+
 class ClarificationAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ready_for_spec: bool
     questions: list[ClarificationQuestion]
     assumptions: list[str]
+    brief_updates: ProjectBriefUpdates = Field(default_factory=ProjectBriefUpdates)
 
     @model_validator(mode="after")
     def validate_readiness_consistency(self):
@@ -265,3 +297,13 @@ class WorkBreakdown(BaseModel):
     milestones: list[WorkItemProposal] = Field(min_length=1)
     tasks: list[WorkItemProposal] = Field(min_length=1)
     agent_specs: list[AgentSpecProposal] = Field(min_length=1)
+
+
+class WorkBreakdownRevision(BaseModel):
+    """Replacement records for affected existing items; omitted items stay intact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    milestones: list[WorkItemProposal] = Field(default_factory=list)
+    tasks: list[WorkItemProposal] = Field(default_factory=list)
+    agent_specs: list[AgentSpecProposal] = Field(default_factory=list)

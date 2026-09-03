@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Server, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Loader2, RefreshCw, Server, ShieldCheck } from 'lucide-react';
 import { apiClient } from './client';
 import { appConfig } from './config';
 import type {
@@ -13,6 +13,9 @@ import type {
   WorkItemDto,
 } from './dto';
 import { ApiError, normalizeNetworkError } from './errors';
+import { AuditTrail } from './AuditTrail';
+import { WorkItemDialog } from './WorkItemDialog';
+import { displayLabel, progressDescription } from './presentation';
 import { PrdReviewPanel } from './PrdReviewPanel';
 import {
   createSession,
@@ -84,9 +87,8 @@ function Field({ label, value, onChange, multiline = false }: {
 function StatusBadge({ state }: { state: SessionStateDto }) {
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span className="rounded-full bg-cyan-500/15 px-3 py-1 text-cyan-300">{state.phase}</span>
-      {state.current_spec_status && <span className="rounded-full bg-violet-500/15 px-3 py-1 text-violet-300">{state.current_spec_status}</span>}
-      <span className="rounded-full bg-slate-800 px-3 py-1 text-slate-300">状态版本 {state.state_version}</span>
+      <span className="rounded-full bg-cyan-500/15 px-3 py-1 text-cyan-300">{displayLabel(state.phase)}</span>
+      {state.current_spec_status && <span className="rounded-full bg-violet-500/15 px-3 py-1 text-violet-300">{displayLabel(state.current_spec_status)}</span>}
     </div>
   );
 }
@@ -147,8 +149,8 @@ export function ApiWorkspace() {
   }, [refreshResources]);
 
   const currentSpec = useMemo(
-    () => [...resources.specs].sort((left, right) => right.revision - left.revision)[0],
-    [resources.specs],
+    () => resources.specs.find((spec) => spec.id === state?.current_spec_version_id) ?? [...resources.specs].sort((left, right) => right.revision - left.revision)[0],
+    [resources.specs, state?.current_spec_version_id],
   );
   const rootWorkItem = useMemo(
     () => resources.workItems.find((item) => item.kind === 'ROOT'),
@@ -166,6 +168,12 @@ export function ApiWorkspace() {
     () => actionPlacement(state?.legal_actions ?? []),
     [state?.legal_actions],
   );
+  const sidebarActions = [
+    ...(['message', 'skip_clarification'] as const).filter((action) => placedActions.sidebar.includes(action)),
+    ...placedActions.sidebar.filter((action) => !['message', 'skip_clarification', 'restore_spec_version'].includes(action)),
+  ];
+
+  const historicalSpecs = resources.specs.filter((spec) => spec.id !== state?.current_spec_version_id);
 
   async function onCreate(event: FormEvent) {
     event.preventDefault();
@@ -242,12 +250,15 @@ export function ApiWorkspace() {
   }
 
   async function runAction(action: CommandAction) {
-    if (!state) return;
+    if (!state || busy) return;
     const effectiveAction = action === 'message'
+      && state.phase === 'NEED_CLARIFICATION'
+      && !state.current_spec_version_id
       && state.legal_actions.includes('skip_clarification')
       && isSkipClarificationIntent(answer)
       ? 'skip_clarification'
       : action;
+    const confirmsCurrentSpec = effectiveAction === 'skip_clarification' && Boolean(state.current_spec_version_id);
     const message = effectiveAction === 'message'
       ? answer
       : effectiveAction === 'restore_spec_version'
@@ -277,17 +288,23 @@ export function ApiWorkspace() {
           ? { comments: message }
           : effectiveAction === 'restore_spec_version'
             ? { source_revision: sourceRevision }
-            : {};
+            : confirmsCurrentSpec
+              ? { confirm_current_spec: true, spec_version_id: state.current_spec_version_id }
+              : {};
       if (effectiveAction === 'skip_clarification') {
-        setWorkflowProgress('正在记录跳过澄清，由 Agent 接管模糊决策…');
+        setWorkflowProgress(confirmsCurrentSpec
+          ? '正在跳过澄清并确认当前 PRD…'
+          : '正在记录跳过澄清，由 Agent 接管模糊决策…');
       }
       let nextState = await submitCommand(state, effectiveAction, message, payload);
-      if (
-        effectiveAction === 'skip_clarification'
-        && nextState.legal_actions.includes('create_spec')
-      ) {
-        setWorkflowProgress('正在根据现有信息和合理假设生成 PRD…');
-        nextState = await submitCommand(nextState, 'create_spec');
+      if (effectiveAction === 'skip_clarification') {
+        if (confirmsCurrentSpec && nextState.legal_actions.includes('convert_to_work_item')) {
+          setWorkflowProgress('PRD 已确认，正在拆分子任务…');
+          nextState = await submitCommand(nextState, 'convert_to_work_item');
+        } else if (!confirmsCurrentSpec && nextState.legal_actions.includes('create_spec')) {
+          setWorkflowProgress('正在根据现有信息和合理假设生成 PRD…');
+          nextState = await submitCommand(nextState, 'create_spec');
+        }
       }
       setAnswer('');
       setRestoreRevision('');
@@ -316,7 +333,7 @@ export function ApiWorkspace() {
   }
 
   async function confirmPrdAndDecompose(reviewNote: string) {
-    if (!state) return;
+    if (!state || busy) return;
     setBusy(true);
     setError(null);
     let nextState = state;
@@ -395,7 +412,7 @@ export function ApiWorkspace() {
         <aside className="space-y-4">
           {!state ? (
             <form onSubmit={onCreate} className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-5">
-              <div><h2 className="font-medium">创建项目 Session</h2><p className="mt-1 text-xs text-slate-400">填写最小项目简报，由后端 PM Agent 判断是否需要澄清。</p></div>
+              <div><h2 className="font-medium">创建项目</h2><p className="mt-1 text-xs text-slate-400">填写最小项目简报，由后端 PM Agent 判断是否需要澄清。</p></div>
               <Field label="为什么要做" value={motivation} onChange={setMotivation} multiline />
               <Field label="最终目标" value={objective} onChange={setObjective} multiline />
               <Field label="已知范围（每行一项）" value={scope} onChange={setScope} multiline />
@@ -412,18 +429,32 @@ export function ApiWorkspace() {
             </form>
           ) : (
             <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-5">
-              <div className="flex items-center justify-between"><h2 className="font-medium">当前 Session</h2><button onClick={manualRefresh} disabled={busy} title="刷新"><RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} /></button></div>
+              <div className="flex items-center justify-between"><h2 className="font-medium">项目进度</h2><button onClick={manualRefresh} disabled={busy} title="刷新" aria-label="刷新项目状态"><RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} /></button></div>
+              <p className="text-xs leading-5 text-slate-400">一个项目从需求澄清、PRD 审核到任务拆解的完整记录，就是一个 Session。关闭页面后仍可继续。</p>
+              {rootWorkItem && <p className="text-sm font-medium text-slate-200">{rootWorkItem.title || rootWorkItem.objective}</p>}
               <StatusBadge state={state} />
-              <dl className="grid gap-2 text-xs text-slate-400"><div><dt>Session</dt><dd className="break-all text-slate-200">{state.session_id}</dd></div><div><dt>下一步</dt><dd className="text-slate-200">{state.next_action}</dd></div></dl>
+              {currentSpec && <p className="text-xs text-slate-400">当前需求文档：PRD v{currentSpec.revision}</p>}
+              <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
+                <h3 className="text-sm font-medium text-cyan-200">下一步：{displayLabel(state.next_action)}</h3>
+                <p className="mt-2 text-xs leading-6 text-slate-300">{progressDescription(state)}</p>
+                {state.review_findings.length > 0 && <p className="mt-2 text-xs text-amber-200">有 {state.review_findings.filter((finding) => finding.blocks_progress).length} 项问题需要处理，详情见 PRD 审核。</p>}
+                {rootWorkItem && currentSpec && <button type="button" onClick={() => setSelectedWorkItemId(rootWorkItem.id)} className="mt-3 w-full rounded-lg bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950">查看 PRD 与审核意见</button>}
+              </div>
+              <details className="text-xs text-slate-400"><summary className="cursor-pointer">项目标识与恢复方式</summary><dl className="mt-2 space-y-2"><div><dt>Session ID（用于恢复这个项目）</dt><dd className="break-all text-slate-200">{state.session_id}</dd></div><div><dt>进度更新次数</dt><dd className="text-slate-200">{state.state_version}（不是 PRD 文档版本）</dd></div></dl></details>
 
               {state.outstanding_questions.length > 0 && <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3"><h3 className="text-sm font-medium text-amber-200">待澄清</h3>{state.outstanding_questions.map((question) => <div key={question.question_id} className="mt-3 text-sm"><p>{question.question}</p><p className="mt-1 text-xs text-slate-400">{question.reason}</p></div>)}</div>}
               {state.legal_actions.includes('message') && <Field label="澄清答案" value={answer} onChange={setAnswer} multiline />}
-              {state.legal_actions.includes('restore_spec_version') && <div className="space-y-2 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3"><p className="text-xs text-violet-200">历史不会被覆盖；系统会复制所选内容并创建新的 n+1 版本，重新进入审核。</p><select value={restoreRevision} onChange={(event) => setRestoreRevision(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"><option value="">选择历史版本</option>{resources.specs.filter((spec) => spec.id !== state.current_spec_version_id).map((spec) => <option key={spec.id} value={spec.revision}>v{spec.revision} · {spec.status}</option>)}</select><Field label="创建新版的原因" value={restoreReason} onChange={setRestoreReason} multiline /></div>}
+              {state.legal_actions.includes('restore_spec_version') && historicalSpecs.length > 0 && <details className="space-y-2 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3"><summary className="cursor-pointer text-sm text-violet-200">从历史 PRD 创建新版</summary><div className="mt-3 space-y-3"><p className="text-xs text-slate-400">复制所选旧版内容并生成新版本，再次进入审核。已有记录会保留。</p><select aria-label="历史 PRD 版本" value={restoreRevision} onChange={(event) => setRestoreRevision(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"><option value="">选择历史版本</option>{historicalSpecs.map((spec) => <option key={spec.id} value={spec.revision}>v{spec.revision} · {displayLabel(spec.status)}</option>)}</select><Field label="创建新版的原因" value={restoreReason} onChange={setRestoreReason} multiline /><button disabled={busy || !restoreRevision || !restoreReason.trim()} onClick={() => runAction('restore_spec_version')} className="w-full rounded-lg border border-violet-500/40 px-3 py-2 text-sm text-violet-200 disabled:opacity-40">基于历史版本创建新版</button></div></details>}
               <div className="grid gap-2">
-                {placedActions.sidebar.map((action) => <button key={action} disabled={busy} onClick={() => runAction(action)} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50">{actionLabels[action]}</button>)}
+                {sidebarActions.map((action) => <button key={action} disabled={busy} onClick={() => runAction(action)} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50">{action === 'skip_clarification' && state.current_spec_version_id ? '跳过澄清，确认当前 PRD 并拆分子任务' : actionLabels[action]}</button>)}
+                {state.legal_actions.includes('convert_to_work_item') && (
+                  <button type="button" disabled={busy} onClick={() => runAction('convert_to_work_item')} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50">
+                    继续拆分子任务
+                  </button>
+                )}
               </div>
-              {placedActions.prd.length > 0 && <p className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs leading-5 text-slate-400">PRD 审核和任务拆解已收拢到主 WorkItem 卡片，避免绕过 Gitea 人工审核。</p>}
-              <button onClick={clearSession} className="w-full text-xs text-slate-500 hover:text-slate-300">关闭本地 Session 记录</button>
+
+              <button disabled={busy} onClick={clearSession} className="w-full text-xs text-slate-500 hover:text-slate-300 disabled:opacity-50">返回项目入口（保留数据）</button>
             </section>
           )}
         </aside>
@@ -433,12 +464,12 @@ export function ApiWorkspace() {
           {workflowProgress && <div className="flex items-center gap-3 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-sm text-cyan-100"><Loader2 className="h-5 w-5 animate-spin" /><span>{workflowProgress}</span></div>}
           {!state ? <div className="grid min-h-80 place-items-center rounded-2xl border border-dashed border-slate-800 text-sm text-slate-500">创建或恢复 Session 后，这里显示真实 Spec、WorkItem 和审计记录。</div> : <>
             <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">规划 Kanban</h2><p className="mt-1 text-xs text-slate-500">主卡进入 PRD 审核；子卡查看拆解后的 Agent Spec。所有卡片只读，不代表已执行。</p></div>{currentSpec && <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">PRD v{currentSpec.revision} · {currentSpec.status}</span>}</div>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">规划看板</h2><p className="mt-1 text-xs text-slate-500">点击项目卡片阅读 PRD 正文与 Diff，并查看审核意见；拆解后的子任务可查看执行规格。</p></div>{currentSpec && <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">PRD v{currentSpec.revision} · {displayLabel(currentSpec.status)}</span>}</div>
               <div className="grid gap-4 xl:grid-cols-3">
                 {([
-                  { kind: 'ROOT', title: '主 WorkItem' },
+                  { kind: 'ROOT', title: '项目需求' },
                   { kind: 'MILESTONE', title: '里程碑' },
-                  { kind: 'TASK', title: '子 WorkItem' },
+                  { kind: 'TASK', title: '子任务' },
                 ] as const).map((column) => {
                   const items = resources.workItems.filter((item) => item.kind === column.kind);
                   return <div key={column.kind} className="rounded-xl border border-slate-800 bg-slate-950/70 p-3"><div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-medium text-slate-200">{column.title}</h3><span className="text-xs text-slate-500">{items.length}</span></div><div className="space-y-3">{items.map((item) => {
@@ -450,9 +481,11 @@ export function ApiWorkspace() {
                 })}
               </div>
             </section>
-            {selectedWorkItem?.kind === 'ROOT' && rootWorkItem && currentSpec && <PrdReviewPanel wi={rootWorkItem.id} sessionState={state} workflowBusy={busy} onConfirmAndDecompose={confirmPrdAndDecompose} onResourcesChanged={refreshCurrentResources} />}
+            {selectedWorkItem && <WorkItemDialog title={selectedWorkItem.kind === 'ROOT' ? 'PRD 审核' : '任务详情'} onClose={() => setSelectedWorkItemId(null)}>
+            {selectedWorkItem?.kind === 'ROOT' && rootWorkItem && currentSpec && <PrdReviewPanel key={`${rootWorkItem.id}:${currentSpec.id}`} fallbackSpec={currentSpec} wi={rootWorkItem.id} sessionState={state} workflowBusy={busy} onConfirmAndDecompose={confirmPrdAndDecompose} onResourcesChanged={refreshCurrentResources} />}
             {selectedWorkItem && selectedWorkItem.kind !== 'ROOT' && <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="mb-4 flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-medium">{selectedWorkItem.title || selectedWorkItem.id}</h2><p className="mt-1 text-xs text-slate-500">{selectedWorkItem.kind} · 负责人 {selectedWorkItem.suggested_assignee || selectedWorkItem.responsible_role || '未提供'}</p></div><span className="text-xs text-slate-500">依赖：{selectedWorkItem.dependency_work_item_ids.join(', ') || '无'}</span></div><p className="text-sm leading-6 text-slate-300">{selectedWorkItem.objective || selectedWorkItem.description || '未提供目标'}</p>{selectedAgentSpecs.length > 0 ? <div className="mt-4 space-y-3">{selectedAgentSpecs.map((agentSpec) => <div key={agentSpec.id} className="rounded-xl border border-cyan-500/20 bg-slate-950 p-4"><h3 className="text-sm font-medium text-cyan-200">任务 Agent Spec</h3><pre className="mt-3 max-h-[520px] overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-300">{JSON.stringify(agentSpec.content, null, 2)}</pre></div>)}</div> : <p className="mt-4 rounded-lg border border-dashed border-slate-800 p-4 text-sm text-slate-500">该卡片当前没有 Agent Spec。</p>}</section>}
-            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="mb-4 flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-400" /><h2 className="font-medium">安全审计摘要</h2></div><ol className="space-y-3">{resources.events.slice().reverse().slice(0, 30).map((event) => <li key={event.id} className="border-l border-slate-700 pl-4"><p className="text-sm text-slate-200">{event.event_type === 'AGENT_TRACE' ? String(event.payload.summary || event.payload.phase) : event.event_type}</p>{event.event_type === 'AGENT_TRACE' && <p className="text-xs text-cyan-300">{String(event.payload.status)} · {String(event.payload.phase)}</p>}<p className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()} · {event.actor_id || 'system'}</p></li>)}</ol></section>
+            </WorkItemDialog>}
+            <AuditTrail events={resources.events} specs={resources.specs} />
           </>}
         </section>
       </div>

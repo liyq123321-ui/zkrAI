@@ -6,6 +6,15 @@ from app.domain.types import OpenQuestion
 from app.services.decomposition_service import BreakdownValidationError, validate_breakdown
 
 
+def test_missing_requirement_coverage_is_rejected(valid_breakdown, valid_spec):
+    for spec in valid_breakdown.agent_specs:
+        for criterion in spec.acceptance_criteria:
+            criterion.requirement_ids = ["FR-001"]
+
+    with pytest.raises(BreakdownValidationError, match="MISSING_ACCEPTANCE_COVERAGE.*NFR-001"):
+        validate_breakdown(valid_breakdown, valid_spec)
+
+
 def test_dependency_cycle_is_rejected_with_a_real_cycle_key(valid_breakdown, valid_spec):
     valid_breakdown.milestones[0].dependency_keys = ["t-domain"]
     valid_breakdown.tasks[0].dependency_keys = ["t-api"]
@@ -124,4 +133,3 @@ def test_blank_open_question_is_rejected_with_task_key(valid_breakdown, valid_sp
         validate_breakdown(valid_breakdown, valid_spec)
 
     assert (error.value.code, error.value.local_key) == ("INVALID_OPEN_QUESTION", "t-domain")
-

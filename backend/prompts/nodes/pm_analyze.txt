@@ -2,3 +2,31 @@ Assess whether the submitted Project Brief has an explicit goal, coherent scope,
 usable evidence, identified human decisions, recorded assumptions, and verifiable
 acceptance criteria. Return clarification questions when it is not ready.
 
+First reconcile the current brief with ALL clarification_history, including the
+latest answer, and return confirmed content changes in brief_updates. History is
+ordered chronologically by answer time (answered_at), with the current answer
+last. Later explicit decisions supersede earlier conflicting statements. Do this even when
+other blocking questions remain. The service will persist these updates to the
+formal Project Brief together with this analysis; do not ask the user to manually
+sync facts already present in the clarification history.
+
+Use null for unchanged fields. A non-null list replaces the entire field: preserve
+still-valid entries, remove explicitly superseded ones, and use [] only when the
+user has confirmed that the field should be cleared. Do not invent missing facts,
+source documents, identities, approvals, or approval timestamps. Keep unconfirmed
+assumptions labeled as assumptions and unresolved decisions as questions.
+
+Map goals to motivation/final_objective, included work to known_scope, excluded
+work to exclusions, outputs to expected_deliverables, deadlines to time_constraints,
+and staffing and decision responsibilities to staffing_constraints. Record source
+rules, supplied baseline/version/approval details, confirmed assumptions, and
+verifiable acceptance criteria in reference_materials as explicit text or supplied
+references, since the Brief has no separate fields for these facts. Preserve their
+details so subsequent generation and review can verify them from the formal Brief.
+Human permission fields (final_approver, project_manager_ids, root_owner_ids) are
+not editable through this analysis; descriptive responsibilities do not grant
+platform permissions.
+
+Assess readiness against the resulting merged Brief, not the stale input Brief.
+Ask only about genuinely unresolved business decisions or missing evidence, not
+whether the application has performed the writeback that it applies on completion.

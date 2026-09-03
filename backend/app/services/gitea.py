@@ -10,6 +10,7 @@ import base64
 import asyncio
 import hashlib
 import hmac
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -399,10 +400,7 @@ class GiteaClient:
         self, pr_number: int, path: str, line: int, body: str, commit_sha: str
     ) -> None:
         self._ensure_configured()
-        changed_files = await self._paginated_array(
-            self._repo_path(f"pulls/{pr_number}/files")
-        )
-        patch = self._patch_for_file(changed_files, path)
+        patch = await self._load_file_patch(pr_number, path)
         position = diff_position_for_new_line(patch, line)
         await self._request(
             "POST",
@@ -421,11 +419,26 @@ class GiteaClient:
         """Return the exact target-file lines accepted by review comments."""
 
         self._ensure_configured()
-        changed_files = await self._paginated_array(
-            self._repo_path(f"pulls/{pr_number}/files")
-        )
-        patch = self._patch_for_file(changed_files, path)
+        patch = await self._load_file_patch(pr_number, path)
         return commentable_lines_from_patch(patch)
+
+    async def read_pr_refs(self, pr_number: int) -> tuple[str, str]:
+        """Read the base/head commits that define the current PR diff."""
+        self._ensure_configured()
+        response = await self._request("GET", self._repo_path(f"pulls/{pr_number}"))
+        payload = self._json_object(response)
+        refs = []
+        for name in ("base", "head"):
+            ref = payload.get(name)
+            sha = ref.get("sha") if isinstance(ref, dict) else None
+            if not isinstance(sha, str) or not sha:
+                raise self._incompatible()
+            refs.append(sha)
+        return refs[0], refs[1]
+
+    async def file_diff(self, pr_number: int, path: str) -> str:
+        self._ensure_configured()
+        return await self._load_file_patch(pr_number, path)
 
     async def reply_comment(self, pr_number: int, comment_id: int, body: str) -> GiteaReply:
         self._ensure_configured()
@@ -680,18 +693,46 @@ class GiteaClient:
             raise cls._incompatible()
         return timestamp
 
+    async def _load_file_patch(self, pr_number: int, path: str) -> str:
+        changed_files = await self._paginated_array(
+            self._repo_path(f"pulls/{pr_number}/files")
+        )
+        patch = self._patch_for_file(changed_files, path)
+        if patch is not None:
+            return patch
+        # Gitea's files API contains statistics, not GitHub's inline patch.
+        response = await self._request(
+            "GET", self._repo_path(f"pulls/{pr_number}.diff"),
+            headers={"Accept": "text/plain"},
+        )
+        matches = []
+        for section in re.split(r"(?m)^diff --git ", response.text)[1:]:
+            lines = section.splitlines()
+            hunk_start = next((i for i, line in enumerate(lines) if line.startswith("@@ ")), None)
+            if hunk_start is None:
+                continue
+            target_headers = [line[4:] for line in lines[:hunk_start] if line.startswith("+++ ")]
+            expected = f"b/{path}"
+            if target_headers in ([expected], [json.dumps(expected, ensure_ascii=False)]):
+                matches.append("\n".join(lines[hunk_start:]))
+        if len(matches) != 1:
+            raise CommentLineNotInDiff()
+        return matches[0]
+
     @classmethod
-    def _patch_for_file(cls, changed_files: list[Any], path: str) -> str:
+    def _patch_for_file(cls, changed_files: list[Any], path: str) -> str | None:
+        matches = []
         for changed_file in changed_files:
             if not isinstance(changed_file, dict):
                 raise cls._incompatible()
             filename = changed_file.get("filename")
-            patch = changed_file.get("patch")
             if not isinstance(filename, str) or not filename:
                 raise cls._incompatible()
-            if filename != path:
-                continue
-            if not isinstance(patch, str):
-                raise CommentLineNotInDiff()
-            return patch
-        raise CommentLineNotInDiff()
+            if filename == path:
+                matches.append(changed_file)
+        if len(matches) != 1:
+            raise CommentLineNotInDiff()
+        patch = matches[0].get("patch")
+        if patch is not None and not isinstance(patch, str):
+            raise cls._incompatible()
+        return patch

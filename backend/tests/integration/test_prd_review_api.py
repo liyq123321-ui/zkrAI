@@ -103,6 +103,12 @@ class FakeGitea:
     ) -> None:
         self.calls.append(("create_comment", pr_number, path, line, body, commit_sha))
 
+    async def read_pr_refs(self, pr_number: int):
+        return ("base-sha", self.branch_sha)
+
+    async def file_diff(self, pr_number: int, path: str):
+        return "@@ -0,0 +1 @@\n+# PRD\n"
+
     async def commentable_lines(self, pr_number: int, path: str):
         self.calls.append(("commentable_lines", pr_number, path))
         return [(1, "addition", "# PRD"), (3, "context", "A first version.")]
@@ -632,3 +638,45 @@ def test_lifespan_closes_owned_gitea_when_database_startup_fails(
 
     assert len(owned_clients) == 1
     assert owned_clients[0]._client.is_closed is True
+
+
+def test_prd_diff_returns_deletions_and_context_separately_from_commentable_lines(prd_api_client):
+    client, root, gitea = prd_api_client
+
+    async def file_diff(pr_number, path):
+        assert pr_number == 17
+        assert path == f'docs/prd/{root.id}/v1.md'
+        return '@@ -1,2 +1,2 @@\n keep\n-old requirement\n+new requirement\n'
+
+    gitea.file_diff = file_diff
+    response = client.get(f'/prd/{root.id}/diff')
+    assert response.status_code == 200
+    assert response.json() == {
+        'wi':root.id,'version':1,'filename':f'docs/prd/{root.id}/v1.md',
+        'commit_sha':'created-commit','patch':'@@ -1,2 +1,2 @@\n keep\n-old requirement\n+new requirement\n',
+    }
+
+
+def test_prd_diff_rejects_live_target_content_different_from_bound_document(prd_api_client):
+    client, root, gitea = prd_api_client
+    document = client.get(f'/prd/{root.id}').json()
+    gitea.branch_sha = 'external-head'
+    gitea.files[(document['filename'], 'external-head')] = GiteaFile(document['filename'], '# changed outside the app', 'other-blob')
+
+    response = client.get(f'/prd/{root.id}/diff')
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'PRD_CONTENT_CONFLICT'
+
+
+def test_prd_diff_rejects_a_pr_revision_changed_while_diff_is_loading(prd_api_client):
+    client, root, gitea = prd_api_client
+    client.get(f'/prd/{root.id}').raise_for_status()
+    refs = iter([('base-sha',gitea.branch_sha),('new-base-sha',gitea.branch_sha)])
+
+    async def read_pr_refs(pr_number):
+        return next(refs)
+
+    gitea.read_pr_refs = read_pr_refs
+    response = client.get(f'/prd/{root.id}/diff')
+    assert response.status_code == 409
+    assert response.json()['detail']['code'] == 'PRD_CONTENT_CONFLICT'

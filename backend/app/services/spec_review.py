@@ -31,6 +31,7 @@ _SEMANTIC_REVIEW_BLOCKING_CODES = {
     "DUPLICATE_REQUIREMENT_ID",
     "MISSING_BOUNDARY",
     "UNKNOWN_SOURCE_REF",
+    "UNKNOWN_REQUIREMENT_ID",
 }
 _ENGLISH_ACTIVE_DUTY_PATTERN = re.compile(
     r"^(?P<subject>.+?)\s+(?:approves?|owns?|reviews?|manages?|assigns?|submits?|"
@@ -151,12 +152,28 @@ def run_rule_review(
         for criterion in spec.acceptance_criteria
         for requirement_id in criterion.requirement_ids
     }
+    for index, criterion in enumerate(spec.acceptance_criteria):
+        unknown_ids = sorted(set(criterion.requirement_ids) - set(requirement_ids))
+        if unknown_ids:
+            findings.append(_finding(
+                "UNKNOWN_REQUIREMENT_ID", f"/acceptance_criteria/{index}/requirement_ids",
+                f"Acceptance references undefined requirements: {', '.join(unknown_ids)}.",
+                "Link to an existing FR/NFR requirement, or define an evidence-backed requirement and update its references.",
+            ))
+        if (not criterion.criterion.strip()
+                or len(criterion.requirement_ids) != len(set(criterion.requirement_ids))):
+            findings.append(_finding(
+                "INVALID_ACCEPTANCE", f"/acceptance_criteria/{index}",
+                "Acceptance text must be non-blank and requirement references must be unique.",
+                "Complete the acceptance text and remove duplicate references.",
+            ))
     if not requirements or set(requirement_ids) - covered_ids:
         findings.append(
             _finding(
                 "MISSING_ACCEPTANCE_COVERAGE",
                 "/acceptance_criteria",
-                "Every requirement must be covered by at least one acceptance criterion.",
+                "Requirements missing acceptance coverage: "
+                + ", ".join(sorted(set(requirement_ids) - covered_ids)) + ".",
                 "Add verifiable acceptance criteria for each uncovered requirement.",
             )
         )
@@ -259,4 +276,3 @@ def prevents_semantic_review(findings: Iterable[ReviewFinding]) -> bool:
         finding.blocks_progress and finding.code in _SEMANTIC_REVIEW_BLOCKING_CODES
         for finding in findings
     )
-

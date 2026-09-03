@@ -36,6 +36,7 @@ ACTION_TABLE: dict[
     ),
     (ProjectPhase.REVIEW, SpecStatus.NEED_CLARIFICATION): (
         CommandAction.MESSAGE,
+        CommandAction.SKIP_CLARIFICATION,
         CommandAction.RESTORE_SPEC_VERSION,
     ),
     (ProjectPhase.REVIEW, SpecStatus.APPROVED): (

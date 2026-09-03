@@ -2,6 +2,25 @@ from app.domain.types import ReviewFinding, ReviewVerdict, SemanticReview, SpecS
 from app.services.spec_review import merge_review_outcome, run_rule_review
 
 
+def test_undefined_acceptance_reference_is_reported_even_when_all_requirements_are_covered(valid_spec):
+    valid_spec.acceptance_criteria[0].requirement_ids.append("deliverable-001")
+
+    findings = run_rule_review(valid_spec, set(valid_spec.source_refs))
+
+    assert [item.code for item in findings] == ["UNKNOWN_REQUIREMENT_ID"]
+    assert findings[0].spec_path == "/acceptance_criteria/0/requirement_ids"
+    assert "deliverable-001" in findings[0].message
+
+
+def test_blank_acceptance_text_and_duplicate_references_are_invalid(valid_spec):
+    valid_spec.acceptance_criteria[0].criterion = "  "
+    valid_spec.acceptance_criteria[0].requirement_ids = ["FR-001", "FR-001"]
+
+    findings = run_rule_review(valid_spec, set(valid_spec.source_refs))
+
+    assert "INVALID_ACCEPTANCE" in [item.code for item in findings]
+
+
 def test_missing_acceptance_coverage_requires_rework(valid_spec):
     """Removing requirement coverage must prevent a spec reaching human review."""
     broken = valid_spec.model_copy(update={"acceptance_criteria": []})
@@ -267,4 +286,3 @@ def test_responsibility_validation_uses_explicit_actor_to_duty_grammar(valid_spe
             update={"permissions_and_responsibilities": [responsibility]}
         )
         assert run_rule_review(spec, set(spec.source_refs)) == []
-

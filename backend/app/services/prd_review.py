@@ -32,6 +32,7 @@ from app.schemas.prd_review import (
     PrdCommentableLinesRead,
     PrdCommentReplyRead,
     PrdDocumentRead,
+    PrdDiffRead,
 )
 from app.services.gitea import GiteaClient, GiteaError, GiteaThread
 
@@ -194,6 +195,21 @@ class PrdReviewService:
                 PrdCommentableLineRead(line=line, kind=kind, text=text)
                 for line, kind, text in lines
             ],
+        )
+
+    async def diff(self, wi: str) -> PrdDiffRead:
+        binding = await self._ensure_current_binding(wi)
+        await self._preflight_binding(binding)
+        refs = await self._gitea.read_pr_refs(binding.pr_number)
+        current_file = await self._gitea.get_file(binding.filename, refs[1])
+        if current_file.path != binding.filename or _markdown_hash(current_file.content) != binding.content_hash:
+            raise PrdContentConflict("PR head content differs from the bound PRD")
+        patch = await self._gitea.file_diff(binding.pr_number, binding.filename)
+        if await self._gitea.read_pr_refs(binding.pr_number) != refs:
+            raise PrdContentConflict("PR base or head changed while reading its diff")
+        return PrdDiffRead(
+            wi=wi, version=binding.version, filename=binding.filename,
+            commit_sha=self._required_commit(binding), patch=patch,
         )
 
     async def create_comment(self, wi: str, request: CommentCreateRequest) -> None:

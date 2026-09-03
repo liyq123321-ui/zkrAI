@@ -124,6 +124,17 @@ class PrdCommentableLinesRead(BaseModel):
     lines: list[PrdCommentableLineRead]
 
 
+class PrdDiffRead(BaseModel):
+    """Full target-file PR patch, including deletion lines that cannot be annotated."""
+    model_config = ConfigDict(extra="forbid")
+
+    wi: str = Field(min_length=1, max_length=255)
+    version: int = Field(gt=0)
+    filename: str = Field(min_length=1, max_length=4096)
+    commit_sha: str = Field(min_length=1, max_length=128)
+    patch: str
+
+
 class ReviewTaskRead(BaseModel):
     """Public task progress, intentionally excluding internal failure detail."""
 

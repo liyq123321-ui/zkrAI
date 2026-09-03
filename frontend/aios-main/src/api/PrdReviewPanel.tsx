@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Loader2, MessageSquarePlus, RefreshCw, Send } from 'lucide-react';
-import type { PrdCommentDto, PrdCommentableLinesDto, PrdDocumentDto, ReviewTaskDto, SessionStateDto } from './dto';
+import type { PrdCommentDto, PrdCommentableLinesDto, PrdDocumentDto, ReviewTaskDto, SessionStateDto, SpecVersionDto, PrdDiffDto } from './dto';
 import { normalizeNetworkError } from './errors';
 import {
   createPrdComment,
   getCommentableLines,
   getLatestPrd,
+  getPrdDiff,
   getReviewTask,
   listPrdComments,
   listPrdVersions,
@@ -13,10 +14,12 @@ import {
   replyPrdComment,
   resolvePrdComment,
 } from './prd';
+import { PrdDocumentViews } from './PrdDocumentViews';
+import { ReviewFindings } from './ReviewFindings';
 import { nextPrdConfirmationStep, reviewTaskRecoveryAction } from './workflowUi';
 
 type Draft = { id: string; line: number; text: string; anchor: string; status: 'ready' | 'sending' | 'done' | 'error'; error?: string };
-type ReviewData = { document: PrdDocumentDto; commentable: PrdCommentableLinesDto; comments: PrdCommentDto[]; versionCount: number };
+type ReviewData = { document: PrdDocumentDto | null; commentable: PrdCommentableLinesDto | null; diff: PrdDiffDto | null; comments: PrdCommentDto[]; versionCount: number };
 
 const taskKey = (wi: string) => `firstflight.prd-task.${wi}`;
 const failure = (reason: unknown) => {
@@ -27,12 +30,14 @@ const failure = (reason: unknown) => {
 export function PrdReviewPanel({
   wi,
   sessionState,
+  fallbackSpec,
   workflowBusy = false,
   onConfirmAndDecompose,
   onResourcesChanged,
 }: {
   wi: string;
   sessionState: SessionStateDto;
+  fallbackSpec: SpecVersionDto;
   workflowBusy?: boolean;
   onConfirmAndDecompose: (reviewNote: string) => Promise<void>;
   onResourcesChanged?: () => Promise<void>;
@@ -45,16 +50,36 @@ export function PrdReviewPanel({
   const [replyText, setReplyText] = useState<Record<number, string>>({});
   const [reviewNote, setReviewNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reviewReady, setReviewReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
-    const [document, commentable, comments, versions] = await Promise.all([
-      getLatestPrd(wi, signal),
-      getCommentableLines(wi, signal),
-      listPrdComments(wi, signal),
-      listPrdVersions(wi, signal),
+    setReviewReady(false);
+    setError(null);
+    const [document, commentable, comments, versions, diff] = await Promise.allSettled([
+      getLatestPrd(wi, signal), getCommentableLines(wi, signal),
+      listPrdComments(wi, signal), listPrdVersions(wi, signal), getPrdDiff(wi, signal),
     ]);
-    setData({ document, commentable, comments, versionCount: versions.length });
+    if (signal?.aborted) return;
+    const next = {
+      document: document.status === 'fulfilled' ? document.value : null,
+      commentable: commentable.status === 'fulfilled' ? commentable.value : null,
+      comments: comments.status === 'fulfilled' ? comments.value : [],
+      versionCount: versions.status === 'fulfilled' ? versions.value.length : 0,
+      diff: diff.status === 'fulfilled' ? diff.value : null,
+    };
+    setData(next);
+    const failures = [document, commentable, comments, versions, diff].filter((result) => result.status === 'rejected');
+    if (failures.length) {
+      setError(`批注或审核数据暂不可用，正文仍可阅读。${failure(failures[0].reason)}`);
+    } else if (next.document?.version !== next.commentable?.version
+      || next.document?.commit_sha !== next.commentable?.commit_sha
+      || next.document?.version !== next.diff?.version
+      || next.document?.commit_sha !== next.diff?.commit_sha) {
+      setError('PRD 与 Diff 的版本不一致，请重试加载后再审核。');
+    } else {
+      setReviewReady(true);
+    }
   }, [wi]);
 
   useEffect(() => {
@@ -118,7 +143,7 @@ export function PrdReviewPanel({
   const unresolved = useMemo(() => data?.comments.filter((comment) => !comment.resolved) ?? [], [data]);
   const reviewTaskActive = Boolean(task && ['pending', 'processing'].includes(task.status));
   const hasPendingDrafts = drafts.some((item) => item.status !== 'done');
-  const confirmationStep = nextPrdConfirmationStep(
+  const confirmationStep = !reviewReady ? 'none' : nextPrdConfirmationStep(
     sessionState,
     unresolved.length,
     reviewTaskActive,
@@ -127,7 +152,7 @@ export function PrdReviewPanel({
   const requiresReviewNote = sessionState.current_spec_status === 'REWORK';
 
   function addDraft() {
-    if (selectedLine === null || !draftText.trim() || !data) return;
+    if (selectedLine === null || !draftText.trim() || !data?.commentable || !reviewReady) return;
     const line = data.commentable.lines.find((item) => item.line === selectedLine);
     if (!line) return;
     setDrafts((current) => [...current, { id: crypto.randomUUID(), line: selectedLine, text: draftText.trim(), anchor: line.text, status: 'ready' }]);
@@ -136,6 +161,7 @@ export function PrdReviewPanel({
   }
 
   async function submitDrafts() {
+    if (!reviewReady) return;
     setBusy(true);
     setError(null);
     for (const draft of drafts.filter((item) => item.status !== 'done')) {
@@ -168,6 +194,7 @@ export function PrdReviewPanel({
   }
 
   async function publish() {
+    if (!reviewReady) return;
     setBusy(true); setError(null);
     try {
       const accepted = await publishPrdReview(wi);
@@ -178,6 +205,7 @@ export function PrdReviewPanel({
   }
 
   async function confirmAndDecompose() {
+    if (!reviewReady) return;
     if (requiresReviewNote && !reviewNote.trim()) {
       setError('当前版本带有审核发现，请填写接受这些发现的确认说明。');
       return;
@@ -191,14 +219,16 @@ export function PrdReviewPanel({
     }
   }
 
-  if (!data) return <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><h2 className="font-medium">PRD 行批注</h2><p className="mt-3 text-sm text-slate-500">{error || '正在从 Gitea 加载 PRD…'}</p></section>;
 
   return (
     <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">PRD 行批注</h2><p className="text-xs text-slate-500">v{data.document.version} · {data.versionCount} 个版本 · commit {data.document.commit_sha?.slice(0, 8)}</p></div><button onClick={() => load().catch((reason) => setError(failure(reason)))}><RefreshCw className="h-4 w-4" /></button></div>
-      {error && <p className="mb-4 rounded-lg bg-rose-500/10 p-3 text-sm text-rose-200">{error}</p>}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">PRD 正文与审核</h2><p className="text-xs text-slate-500">v{data?.document?.version ?? fallbackSpec.revision} · {data?.versionCount || 1} 个版本{data?.document?.commit_sha ? ` · ${data.document.commit_sha.slice(0,8)}` : ' · 已保存的正文'}</p></div><button aria-label="刷新 PRD" onClick={() => load()}><RefreshCw className="h-4 w-4" /></button></div>
+      {error && <div role="alert" className="mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-200"><p>{error}</p><button type="button" onClick={() => load()} className="mt-2 rounded border border-amber-500/40 px-3 py-1">重试加载</button></div>}
       {task && <div className="mb-4 flex items-center gap-2 rounded-lg bg-cyan-500/10 p-3 text-sm text-cyan-200">{['pending', 'processing'].includes(task.status) && <Loader2 className="h-4 w-4 animate-spin" />}发布任务：{task.status}{task.new_version ? ` · 已生成 v${task.new_version}` : ''}</div>}
 
+      <PrdDocumentViews content={data?.document?.content ?? fallbackSpec.markdown} patch={data?.diff?.patch ?? null} commentable={data?.commentable ?? null} ready={reviewReady && !busy && !workflowBusy && !reviewTaskActive} selectedLine={selectedLine} onSelectLine={setSelectedLine} />
+      {selectedLine !== null && reviewReady && <div className="mb-4 flex gap-2"><input value={draftText} onChange={(event) => setDraftText(event.target.value)} placeholder={`给第 ${selectedLine} 行添加批注`} className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm" /><button aria-label="暂存批注" onClick={addDraft} className="rounded-lg bg-cyan-500 px-3 text-slate-950"><MessageSquarePlus className="h-4 w-4" /></button></div>}
+      {sessionState.review_findings.length > 0 && <details className="mb-4 rounded-xl border border-amber-500/20 p-4"><summary className="cursor-pointer text-sm text-amber-200">审核发现 · {sessionState.review_findings.length} 项（点击展开）</summary><div className="mt-3"><ReviewFindings findings={sessionState.review_findings} /></div></details>}
       <div className="mb-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
         <h3 className="text-sm font-medium text-cyan-100">人工审核门禁</h3>
         <p className="mt-1 text-xs leading-5 text-slate-400">
@@ -226,19 +256,14 @@ export function PrdReviewPanel({
           )}
           {confirmationStep === 'wait' && <span className="text-xs text-cyan-200">Agent 正在处理批注，请等待阶段完成。</span>}
           {confirmationStep === 'submit_comments' && <span className="text-xs text-amber-200">请先提交上方暂存的批注，再决定是否发布给 Agent。</span>}
-          {confirmationStep === 'none' && <span className="text-xs text-slate-500">当前阶段没有可执行的 PRD 审核动作。</span>}
+          {!reviewReady && <span className="text-xs text-amber-200">正在等待完整的审核数据，当前不能确认或发布。</span>}
+          {reviewReady && confirmationStep === 'none' && <span className="text-xs text-slate-500">当前阶段没有可执行的 PRD 审核动作。</span>}
         </div>
       </div>
 
-      <div className="max-h-[480px] overflow-auto rounded-xl border border-slate-800 bg-slate-950 font-mono text-xs">
-        {data.commentable.lines.map((line) => <button key={line.line} onClick={() => setSelectedLine(line.line)} className={`grid w-full grid-cols-[48px_16px_1fr] gap-2 border-b border-slate-900 px-3 py-1 text-left hover:bg-cyan-500/10 ${selectedLine === line.line ? 'bg-cyan-500/15' : ''}`}><span className="text-right text-slate-600">{line.line}</span><span className={line.kind === 'addition' ? 'text-emerald-400' : 'text-slate-600'}>{line.kind === 'addition' ? '+' : ' '}</span><span className="whitespace-pre-wrap text-slate-300">{line.text || ' '}</span></button>)}
-      </div>
+      {drafts.length > 0 && <div className="mt-4 space-y-2"><div className="flex items-center justify-between"><h3 className="text-sm font-medium">待提交批注</h3><button disabled={busy || !reviewReady || drafts.every((item) => item.status === 'done')} onClick={submitDrafts} className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-medium text-slate-950 disabled:opacity-50">逐条提交</button></div>{drafts.map((draft) => <div key={draft.id} className="rounded-lg border border-slate-800 p-3 text-sm"><p>第 {draft.line} 行：{draft.text}</p><p className={`mt-1 text-xs ${draft.status === 'error' ? 'text-rose-300' : draft.status === 'done' ? 'text-emerald-300' : 'text-slate-500'}`}>{draft.status}{draft.error ? ` · ${draft.error}` : ''}</p></div>)}</div>}
 
-      {selectedLine !== null && <div className="mt-3 flex gap-2"><input value={draftText} onChange={(event) => setDraftText(event.target.value)} placeholder={`给第 ${selectedLine} 行添加批注`} className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm" /><button onClick={addDraft} className="rounded-lg bg-cyan-500 px-3 text-slate-950"><MessageSquarePlus className="h-4 w-4" /></button></div>}
-
-      {drafts.length > 0 && <div className="mt-4 space-y-2"><div className="flex items-center justify-between"><h3 className="text-sm font-medium">待提交批注</h3><button disabled={busy || drafts.every((item) => item.status === 'done')} onClick={submitDrafts} className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-medium text-slate-950 disabled:opacity-50">逐条提交</button></div>{drafts.map((draft) => <div key={draft.id} className="rounded-lg border border-slate-800 p-3 text-sm"><p>第 {draft.line} 行：{draft.text}</p><p className={`mt-1 text-xs ${draft.status === 'error' ? 'text-rose-300' : draft.status === 'done' ? 'text-emerald-300' : 'text-slate-500'}`}>{draft.status}{draft.error ? ` · ${draft.error}` : ''}</p></div>)}</div>}
-
-      <div className="mt-5 space-y-3"><div className="flex items-center justify-between"><h3 className="text-sm font-medium">Gitea 评论（{data.comments.length}）</h3><span className="text-xs text-slate-500">{unresolved.length} 条未解决</span></div>{data.comments.map((comment) => <article key={comment.id} className="rounded-xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-start justify-between gap-2"><div><p className="text-xs text-slate-500">第 {comment.line} 行 · {comment.author_type}</p><p className="mt-1 text-sm">{comment.body}</p></div><button disabled={busy} onClick={() => setResolved(comment, !comment.resolved)} className={`rounded px-2 py-1 text-xs ${comment.resolved ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}><Check className="mr-1 inline h-3 w-3" />{comment.resolved ? '已解决，点击恢复' : '标记解决'}</button></div>{comment.replies.map((reply) => <div key={reply.id} className="mt-2 border-l border-slate-700 pl-3 text-sm"><span className="text-xs text-slate-500">{reply.author_type}</span><p>{reply.body}</p></div>)}<div className="mt-3 flex gap-2"><input value={replyText[comment.id] || ''} onChange={(event) => setReplyText((current) => ({ ...current, [comment.id]: event.target.value }))} placeholder="人工回复（不会自动解决）" className="min-w-0 flex-1 rounded border border-slate-800 bg-slate-900 px-2 py-1.5 text-xs" /><button disabled={busy} onClick={() => sendReply(comment)} className="rounded bg-slate-800 px-2 text-xs">回复</button></div></article>)}</div>
+      <div className="mt-5 space-y-3"><div className="flex items-center justify-between"><h3 className="text-sm font-medium">Gitea 评论（{(data?.comments.length ?? 0)}）</h3><span className="text-xs text-slate-500">{unresolved.length} 条未解决</span></div>{data?.comments.map((comment) => <article key={comment.id} className="rounded-xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-start justify-between gap-2"><div><p className="text-xs text-slate-500">第 {comment.line} 行 · {comment.author_type}</p><p className="mt-1 text-sm">{comment.body}</p></div><button disabled={busy || !reviewReady || workflowBusy || reviewTaskActive} onClick={() => setResolved(comment, !comment.resolved)} className={`rounded px-2 py-1 text-xs ${comment.resolved ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}><Check className="mr-1 inline h-3 w-3" />{comment.resolved ? '已解决，点击恢复' : '标记解决'}</button></div>{comment.replies.map((reply) => <div key={reply.id} className="mt-2 border-l border-slate-700 pl-3 text-sm"><span className="text-xs text-slate-500">{reply.author_type}</span><p>{reply.body}</p></div>)}<div className="mt-3 flex gap-2"><input value={replyText[comment.id] || ''} onChange={(event) => setReplyText((current) => ({ ...current, [comment.id]: event.target.value }))} placeholder="人工回复（不会自动解决）" className="min-w-0 flex-1 rounded border border-slate-800 bg-slate-900 px-2 py-1.5 text-xs" /><button disabled={busy || !reviewReady || workflowBusy || reviewTaskActive} onClick={() => sendReply(comment)} className="rounded bg-slate-800 px-2 text-xs">回复</button></div></article>)}</div>
     </section>
   );
 }

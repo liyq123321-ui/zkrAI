@@ -54,10 +54,14 @@ def test_legal_actions_are_derived(phase, spec_status, expected):
     assert legal_actions(WorkflowSnapshot(phase=phase, spec_status=spec_status)) == expected
 
 
-def test_review_clarification_allows_message():
+def test_review_clarification_allows_message_or_explicit_skip():
     assert legal_actions(
         WorkflowSnapshot(ProjectPhase.REVIEW, SpecStatus.NEED_CLARIFICATION)
-    ) == (CommandAction.MESSAGE, CommandAction.RESTORE_SPEC_VERSION)
+    ) == (
+        CommandAction.MESSAGE,
+        CommandAction.SKIP_CLARIFICATION,
+        CommandAction.RESTORE_SPEC_VERSION,
+    )
 
 
 @pytest.mark.parametrize(

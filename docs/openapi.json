@@ -206,6 +206,7 @@
       "CommandAction": {
         "enum": [
           "message",
+          "skip_clarification",
           "create_spec",
           "revise",
           "approve",
@@ -525,6 +526,48 @@
           "lines"
         ],
         "title": "PrdCommentableLinesRead",
+        "type": "object"
+      },
+      "PrdDiffRead": {
+        "additionalProperties": false,
+        "description": "Full target-file PR patch, including deletion lines that cannot be annotated.",
+        "properties": {
+          "commit_sha": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Commit Sha",
+            "type": "string"
+          },
+          "filename": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "patch": {
+            "title": "Patch",
+            "type": "string"
+          },
+          "version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "wi": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Wi",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wi",
+          "version",
+          "filename",
+          "commit_sha",
+          "patch"
+        ],
+        "title": "PrdDiffRead",
         "type": "object"
       },
       "PrdDocumentRead": {
@@ -1905,6 +1948,48 @@
           }
         },
         "summary": "Resolve Comment",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
+    "/prd/{wi}/diff": {
+      "get": {
+        "operationId": "prd_diff_prd__wi__diff_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrdDiffRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prd Diff",
         "tags": [
           "prd-review"
         ]

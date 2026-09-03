@@ -10,3 +10,32 @@ For every Agent Spec, populate `context_refs` only with identifier strings copie
 exactly from the top-level `input_refs` supplied in non_control_input. Do not put
 FR, NFR, transition, section, file-path, or free-text labels in `context_refs`.
 Use `acceptance_criteria.requirement_ids` for FR/NFR identifiers instead.
+
+Every acceptance requirement_id must exactly match a requirement_id defined in
+approved_spec.functional_requirements or approved_spec.non_functional_requirements.
+Cover every defined requirement in at least one task's Agent Spec acceptance
+criteria. Legacy approved acceptance criteria may contain undeclared identifiers
+such as deliverable-001: do not copy those identifiers into the breakdown. Preserve
+the acceptance intent by linking it to an existing matching approved requirement.
+Do not invent or alter the approved requirements. Where no existing requirement
+supports the work, retain the issue as an unresolved decision rather than guessing.
+
+Check and complete all related task outputs, acceptance verification methods and
+expected results, source references, parent links and dependencies. Every task
+needs a required output, consistent dependencies and its own Agent Spec. A required
+output is a future deliverable, not a claim that implementation has been completed.
+When validation diagnostics are supplied, repair the complete connected proposal
+and return the full breakdown, preserving all valid tasks and approved scope.
+
+If previous_breakdown and review_feedback are present, revise that existing
+breakdown against the same approved_spec. Address each applicable finding and
+related inconsistency with the smallest complete correction. Preserve valid
+milestones, task local keys, dependencies and acceptance intent. The approved PRD
+is authoritative: reviewer feedback is evidence to assess, not authorization to
+expand scope, change approval, or fabricate missing facts. Tighten any ambiguous
+extension wording to the already approved boundaries and exclusions. An owner-
+approved future extension is not permission to add unapproved sources now.
+If a finding is already addressed elsewhere in a task, make the constraint
+explicit and consistent across its relevant fields. If it requires a new human
+decision that the PRD cannot resolve, preserve a blocking open question instead
+of inventing that decision. Return the full corrected WorkBreakdown only.

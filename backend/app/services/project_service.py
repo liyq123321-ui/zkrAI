@@ -245,6 +245,8 @@ class ProjectService:
                             "questions": clarification.questions,
                             "answers": {"message": message},
                             "actor_id": context.request.actor_id,
+                            "response_id": response_id,
+                            "answered_at": _now().isoformat(),
                         },
                     ]
                     payload.update(
@@ -315,6 +317,7 @@ class ProjectService:
                     answers={"message": str(prepared.payload["message"])},
                 )
                 uow.add_clarification_response(response)
+                uow.update_project_brief(analysis.brief_updates)
                 created_ids = [response.id]
                 if analysis.ready_for_spec:
                     if context.state.current_spec_status is SpecStatus.NEED_CLARIFICATION:
@@ -344,6 +347,11 @@ class ProjectService:
                     phase=phase,
                     spec_status=spec_status,
                     created_resource_ids=created_ids,
+                    audit_payload={
+                        "brief_updated_fields": sorted(
+                            analysis.brief_updates.model_dump(exclude_none=True)
+                        ),
+                    },
                 )
 
         return _Handler()
@@ -555,6 +563,7 @@ class ProjectService:
             agent_call.status = "SUCCEEDED"
             agent_call.response = analysis.model_dump(mode="json")
             agent_call.completed_at = _now()
+            project.brief = analysis.brief_updates.apply_to(project.brief)
             if analysis.ready_for_spec:
                 current_spec = self._current_spec(db, project)
                 if current_spec is not None and current_spec.status == SpecStatus.NEED_CLARIFICATION.value:
@@ -600,7 +609,13 @@ class ProjectService:
                     session_id=project.session_id,
                     event_type="PM_BRIEF_ANALYZED",
                     actor_id=None,
-                    payload={"agent_call_id": agent_call.id, "ready_for_spec": analysis.ready_for_spec},
+                    payload={
+                        "agent_call_id": agent_call.id,
+                        "ready_for_spec": analysis.ready_for_spec,
+                        "brief_updated_fields": sorted(
+                            analysis.brief_updates.model_dump(exclude_none=True)
+                        ),
+                    },
                 )
             )
             self._update_intake_receipt(db, project)
@@ -838,29 +853,32 @@ class ProjectService:
             db.commit()
 
     def _analysis_payload(self, db: Session, project: Project) -> dict[str, object]:
-        requests = (
-            db.query(ClarificationRequest)
-            .filter_by(project_id=project.id)
-            .order_by(ClarificationRequest.analysis_round, ClarificationRequest.created_at)
+        # Spec revisions can restart analysis_round at 1. Decisions must be
+        # reconciled in answer order so an old intake answer cannot win again.
+        responses = (
+            db.query(ClarificationResponse, ClarificationRequest)
+            .join(
+                ClarificationRequest,
+                ClarificationResponse.clarification_request_id == ClarificationRequest.id,
+            )
+            .filter(
+                ClarificationResponse.project_id == project.id,
+                ClarificationRequest.project_id == project.id,
+            )
+            .order_by(ClarificationResponse.created_at, ClarificationResponse.id)
             .all()
         )
-        history: list[dict[str, object]] = []
-        for request in requests:
-            responses = (
-                db.query(ClarificationResponse)
-                .filter_by(clarification_request_id=request.id)
-                .order_by(ClarificationResponse.created_at)
-                .all()
-            )
-            for response in responses:
-                history.append(
-                    {
-                        "request_id": request.id,
-                        "questions": request.questions,
-                        "answers": response.answers,
-                        "actor_id": response.actor_id,
-                    }
-                )
+        history = [
+            {
+                "request_id": request.id,
+                "questions": request.questions,
+                "answers": response.answers,
+                "actor_id": response.actor_id,
+                "response_id": response.id,
+                "answered_at": response.created_at.isoformat(),
+            }
+            for response, request in responses
+        ]
         return {"brief": project.brief, "clarification_history": history}
 
     @staticmethod
@@ -904,4 +922,3 @@ class ProjectService:
             "phase": project.phase,
             "state_version": project.state_version,
         }
-

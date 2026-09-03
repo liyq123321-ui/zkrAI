@@ -909,8 +909,8 @@ def test_breakdown_reviewer_rejection_exposes_domain_code(session_factory):
         ),
         generate_results=deque([make_valid_spec()]),
         review_results=deque([make_passing_semantic_review()]),
-        decompose_results=deque([breakdown_for]),
-        review_breakdown_results=deque([rejection]),
+        decompose_results=deque([breakdown_for] * 3),
+        review_breakdown_results=deque([rejection] * 3),
     )
     app = create_app(agent_gateway=agent, session_factory=session_factory)
     with TestClient(app) as client:

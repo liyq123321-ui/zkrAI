@@ -17,7 +17,7 @@ from app.database.models import (
     ProcessedCommand, Project, ReviewTask, SpecReview, SpecVersion, WorkItem,
     WorkItemDependency,
 )
-from app.domain.types import CommandAction, ProjectPhase, ReviewKind, ReviewVerdict, SpecStatus
+from app.domain.types import CommandAction, ProjectBriefUpdates, ProjectPhase, ReviewKind, ReviewVerdict, SpecStatus
 from app.domain.workflow import IllegalAction, WorkflowSnapshot, assert_action_allowed
 from app.schemas.workflow import CommandResult, SessionCommandRequest, SessionState
 from app.services.state_projection import active_clarification_request, project_state
@@ -103,6 +103,15 @@ class ActionScopedUnitOfWork:
             raise ValueError("clarification response is outside this action scope")
         self.__session.add(response)
 
+    def update_project_brief(self, updates: ProjectBriefUpdates) -> None:
+        """Merge clarified content in the same transaction as its answer and state."""
+        if self.__action is not CommandAction.MESSAGE:
+            raise ValueError("Brief updates are outside this action scope")
+        project = self.__session.get(Project, self.__project_id)
+        if project is None:
+            raise ValueError("Brief project is unavailable")
+        project.brief = updates.apply_to(project.brief)
+
     def add_clarification_request(self, request: ClarificationRequest) -> None:
         if self.__action not in {
             CommandAction.MESSAGE,
@@ -152,6 +161,22 @@ class ActionScopedUnitOfWork:
             .filter(WorkItem.project_id == self.__project_id, WorkItem.local_key.in_(local_keys))
             .all()
         }
+
+    def assert_decomposition_spec_snapshot(
+        self, spec_id: str, content_hash: str, content: Mapping[str, object], input_refs: tuple[str, ...],
+    ) -> None:
+        """Check the reviewed PRD inside the same transaction that creates its tasks."""
+        if self.__action is not CommandAction.CONVERT_TO_WORK_ITEM:
+            raise ValueError("this action cannot validate a decomposition snapshot")
+        project = self.__session.get(Project, self.__project_id)
+        version = self.__session.get(SpecVersion, spec_id)
+        if (project is None or project.current_spec_version_id != spec_id
+                or project.phase != ProjectPhase.REVIEW.value
+                or version is None or version.project_id != self.__project_id
+                or version.status != SpecStatus.APPROVED.value
+                or version.content_hash != content_hash or version.content != content
+                or tuple(version.input_refs) != input_refs):
+            raise ValueError("approved Spec changed before decomposition materialization")
 
     def mark_decomposition_call_succeeded(self, call_id: str) -> None:
         if self.__action is not CommandAction.CONVERT_TO_WORK_ITEM:
@@ -613,6 +638,13 @@ class CommandService:
                 if clarification is None:
                     raise IllegalAction(request.action, ())
 
+                version = self._current_spec(db, project)
+                if version is not None:
+                    if request.payload.get("confirm_current_spec") is not True:
+                        raise ValueError("skipping review clarification requires explicit PRD confirmation")
+                    if request.payload.get("spec_version_id") != version.id:
+                        raise StaleState("the confirmed PRD is no longer the current version")
+
                 self._advance_project(db, project, request.expected_state_version)
                 db.refresh(project)
                 response = ClarificationResponse(
@@ -630,14 +662,54 @@ class CommandService:
                         "assumption_policy": "AGENT_DISCRETION",
                     },
                 )
-                project.phase = ProjectPhase.SPECIFICATION.value
+                created_ids = [response.id]
+                side_effect_refs = [f"clarification_response:{response.id}"]
+                approval_payload: dict[str, object] = {}
+                if version is None:
+                    project.phase = ProjectPhase.SPECIFICATION.value
+                else:
+                    comments = "用户跳过当前澄清，接受未决项并确认当前 PRD，继续拆分子任务。"
+                    response.answers = {
+                        **response.answers,
+                        "message": comments,
+                        "approved_spec_version_id": version.id,
+                    }
+                    review = SpecReview(
+                        id=_new_id(), project_id=project.id, spec_version_id=version.id,
+                        kind=ReviewKind.HUMAN.value, reviewer_id=request.actor_id,
+                        input_spec_hash=version.content_hash, verdict=ReviewVerdict.PASS.value,
+                        findings=[], comments=comments, command_id=request.command_id,
+                    )
+                    db.add(review)
+                    version.status = SpecStatus.APPROVED.value
+                    project.phase = ProjectPhase.REVIEW.value
+                    created_ids.append(review.id)
+                    side_effect_refs.append(f"spec_review:{review.id}")
+                    approval_payload = {
+                        "spec_version_id": version.id,
+                        "spec_review_id": review.id,
+                        "decision": "SKIP_CLARIFICATION_AND_APPROVE",
+                    }
+                    db.add(AuditEvent(
+                        id=_new_id(), project_id=project.id, session_id=session_id,
+                        event_type="SPEC_HUMAN_APPROVED", actor_id=request.actor_id,
+                        payload={
+                            **approval_payload,
+                            "command_id": request.command_id,
+                            "clarification_request_id": clarification.id,
+                            "clarification_response_id": response.id,
+                            "prior_state_version": request.expected_state_version,
+                            "new_state_version": project.state_version,
+                            "comments": comments,
+                        },
+                    ))
                 db.add(response)
                 db.flush()
                 state = self._state(db, project)
                 output = CommandResult(
                     command_id=request.command_id,
                     state=state,
-                    created_resource_ids=[response.id],
+                    created_resource_ids=created_ids,
                 )
                 db.add(
                     ProcessedCommand(
@@ -647,7 +719,7 @@ class CommandService:
                         input_hash=input_hash,
                         state_version=state.state_version,
                         result=output.model_dump(mode="json"),
-                        side_effect_refs=[f"clarification_response:{response.id}"],
+                        side_effect_refs=side_effect_refs,
                     )
                 )
                 db.add(
@@ -658,6 +730,7 @@ class CommandService:
                         event_type="CLARIFICATION_SKIPPED",
                         actor_id=request.actor_id,
                         payload={
+                            **approval_payload,
                             "command_id": request.command_id,
                             "clarification_request_id": clarification.id,
                             "clarification_response_id": response.id,
