@@ -910,7 +910,7 @@ export function ApiWorkspace() {
             />
           )}
           {selectedWorkItem.kind !== 'ROOT' && (
-            <AgentSpecDetail item={selectedWorkItem} agentSpecs={selectedAgentSpecs} />
+            <AgentSpecDetail item={selectedWorkItem} agentSpecs={selectedAgentSpecs} sourceSpecs={resources.specs} />
           )}
         </WorkItemDialog>
       )}

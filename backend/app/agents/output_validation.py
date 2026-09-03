@@ -5,6 +5,9 @@ from collections.abc import Mapping
 from pydantic import BaseModel
 
 from app.domain.types import PrdRewriteOutput, ProjectSpecPayload, WorkBreakdown, WorkBreakdownRevision
+from app.domain.types import AgentSpecProposal
+from app.domain.implementation_plan import ImplementationPlan
+from app.services.task_specifications import ImplementationPlanError, validate_implementation_plan
 from app.services.spec_review import run_rule_review
 
 
@@ -37,6 +40,16 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
     """Repair structural omissions; human decisions remain in the review workflow."""
     if isinstance(result, WorkBreakdownRevision):
         result = merge_breakdown_revision(result, payload)
+    if isinstance(result, ImplementationPlan):
+        task = AgentSpecProposal.model_validate(payload["task_spec"])
+        approved = payload["approved_spec"]
+        ids = {item["requirement_id"] for section in ("functional_requirements", "non_functional_requirements")
+               for item in approved.get(section, [])}
+        try:
+            validate_implementation_plan(result, task, ids)
+        except ImplementationPlanError as error:
+            raise OutputConsistencyError([{"code": error.code, "path": task.work_item_key, "message": str(error)}]) from error
+        return
     if isinstance(result, (ProjectSpecPayload, PrdRewriteOutput)):
         spec = result.spec if isinstance(result, PrdRewriteOutput) else result
         source = payload.get("spec", {})

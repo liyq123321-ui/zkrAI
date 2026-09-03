@@ -13,7 +13,8 @@ import {
   UserRound,
   Wrench,
 } from 'lucide-react';
-import type { AgentSpecDto, WorkItemDto } from './dto';
+import type { AgentSpecDto, SpecVersionDto, WorkItemDto } from './dto';
+import { AgentSpecDetails } from './AgentSpecDetails';
 import { workItemLane, workItemStatusLabel } from './workflowUi';
 
 const fieldLabels: Record<string, string> = {
@@ -36,6 +37,7 @@ const knownFields = new Set([
   'required_skills', 'allowed_tools', 'allowed_paths', 'responsible_role',
   'suggested_assignee', 'dependency_keys', 'dependency_work_item_ids',
   'test_obligations', 'risks', 'open_questions', 'work_item_id', 'source_spec_version_id',
+  'requirements', 'implementation_plan',
 ]);
 
 function present(value: unknown): boolean {
@@ -107,7 +109,7 @@ function MetaCard({ title, icon, children }: { title: string; icon: ReactNode; c
   );
 }
 
-export function AgentSpecDetail({ item, agentSpecs }: { item: WorkItemDto; agentSpecs: AgentSpecDto[] }) {
+export function AgentSpecDetail({ item, agentSpecs, sourceSpecs = [] }: { item: WorkItemDto; agentSpecs: AgentSpecDto[]; sourceSpecs?: SpecVersionDto[] }) {
   const lane = workItemLane(item.status);
   const primary = agentSpecs[0];
   const content = primary?.content ?? {};
@@ -143,6 +145,14 @@ export function AgentSpecDetail({ item, agentSpecs }: { item: WorkItemDto; agent
         <div className="ff-spec-main">
           {primary ? (
             <>
+              {agentSpecs.map((agentSpec) => (
+                <AgentSpecDetails
+                  key={agentSpec.id}
+                  agentSpec={agentSpec}
+                  sourceSpec={sourceSpecs.find((spec) => spec.id === agentSpec.source_spec_version_id)}
+                  implementationOnly
+                />
+              ))}
               <SpecSection title="工作范围" icon={<ShieldCheck aria-hidden="true" />}>
                 <ContentGroup label="需要完成" value={content.scope ?? item.scope} />
                 <ContentGroup label="明确不包含" value={content.exclusions ?? item.exclusions} />

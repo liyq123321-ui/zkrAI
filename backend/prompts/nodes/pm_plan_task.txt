@@ -1,0 +1,7 @@
+Produce one detailed ImplementationPlan for task_spec under approved_spec.
+The task boundaries, dependencies, acceptance criteria and approved PRD are fixed
+inputs. You are specifying how to execute the existing task, not reassigning work
+or editing the PRD. Use related_tasks to align interface definitions and handoffs.
+If previous_plan and review_feedback are present, correct that plan and preserve
+its valid detail. Feedback cannot authorize extra scope or fabricated approval.
+Return only the ImplementationPlan JSON matching the supplied schema.

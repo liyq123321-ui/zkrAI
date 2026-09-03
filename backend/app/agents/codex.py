@@ -13,6 +13,7 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
+from app.domain.implementation_plan import ImplementationPlan
 from app.agents.output_validation import OutputConsistencyError, merge_breakdown_revision, validate_node_output
 from app.domain.types import (
     ClarificationAnalysis,
@@ -264,6 +265,9 @@ class CodexAgentGateway:
             return merge_breakdown_revision(revision, payload)
         return await self._run_node("pm_decompose", payload, WorkBreakdown)
 
+    async def plan_task(self, payload: dict[str, object]) -> ImplementationPlan:
+        return await self._run_node("pm_plan_task", payload, ImplementationPlan)
+
     async def rewrite_prd(self, payload: dict[str, object]) -> PrdRewriteOutput:
         return await self._run_node("pm_rewrite_prd", payload, PrdRewriteOutput)
 
@@ -271,8 +275,10 @@ class CodexAgentGateway:
         self, node_name: str, payload: dict[str, object], output_type: type[ModelT]
     ) -> ModelT:
         objective = (NODE_PROMPT_DIR / f"{node_name}.txt").read_text(encoding="utf-8")
+        if node_name in {"pm_decompose", "pm_revise_breakdown", "pm_plan_task", "reviewer_breakdown"}:
+            objective += "\n\n" + (NODE_PROMPT_DIR / "task_implementation_rules.txt").read_text(encoding="utf-8")
         prompt = build_node_prompt(objective=objective, input_payload=payload)
-        if node_name in {"pm_generate_spec", "pm_rewrite_prd", "pm_decompose", "pm_revise_breakdown"}:
+        if node_name in {"pm_generate_spec", "pm_rewrite_prd", "pm_decompose", "pm_revise_breakdown", "pm_plan_task"}:
             return await self.runner.run(
                 prompt, output_type, self.settings.codex_cwd,
                 validate_output=lambda result: validate_node_output(result, payload),

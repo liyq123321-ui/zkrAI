@@ -172,6 +172,11 @@ def make_valid_breakdown() -> WorkBreakdown:
         risks=[],
         open_questions=[],
     )
+    from app.domain.implementation_plan import ImplementationPlan
+    from tests.helpers.implementation_plans import implementation_plan
+
+    domain_agent_spec.implementation_plan = ImplementationPlan.model_validate(implementation_plan(["FR-001"]))
+    api_agent_spec.implementation_plan = ImplementationPlan.model_validate(implementation_plan())
     return WorkBreakdown(
         milestones=[milestone],
         tasks=[domain_task, api_task],
