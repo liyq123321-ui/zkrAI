@@ -21,13 +21,15 @@ firstFlight 第一阶段是一个本地运行的需求澄清、PRD 人工审核�
 
 ## 本地启动
 
+前后端是两个独立进程，需要分别占用一个 PowerShell 窗口，并让两个窗口持续运行。只启动前端、关闭后端窗口，或后端启动命令报错退出，页面都会显示 `NETWORK_ERROR`。
+
 ### 1. 配置并启动后端
 
-在 PowerShell 中运行：
+在项目根目录打开第一个 PowerShell 窗口，然后运行：
 
 ```powershell
 cd backend
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 编辑 `.env`，至少确认：
@@ -40,12 +42,26 @@ FIRSTFLIGHT_CORS_ORIGINS=http://127.0.0.1:3001,http://localhost:3001
 
 GITEA_URL=http://localhost:3000
 GITEA_TOKEN=<服务账号令牌>
-GITEA_OWNER=zkr
+GITEA_OWNER=owner-1
 GITEA_REPO=docs
 GITEA_BASE_BRANCH=main
 ```
 
 不要把真实 Gitea token、Agent key 或 `.env` 提交到 Git。
+
+`GITEA_TOKEN` 的示例值只是占位符，不能直接使用。启动后端前，可在项目根目录用以下 PowerShell 命令验证 token；应返回账号名称和数字 ID，而不是 `401 Unauthorized`：
+
+```powershell
+$config = @{}
+Get-Content backend\.env | ForEach-Object {
+  if ($_ -match '^([^#=]+)=(.*)$') { $config[$Matches[1].Trim()] = $Matches[2].Trim().Trim('"') }
+}
+$headers = @{ Authorization = "token $($config.GITEA_TOKEN)" }
+Invoke-RestMethod -Headers $headers "$($config.GITEA_URL)/api/v1/user" |
+  Select-Object id, login
+```
+
+该 token 对 `GITEA_OWNER/GITEA_REPO` 指定的仓库必须同时具有读取和写入权限，否则正文可以从数据库兜底显示，但 PRD Diff、行批注和 Gitea 评论不可用。更新 token 后必须重启后端。
 
 首次安装：
 
@@ -57,18 +73,32 @@ python -m venv .venv
 启动：
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8088
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8088 --env-file .env
 ```
 
-访问 `http://127.0.0.1:8088/healthz`，看到 `status=ok` 和 `database=ok` 表示后端就绪。`http://127.0.0.1:8088/` 返回 404 是正常现象，后端没有根页面。
+不要关闭这个窗口。看到以下内容才表示后端进程已经启动：
+
+```text
+Uvicorn running on http://127.0.0.1:8088
+```
+
+后端代码也会自动读取 `backend/.env`；命令中的 `--env-file .env` 用于让启动行为更明确。系统环境变量优先于 `.env` 中的同名配置。
+
+另开一个 PowerShell 窗口执行健康检查：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8088/healthz
+```
+
+看到 `status=ok` 和 `database=ok` 后，再启动前端。`http://127.0.0.1:8088/` 返回 404 是正常现象，后端没有根页面。
 
 ### 2. 配置并启动前端
 
-另开一个 PowerShell 窗口：
+健康检查通过后，在第二个 PowerShell 窗口中进入项目根目录并运行：
 
 ```powershell
 cd frontend\aios-main
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 npm install
 npm run dev
 ```
@@ -82,19 +112,75 @@ VITE_API_BASE_URL=http://127.0.0.1:8088
 
 打开 <http://127.0.0.1:3001/>。API 模式下后端不可用时页面会显示错误，不会偷偷回退到 Mock 数据。
 
+修改前端 `.env` 后必须停止并重新执行 `npm run dev`，因为 Vite 只在启动时读取环境变量。
+
 ## 恢复已有 Session
 
 如果浏览器记录丢失但后端 Session 仍存在，可在首页输入 Session ID 并点击“恢复并打开”。这个动作只读取既有状态，不会创建新的 Agent 运行。
 
 ## 常见问题
 
+### `NETWORK_ERROR：无法连接后端`
+
+这条错误表示浏览器无法连接 `VITE_API_BASE_URL` 指向的服务。它通常不是模型 API Key 问题，也不是 Windows 系统故障；先按下面顺序检查。
+
+1. 确认 8088 端口确实有后端进程监听：
+
+   ```powershell
+   Get-NetTCPConnection -LocalPort 8088 -State Listen -ErrorAction SilentlyContinue
+   ```
+
+   没有任何输出，说明后端没有运行。回到 `backend` 目录重新执行后端启动命令，并保持该 PowerShell 窗口打开。如果命令立即退出，应先处理窗口中显示的具体错误。
+
+2. 确认健康接口可访问：
+
+   ```powershell
+   Invoke-RestMethod http://127.0.0.1:8088/healthz
+   ```
+
+   如果这里提示“目标计算机积极拒绝”，仍然表示后端没有在 8088 端口监听，与前端 `.env` 无关。
+
+3. 确认前端实际使用 API 模式和相同端口：
+
+   ```powershell
+   cd frontend\aios-main
+   Get-Content .env
+   ```
+
+   应包含：
+
+   ```env
+   VITE_DATA_MODE=api
+   VITE_API_BASE_URL=http://127.0.0.1:8088
+   ```
+
+   修改后重新启动 `npm run dev`。还可运行 `Get-ChildItem -Force .env*`，确认 Windows 没有把文件保存成隐藏扩展名的 `.env.txt`。
+
+4. 如果健康接口正常，但浏览器开发者工具提示 CORS 错误，检查后端 `.env`：
+
+   ```env
+   FIRSTFLIGHT_CORS_ORIGINS=http://127.0.0.1:3001,http://localhost:3001
+   ```
+
+   修改后重新启动后端。
+
+常见的后端启动错误：
+
+- `ModuleNotFoundError`：在 `backend` 目录执行 `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`。
+- `Address already in use`：执行 `Get-NetTCPConnection -LocalPort 8088 -State Listen | Select-Object LocalAddress,LocalPort,OwningProcess` 查出占用端口的进程。若改用其他后端端口，必须同步修改前端 `VITE_API_BASE_URL` 并重启前端。
+- 找不到 `.env` 或数据库相对路径异常：确认命令是在 `backend` 目录内执行。直接调用 `.\.venv\Scripts\python.exe` 不依赖 PowerShell 的脚本执行策略，无需运行 `Activate.ps1`。
+
 ### 页面能打开，但动作失败
 
-先检查 `http://127.0.0.1:8088/healthz`。如果正常，再检查前端 `.env` 的 `VITE_API_BASE_URL` 和后端 `FIRSTFLIGHT_CORS_ORIGINS`。
+先执行 `Invoke-RestMethod http://127.0.0.1:8088/healthz`。如果正常，再检查前端 `.env` 的 `VITE_API_BASE_URL` 和后端 `FIRSTFLIGHT_CORS_ORIGINS`。
 
 ### Gitea 批注不可用
 
 确认 Gitea 位于 `http://localhost:3000`，目标仓库及 `main` 分支已初始化，并且服务 token 对目标仓库具有读写和评审权限。批注必须落在后端返回的有效 diff 行上。
+
+- `GITEA_UNAUTHORIZED`：`.env` 中仍是示例 token、token 填写错误或 token 已被撤销。重新创建有效 token、更新 `.env` 并重启后端。
+- `GITEA_FORBIDDEN`：token 有效，但对应账号没有目标仓库的读取、写入或评审权限。
+- Gitea 暂不可用时，页面仍允许阅读数据库中保存的 PRD；如果后端当前允许确认，可勾选风险提示后直接确认并进入任务拆解。Diff 和批注不会由前端伪造。
 
 ### 跳过澄清后 PRD 生成失败
 

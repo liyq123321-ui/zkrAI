@@ -672,6 +672,7 @@ async def test_check_capabilities_rejects_missing_configuration_without_request(
 @pytest.mark.parametrize(
     ("status_code", "expected_code", "retryable"),
     [
+        (401, "GITEA_UNAUTHORIZED", False),
         (403, "GITEA_FORBIDDEN", False),
         (429, "GITEA_RATE_LIMITED", True),
         (503, "GITEA_UNAVAILABLE", True),

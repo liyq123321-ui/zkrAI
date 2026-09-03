@@ -215,7 +215,9 @@ describe('skip clarification through the workspace', () => {
     fireEvent.click(sidebar.getByRole('button', {name: '查看 PRD 与审核意见'}));
     const dialog = within(await screen.findByRole('dialog'));
     expect((await dialog.findByRole('alert')).textContent).toContain('GITEA_UNAVAILABLE');
-    expect(dialog.queryByRole('button', {name: '开始任务拆解'})).toBeNull();
+    const dialogRetry = dialog.getByRole('button', {name: '开始任务拆解'});
+    expect((dialogRetry as HTMLButtonElement).disabled).toBe(true);
+    expect(dialog.getByRole('checkbox')).toBeTruthy();
     fireEvent.click(dialog.getByRole('button', {name: '关闭详情'}));
 
     const retry = await sidebar.findByRole('button', {name: '继续拆分子任务'});

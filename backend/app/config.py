@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 
+from dotenv import load_dotenv
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -28,6 +30,10 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         root = Path(__file__).resolve().parents[1]
+        # Local development is documented around backend/.env. Loading it here
+        # keeps every application entry point consistent, while real process
+        # environment variables still take precedence (override=False).
+        load_dotenv(root / ".env", override=False)
         cors_allowed_origins = tuple(
             origin.strip()
             for origin in os.getenv("FIRSTFLIGHT_CORS_ORIGINS", "").split(",")

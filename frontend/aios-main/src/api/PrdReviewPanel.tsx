@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, Loader2, MessageSquarePlus, RefreshCw, Send } from 'lucide-react';
+import { Check, Download, Loader2, MessageSquarePlus, RefreshCw, Send } from 'lucide-react';
 import type { PrdCommentDto, PrdCommentableLinesDto, PrdDocumentDto, ReviewTaskDto, SessionStateDto, SpecVersionDto, PrdDiffDto } from './dto';
 import { normalizeNetworkError } from './errors';
 import {
@@ -19,11 +19,17 @@ import { ReviewFindings } from './ReviewFindings';
 import { nextPrdConfirmationStep, reviewTaskRecoveryAction } from './workflowUi';
 
 type Draft = { id: string; line: number; text: string; anchor: string; status: 'ready' | 'sending' | 'done' | 'error'; error?: string };
-type ReviewData = { document: PrdDocumentDto | null; commentable: PrdCommentableLinesDto | null; diff: PrdDiffDto | null; comments: PrdCommentDto[]; versionCount: number };
+type ReviewData = { document: PrdDocumentDto | null; commentable: PrdCommentableLinesDto | null; diff: PrdDiffDto | null; comments: PrdCommentDto[]; commentsAvailable: boolean; versionCount: number };
 
 const taskKey = (wi: string) => `firstflight.prd-task.${wi}`;
 const failure = (reason: unknown) => {
   const error = normalizeNetworkError(reason);
+  if (error.code === 'GITEA_UNAUTHORIZED') {
+    return 'GITEA_UNAUTHORIZED：Gitea token 无效或已被撤销，请更新后端 .env 后重启服务。';
+  }
+  if (error.code === 'GITEA_FORBIDDEN') {
+    return 'GITEA_FORBIDDEN：Gitea 账号缺少目标仓库的读写或评审权限。';
+  }
   return `${error.code}：${error.message}`;
 };
 
@@ -51,10 +57,12 @@ export function PrdReviewPanel({
   const [reviewNote, setReviewNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [reviewReady, setReviewReady] = useState(false);
+  const [fallbackConfirmed, setFallbackConfirmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setReviewReady(false);
+    setFallbackConfirmed(false);
     setError(null);
     const [document, commentable, comments, versions, diff] = await Promise.allSettled([
       getLatestPrd(wi, signal), getCommentableLines(wi, signal),
@@ -65,6 +73,7 @@ export function PrdReviewPanel({
       document: document.status === 'fulfilled' ? document.value : null,
       commentable: commentable.status === 'fulfilled' ? commentable.value : null,
       comments: comments.status === 'fulfilled' ? comments.value : [],
+      commentsAvailable: comments.status === 'fulfilled',
       versionCount: versions.status === 'fulfilled' ? versions.value.length : 0,
       diff: diff.status === 'fulfilled' ? diff.value : null,
     };
@@ -143,12 +152,20 @@ export function PrdReviewPanel({
   const unresolved = useMemo(() => data?.comments.filter((comment) => !comment.resolved) ?? [], [data]);
   const reviewTaskActive = Boolean(task && ['pending', 'processing'].includes(task.status));
   const hasPendingDrafts = drafts.some((item) => item.status !== 'done');
-  const confirmationStep = !reviewReady ? 'none' : nextPrdConfirmationStep(
-    sessionState,
-    unresolved.length,
-    reviewTaskActive,
-    hasPendingDrafts,
-  );
+  const localConfirmationStep = sessionState.legal_actions.includes('convert_to_work_item')
+    ? 'convert_to_work_item'
+    : sessionState.legal_actions.includes('approve')
+      ? 'approve'
+      : 'none';
+  const confirmationStep = reviewReady
+    ? nextPrdConfirmationStep(sessionState, unresolved.length, reviewTaskActive, hasPendingDrafts)
+    : reviewTaskActive
+      ? 'wait'
+      : hasPendingDrafts
+        ? 'submit_comments'
+        : unresolved.length > 0
+          ? 'none'
+          : localConfirmationStep;
   const requiresReviewNote = sessionState.current_spec_status === 'REWORK';
 
   function addDraft() {
@@ -205,7 +222,11 @@ export function PrdReviewPanel({
   }
 
   async function confirmAndDecompose() {
-    if (!reviewReady) return;
+    if (confirmationStep !== 'approve' && confirmationStep !== 'convert_to_work_item') return;
+    if (!reviewReady && !fallbackConfirmed) {
+      setError('请先确认已阅读正文，并同意在 Gitea 审核数据不可用时继续。');
+      return;
+    }
     if (requiresReviewNote && !reviewNote.trim()) {
       setError('当前版本带有审核发现，请填写接受这些发现的确认说明。');
       return;
@@ -219,10 +240,31 @@ export function PrdReviewPanel({
     }
   }
 
+  function downloadMarkdown() {
+    const content = data?.document?.content ?? fallbackSpec.markdown;
+    const version = data?.document?.version ?? fallbackSpec.revision;
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = href;
+    link.download = 'firstFlight-PRD-v' + version + '.md';
+    link.click();
+    URL.revokeObjectURL(href);
+  }
+
 
   return (
-    <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">PRD 正文与审核</h2><p className="text-xs text-slate-500">v{data?.document?.version ?? fallbackSpec.revision} · {data?.versionCount || 1} 个版本{data?.document?.commit_sha ? ` · ${data.document.commit_sha.slice(0,8)}` : ' · 已保存的正文'}</p></div><button aria-label="刷新 PRD" onClick={() => load()}><RefreshCw className="h-4 w-4" /></button></div>
+    <section className="ff-prd-review-panel rounded-2xl border border-slate-800 bg-slate-900 p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="font-medium">PRD 正文与审核</h2>
+          <p className="text-xs text-slate-500">v{data?.document?.version ?? fallbackSpec.revision} · {data?.versionCount || 1} 个版本{data?.document?.commit_sha ? ` · ${data.document.commit_sha.slice(0,8)}` : ' · 已保存的正文'}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={downloadMarkdown} className="flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-xs"><Download className="h-3.5 w-3.5" />下载 .md</button>
+          <button aria-label="刷新 PRD" onClick={() => load()}><RefreshCw className="h-4 w-4" /></button>
+        </div>
+      </div>
       {error && <div role="alert" className="mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-200"><p>{error}</p><button type="button" onClick={() => load()} className="mt-2 rounded border border-amber-500/40 px-3 py-1">重试加载</button></div>}
       {task && <div className="mb-4 flex items-center gap-2 rounded-lg bg-cyan-500/10 p-3 text-sm text-cyan-200">{['pending', 'processing'].includes(task.status) && <Loader2 className="h-4 w-4 animate-spin" />}发布任务：{task.status}{task.new_version ? ` · 已生成 v${task.new_version}` : ''}</div>}
 
@@ -242,6 +284,12 @@ export function PrdReviewPanel({
             className="mt-3 min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
           />
         )}
+        {!reviewReady && (confirmationStep === 'approve' || confirmationStep === 'convert_to_work_item') && (
+          <label className="ff-fallback-approval">
+            <input type="checkbox" checked={fallbackConfirmed} onChange={(event) => setFallbackConfirmed(event.target.checked)} />
+            <span>我已阅读当前 PRD 正文，确认在 Gitea Diff 与评论暂不可用时继续。此操作不会伪造或补写 Gitea 批注。</span>
+          </label>
+        )}
         <div className="mt-3 flex flex-wrap gap-2">
           {confirmationStep === 'publish_review' && (
             <button disabled={busy || workflowBusy} onClick={publish} className="flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-xs font-medium text-white disabled:opacity-40">
@@ -249,14 +297,15 @@ export function PrdReviewPanel({
             </button>
           )}
           {(confirmationStep === 'approve' || confirmationStep === 'convert_to_work_item') && (
-            <button disabled={busy || workflowBusy} onClick={confirmAndDecompose} className="flex items-center gap-2 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-medium text-slate-950 disabled:opacity-40">
+            <button disabled={busy || workflowBusy || (!reviewReady && !fallbackConfirmed)} onClick={confirmAndDecompose} className="flex items-center gap-2 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-medium text-slate-950 disabled:opacity-40">
               {(busy || workflowBusy) && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {confirmationStep === 'approve' ? '确认 PRD 并开始任务拆解' : '开始任务拆解'}
             </button>
           )}
           {confirmationStep === 'wait' && <span className="text-xs text-cyan-200">Agent 正在处理批注，请等待阶段完成。</span>}
           {confirmationStep === 'submit_comments' && <span className="text-xs text-amber-200">请先提交上方暂存的批注，再决定是否发布给 Agent。</span>}
-          {!reviewReady && <span className="text-xs text-amber-200">正在等待完整的审核数据，当前不能确认或发布。</span>}
+          {!reviewReady && confirmationStep === 'none' && unresolved.length > 0 && <span className="text-xs text-amber-200">存在未解决评论，恢复 Gitea 后才能发布或确认。</span>}
+          {!reviewReady && confirmationStep === 'none' && unresolved.length === 0 && <span className="text-xs text-amber-200">Gitea 审核数据不可用；当前阶段也没有可执行的确认动作。</span>}
           {reviewReady && confirmationStep === 'none' && <span className="text-xs text-slate-500">当前阶段没有可执行的 PRD 审核动作。</span>}
         </div>
       </div>

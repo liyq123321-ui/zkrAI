@@ -1,7 +1,24 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Loader2, RefreshCw, Server, ShieldCheck } from 'lucide-react';
+import {
+  Activity,
+  AlertCircle,
+  Bot,
+  CheckCircle2,
+  ClipboardList,
+  CornerDownLeft,
+  FileText,
+  GitFork,
+  LayoutGrid,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search,
+  Server,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+} from 'lucide-react';
 import { apiClient } from './client';
-import { appConfig } from './config';
 import type {
   AgentSpecDto,
   AuditEventDto,
@@ -14,8 +31,9 @@ import type {
 } from './dto';
 import { ApiError, normalizeNetworkError } from './errors';
 import { AuditTrail } from './AuditTrail';
+import { AgentSpecDetail } from './AgentSpecDetail';
 import { WorkItemDialog } from './WorkItemDialog';
-import { displayLabel, progressDescription } from './presentation';
+import { auditTitle, displayLabel, displayTime, progressDescription } from './presentation';
 import { PrdReviewPanel } from './PrdReviewPanel';
 import {
   createSession,
@@ -30,7 +48,10 @@ import {
   actionPlacement,
   isSkipClarificationIntent,
   normalizeSessionId,
+  workItemLane,
   workItemPresentation,
+  workItemStatusLabel,
+  type WorkItemLane,
 } from './workflowUi';
 
 const SESSION_KEY = 'firstflight.active-session-id';
@@ -56,6 +77,30 @@ type ResourceBundle = {
 
 const emptyResources: ResourceBundle = { specs: [], workItems: [], agentSpecs: [], events: [] };
 
+type WorkspaceTab = 'kanban' | 'flow' | 'audit';
+
+const hierarchyColumns: Array<{ kind: NonNullable<WorkItemDto['kind']>; title: string; subtitle: string }> = [
+  { kind: 'ROOT', title: '项目需求 (Root)', subtitle: '需求、PRD 与人工审核' },
+  { kind: 'MILESTONE', title: '里程碑 (Milestones)', subtitle: '交付阶段与关键节点' },
+  { kind: 'TASK', title: '子任务 (Tasks)', subtitle: 'Agent 可执行规格' },
+];
+
+type BoardColumn = {
+  key: string;
+  kind: NonNullable<WorkItemDto['kind']>;
+  title: string;
+  subtitle: string;
+  taskLane?: WorkItemLane;
+};
+
+const boardColumns: BoardColumn[] = [
+  { key: 'root', kind: 'ROOT', title: '项目需求 (Root)', subtitle: '需求、PRD 与人工审核' },
+  { key: 'milestone', kind: 'MILESTONE', title: '里程碑 (Milestones)', subtitle: '交付阶段与关键节点' },
+  { key: 'task-todo', kind: 'TASK', taskLane: 'todo', title: '待开始 (To Do)', subtitle: '已下发、尚未开始的子任务' },
+  { key: 'task-in-progress', kind: 'TASK', taskLane: 'in_progress', title: '进行中 (In Progress)', subtitle: '执行、评审或受阻的子任务' },
+  { key: 'task-done', kind: 'TASK', taskLane: 'done', title: '已完成 (Done)', subtitle: '后端确认完成的子任务' },
+];
+
 function lines(value: string): string[] {
   return value.split('\n').map((item) => item.trim()).filter(Boolean);
 }
@@ -65,18 +110,49 @@ function errorText(error: unknown): string {
   return `${normalized.code}：${normalized.message}`;
 }
 
+function assigneeLabel(item: WorkItemDto): string {
+  return item.suggested_assignee || item.responsible_role || '待分配 Agent';
+}
+
+function assigneeInitial(item: WorkItemDto): string {
+  const value = assigneeLabel(item).trim();
+  return (value.match(/[A-Za-z]/)?.[0] || value[0] || 'A').toUpperCase();
+}
+
+function workItemProgress(item: WorkItemDto, state: SessionStateDto, hasAgentSpec: boolean): number {
+  if (item.kind === 'TASK') {
+    const lane = workItemLane(item.status);
+    return lane === 'done' ? 100 : lane === 'in_progress' ? 55 : 0;
+  }
+  if (item.kind === 'MILESTONE') return hasAgentSpec ? 100 : state.phase === 'AGENT_SPECS_READY' ? 80 : 35;
+  const phaseProgress: Record<string, number> = {
+    INTAKE: 10,
+    NEED_CLARIFICATION: 24,
+    CLARIFICATION: 28,
+    SPECIFICATION: 46,
+    REVIEW: 64,
+    HUMAN_REVIEW: 70,
+    REWORK: 62,
+    APPROVED: 82,
+    DECOMPOSITION: 90,
+    CONVERTED: 96,
+    AGENT_SPECS_READY: 100,
+  };
+  return phaseProgress[state.phase] ?? 30;
+}
+
 function Field({ label, value, onChange, multiline = false }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   multiline?: boolean;
 }) {
-  const className = 'w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500';
+  const className = 'ff-field-control';
   return (
-    <label className="grid gap-1 text-sm text-slate-300">
+    <label className="ff-field">
       <span>{label}</span>
       {multiline ? (
-        <textarea className={`${className} min-h-24 resize-y`} value={value} onChange={(event) => onChange(event.target.value)} />
+        <textarea className={`${className} ff-field-multiline`} value={value} onChange={(event) => onChange(event.target.value)} />
       ) : (
         <input className={className} value={value} onChange={(event) => onChange(event.target.value)} />
       )}
@@ -86,9 +162,9 @@ function Field({ label, value, onChange, multiline = false }: {
 
 function StatusBadge({ state }: { state: SessionStateDto }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span className="rounded-full bg-cyan-500/15 px-3 py-1 text-cyan-300">{displayLabel(state.phase)}</span>
-      {state.current_spec_status && <span className="rounded-full bg-violet-500/15 px-3 py-1 text-violet-300">{displayLabel(state.current_spec_status)}</span>}
+    <div className="ff-status-row">
+      <span className="ff-status-badge ff-status-badge-primary">{displayLabel(state.phase)}</span>
+      {state.current_spec_status && <span className="ff-status-badge">{displayLabel(state.current_spec_status)}</span>}
     </div>
   );
 }
@@ -112,6 +188,11 @@ export function ApiWorkspace() {
   const [resumeSessionId, setResumeSessionId] = useState('');
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
   const [workflowProgress, setWorkflowProgress] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('kanban');
+  const [chatOpen, setChatOpen] = useState(true);
+  const [search, setSearch] = useState('');
+  const [kindFilter, setKindFilter] = useState<'ALL' | NonNullable<WorkItemDto['kind']>>('ALL');
+  const [agentFilter, setAgentFilter] = useState('ALL');
   const pendingCommandIds = useRef(new Map<string, string>());
 
   const refreshResources = useCallback(async (sessionId: string, signal?: AbortSignal) => {
@@ -142,7 +223,17 @@ export function ApiWorkspace() {
     const savedSessionId = localStorage.getItem(SESSION_KEY);
     if (savedSessionId) {
       refreshResources(savedSessionId, controller.signal).catch((reason) => {
-        if ((reason as ApiError).code !== 'REQUEST_ABORTED') setError(errorText(reason));
+        const normalized = normalizeNetworkError(reason);
+        if (normalized.code === 'REQUEST_ABORTED') return;
+        if (normalized.status === 404 || normalized.code === 'NOT_FOUND') {
+          localStorage.removeItem(SESSION_KEY);
+          setState(null);
+          setResources(emptyResources);
+          setSelectedWorkItemId(null);
+          setError(null);
+          return;
+        }
+        setError(errorText(normalized));
       });
     }
     return () => controller.abort();
@@ -174,6 +265,32 @@ export function ApiWorkspace() {
   ];
 
   const historicalSpecs = resources.specs.filter((spec) => spec.id !== state?.current_spec_version_id);
+  const availableAgents = useMemo(
+    () => Array.from(new Set(resources.workItems.map(assigneeLabel))).sort(),
+    [resources.workItems],
+  );
+  const visibleWorkItems = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return resources.workItems.filter((item) => {
+      if (kindFilter !== 'ALL' && item.kind !== kindFilter) return false;
+      if (agentFilter !== 'ALL' && assigneeLabel(item) !== agentFilter) return false;
+      if (!query) return true;
+      return [item.id, item.title, item.objective, item.description, assigneeLabel(item)]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [agentFilter, kindFilter, resources.workItems, search]);
+
+  function downloadCurrentPrd() {
+    if (!currentSpec) return;
+    const blob = new Blob([currentSpec.markdown], { type: 'text/markdown;charset=utf-8' });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = href;
+    link.download = `firstFlight-PRD-v${currentSpec.revision}.md`;
+    link.click();
+    URL.revokeObjectURL(href);
+  }
 
   async function onCreate(event: FormEvent) {
     event.preventDefault();
@@ -391,104 +508,412 @@ export function ApiWorkspace() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-950/95 px-5 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-cyan-400" /><h1 className="font-semibold">firstFlight 工作台</h1></div>
-            <p className="mt-1 text-xs text-slate-400">真实 API 模式 · 不使用 Mock 业务数据</p>
-          </div>
-          <div className="flex items-center gap-3 text-xs text-slate-400">
-            <Server className="h-4 w-4" />
-            <span>{appConfig.apiBaseUrl}</span>
-            <span className={health === 'ok' ? 'text-emerald-400' : health === 'error' ? 'text-rose-400' : 'text-amber-300'}>
-              {health === 'ok' ? '后端已连接' : health === 'error' ? '后端不可用' : '正在检查'}
-            </span>
-          </div>
-        </div>
-      </header>
+    <div className="ff-shell">
+      <nav className="ff-activity-bar" aria-label="工作区导航">
+        <button className="ff-brand-button" title="firstFlight AI Studio" aria-label="firstFlight AI Studio">
+          <Sparkles aria-hidden="true" />
+        </button>
+        <button
+          className={'ff-activity-button ' + (chatOpen ? 'is-active' : '')}
+          onClick={() => setChatOpen((open) => !open)}
+          title={chatOpen ? '折叠 Agent 对话面板' : '展开 Agent 对话面板'}
+          aria-label={chatOpen ? '折叠 Agent 对话面板' : '展开 Agent 对话面板'}
+          aria-pressed={chatOpen}
+        >
+          <Bot aria-hidden="true" />
+          <span className="ff-online-dot" />
+        </button>
+        <div className="ff-activity-divider" />
+        <button
+          className={'ff-activity-button ' + (activeTab === 'kanban' ? 'is-active' : '')}
+          onClick={() => setActiveTab('kanban')}
+          title="敏捷任务看板"
+          aria-label="打开敏捷任务看板"
+          aria-pressed={activeTab === 'kanban'}
+        >
+          <LayoutGrid aria-hidden="true" />
+          {resources.workItems.length > 0 && <span className="ff-activity-count">{resources.workItems.length}</span>}
+        </button>
+        <button
+          className={'ff-activity-button ' + (activeTab === 'flow' ? 'is-active' : '')}
+          onClick={() => setActiveTab('flow')}
+          title="任务流转图"
+          aria-label="打开任务流转图"
+          aria-pressed={activeTab === 'flow'}
+        >
+          <GitFork aria-hidden="true" />
+        </button>
+        <button
+          className={'ff-activity-button ' + (activeTab === 'audit' ? 'is-active' : '')}
+          onClick={() => setActiveTab('audit')}
+          title="审计记录"
+          aria-label="打开审计记录"
+          aria-pressed={activeTab === 'audit'}
+        >
+          <ClipboardList aria-hidden="true" />
+        </button>
+        <div className="ff-activity-spacer" />
+        <button className="ff-activity-button" title="系统运行状态" aria-label="系统运行状态">
+          <Activity aria-hidden="true" />
+        </button>
+        <button className="ff-activity-button" title="设置" aria-label="设置">
+          <Settings aria-hidden="true" />
+        </button>
+      </nav>
 
-      <div className="mx-auto grid max-w-7xl gap-5 p-5 lg:grid-cols-[360px_1fr]">
-        <aside className="space-y-4">
+      {chatOpen && (
+        <aside className="ff-agent-panel">
+          <header className="ff-agent-header">
+            <div className="ff-agent-heading">
+              <span className="ff-agent-icon"><Bot aria-hidden="true" /></span>
+              <div>
+                <div className="ff-agent-title">
+                  AI Studio Agent Chat
+                  <span className="ff-online-label">ONLINE</span>
+                </div>
+                <p>Project Orchestration &amp; PRD Engine</p>
+              </div>
+            </div>
+            <span className="ff-agent-select">Project Agent</span>
+          </header>
+
           {!state ? (
-            <form onSubmit={onCreate} className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-5">
-              <div><h2 className="font-medium">创建项目</h2><p className="mt-1 text-xs text-slate-400">填写最小项目简报，由后端 PM Agent 判断是否需要澄清。</p></div>
-              <Field label="为什么要做" value={motivation} onChange={setMotivation} multiline />
-              <Field label="最终目标" value={objective} onChange={setObjective} multiline />
-              <Field label="已知范围（每行一项）" value={scope} onChange={setScope} multiline />
-              <Field label="预期交付物（每行一项）" value={deliverables} onChange={setDeliverables} multiline />
-              <Field label="负责人标识（需与后端本地身份一致）" value={ownerId} onChange={setOwnerId} />
-              <button disabled={busy || health !== 'ok'} className="flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-500 px-4 py-2 font-medium text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
-                {busy && <Loader2 className="h-4 w-4 animate-spin" />} 创建并分析
-              </button>
-              <div className="border-t border-slate-800 pt-4">
-                <p className="mb-3 text-xs leading-5 text-slate-400">已有后端 Session 时可直接恢复，不会创建新的 Agent 运行。</p>
-                <Field label="已有 Session ID" value={resumeSessionId} onChange={setResumeSessionId} />
-                <button type="button" disabled={busy || health !== 'ok'} onClick={resumeExistingSession} className="mt-3 w-full rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200 disabled:opacity-50">恢复并打开</button>
+            <form onSubmit={onCreate} className="ff-intake-form">
+              <div className="ff-quick-row">
+                <span><Sparkles aria-hidden="true" /> 新项目需求</span>
+                <span className={health === 'ok' ? 'is-online' : 'is-offline'}>
+                  {health === 'ok' ? '后端在线' : health === 'error' ? '后端不可用' : '正在连接'}
+                </span>
+              </div>
+              <div className="ff-chat-scroll">
+                <div className="ff-message ff-message-agent">
+                  <span className="ff-avatar">PM</span>
+                  <div>
+                    <p className="ff-message-meta">Project Manager Agent</p>
+                    <div className="ff-message-bubble">
+                      请先提供项目简报。我会把内容交给后端 PM Agent 分析，并在需要时继续提出澄清问题。
+                    </div>
+                  </div>
+                </div>
+                <div className="ff-form-card">
+                  <Field label="为什么要做" value={motivation} onChange={setMotivation} multiline />
+                  <Field label="最终目标" value={objective} onChange={setObjective} multiline />
+                  <Field label="已知范围（每行一项）" value={scope} onChange={setScope} multiline />
+                  <Field label="预期交付物（每行一项）" value={deliverables} onChange={setDeliverables} multiline />
+                  <Field label="负责人标识" value={ownerId} onChange={setOwnerId} />
+                  <button disabled={busy || health !== 'ok'} className="ff-primary-button ff-full-button">
+                    {busy && <Loader2 className="ff-spin" aria-hidden="true" />}
+                    创建并分析
+                  </button>
+                </div>
+                <details className="ff-resume-card">
+                  <summary>恢复已有项目 Session</summary>
+                  <p>只读取后端已有状态，不会创建新的 Agent 运行。</p>
+                  <Field label="Session ID" value={resumeSessionId} onChange={setResumeSessionId} />
+                  <button type="button" disabled={busy || health !== 'ok'} onClick={resumeExistingSession} className="ff-secondary-button ff-full-button">
+                    恢复并打开
+                  </button>
+                </details>
               </div>
             </form>
           ) : (
-            <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900 p-5">
-              <div className="flex items-center justify-between"><h2 className="font-medium">项目进度</h2><button onClick={manualRefresh} disabled={busy} title="刷新" aria-label="刷新项目状态"><RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} /></button></div>
-              <p className="text-xs leading-5 text-slate-400">一个项目从需求澄清、PRD 审核到任务拆解的完整记录，就是一个 Session。关闭页面后仍可继续。</p>
-              {rootWorkItem && <p className="text-sm font-medium text-slate-200">{rootWorkItem.title || rootWorkItem.objective}</p>}
-              <StatusBadge state={state} />
-              {currentSpec && <p className="text-xs text-slate-400">当前需求文档：PRD v{currentSpec.revision}</p>}
-              <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-3">
-                <h3 className="text-sm font-medium text-cyan-200">下一步：{displayLabel(state.next_action)}</h3>
-                <p className="mt-2 text-xs leading-6 text-slate-300">{progressDescription(state)}</p>
-                {state.review_findings.length > 0 && <p className="mt-2 text-xs text-amber-200">有 {state.review_findings.filter((finding) => finding.blocks_progress).length} 项问题需要处理，详情见 PRD 审核。</p>}
-                {rootWorkItem && currentSpec && <button type="button" onClick={() => setSelectedWorkItemId(rootWorkItem.id)} className="mt-3 w-full rounded-lg bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950">查看 PRD 与审核意见</button>}
+            <>
+              <div className="ff-quick-row">
+                <button onClick={manualRefresh} disabled={busy} title="刷新项目状态" aria-label="刷新项目状态">
+                  <RefreshCw className={busy ? 'ff-spin' : ''} aria-hidden="true" />
+                  刷新状态
+                </button>
+                <span className={health === 'ok' ? 'is-online' : 'is-offline'}>
+                  {health === 'ok' ? 'API ONLINE' : 'API OFFLINE'}
+                </span>
               </div>
-              <details className="text-xs text-slate-400"><summary className="cursor-pointer">项目标识与恢复方式</summary><dl className="mt-2 space-y-2"><div><dt>Session ID（用于恢复这个项目）</dt><dd className="break-all text-slate-200">{state.session_id}</dd></div><div><dt>进度更新次数</dt><dd className="text-slate-200">{state.state_version}（不是 PRD 文档版本）</dd></div></dl></details>
 
-              {state.outstanding_questions.length > 0 && <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3"><h3 className="text-sm font-medium text-amber-200">待澄清</h3>{state.outstanding_questions.map((question) => <div key={question.question_id} className="mt-3 text-sm"><p>{question.question}</p><p className="mt-1 text-xs text-slate-400">{question.reason}</p></div>)}</div>}
-              {state.legal_actions.includes('message') && <Field label="澄清答案" value={answer} onChange={setAnswer} multiline />}
-              {state.legal_actions.includes('restore_spec_version') && historicalSpecs.length > 0 && <details className="space-y-2 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3"><summary className="cursor-pointer text-sm text-violet-200">从历史 PRD 创建新版</summary><div className="mt-3 space-y-3"><p className="text-xs text-slate-400">复制所选旧版内容并生成新版本，再次进入审核。已有记录会保留。</p><select aria-label="历史 PRD 版本" value={restoreRevision} onChange={(event) => setRestoreRevision(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"><option value="">选择历史版本</option>{historicalSpecs.map((spec) => <option key={spec.id} value={spec.revision}>v{spec.revision} · {displayLabel(spec.status)}</option>)}</select><Field label="创建新版的原因" value={restoreReason} onChange={setRestoreReason} multiline /><button disabled={busy || !restoreRevision || !restoreReason.trim()} onClick={() => runAction('restore_spec_version')} className="w-full rounded-lg border border-violet-500/40 px-3 py-2 text-sm text-violet-200 disabled:opacity-40">基于历史版本创建新版</button></div></details>}
-              <div className="grid gap-2">
-                {sidebarActions.map((action) => <button key={action} disabled={busy} onClick={() => runAction(action)} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50">{action === 'skip_clarification' && state.current_spec_version_id ? '跳过澄清，确认当前 PRD 并拆分子任务' : actionLabels[action]}</button>)}
-                {state.legal_actions.includes('convert_to_work_item') && (
-                  <button type="button" disabled={busy} onClick={() => runAction('convert_to_work_item')} className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50">
-                    继续拆分子任务
+              <div className="ff-chat-scroll" role="log" aria-label="Agent 工作记录">
+                <div className="ff-message ff-message-user">
+                  <div>
+                    <p className="ff-message-meta">Project Owner</p>
+                    <div className="ff-message-bubble">
+                      {rootWorkItem?.title || rootWorkItem?.objective || '当前项目需求'}
+                    </div>
+                  </div>
+                  <span className="ff-avatar ff-avatar-user">U</span>
+                </div>
+
+                <div className="ff-message ff-message-agent">
+                  <span className="ff-avatar">PM</span>
+                  <div className="ff-message-content">
+                    <p className="ff-message-meta">Project Orchestrator Agent</p>
+                    <div className="ff-message-bubble">
+                      <strong>当前阶段：{displayLabel(state.phase)}</strong>
+                      <p>{progressDescription(state)}</p>
+                      <StatusBadge state={state} />
+                      {currentSpec && <p className="ff-inline-note">当前 PRD v{currentSpec.revision}</p>}
+                    </div>
+                  </div>
+                </div>
+
+                {state.outstanding_questions.map((question) => (
+                  <div key={question.question_id} className="ff-message ff-message-agent">
+                    <span className="ff-avatar ff-avatar-warning">?</span>
+                    <div className="ff-message-content">
+                      <p className="ff-message-meta">Clarification Agent</p>
+                      <div className="ff-message-bubble ff-question-bubble">
+                        <strong>{question.question}</strong>
+                        <p>{question.reason}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {resources.events.slice(-5).map((event) => (
+                  <div key={event.id} className="ff-agent-event">
+                    <span className="ff-event-check"><CheckCircle2 aria-hidden="true" /></span>
+                    <div>
+                      <strong>{auditTitle(event)}</strong>
+                      <p>{displayTime(event.created_at)} · {event.actor_id || '系统 Agent'}</p>
+                    </div>
+                  </div>
+                ))}
+
+                {currentSpec && (
+                  <button
+                    type="button"
+                    aria-label="查看 PRD 与审核意见"
+                    onClick={() => rootWorkItem && setSelectedWorkItemId(rootWorkItem.id)}
+                    className="ff-related-work-item"
+                  >
+                    <FileText aria-hidden="true" />
+                    <span><strong>查看 PRD 与审核意见</strong><small>v{currentSpec.revision} · {displayLabel(currentSpec.status)}</small></span>
                   </button>
+                )}
+
+                {state.review_findings.length > 0 && (
+                  <div className="ff-warning-note">
+                    <AlertCircle aria-hidden="true" />
+                    <span>当前有 {state.review_findings.length} 项审核发现，请在 PRD 审核窗口中处理。</span>
+                  </div>
+                )}
+
+                {state.legal_actions.includes('restore_spec_version') && historicalSpecs.length > 0 && (
+                  <details className="ff-resume-card">
+                    <summary>从历史 PRD 创建新版</summary>
+                    <p>复制所选旧版内容并生成新版本，已有记录会保留。</p>
+                    <select aria-label="历史 PRD 版本" value={restoreRevision} onChange={(event) => setRestoreRevision(event.target.value)} className="ff-field-control">
+                      <option value="">选择历史版本</option>
+                      {historicalSpecs.map((spec) => <option key={spec.id} value={spec.revision}>v{spec.revision} · {displayLabel(spec.status)}</option>)}
+                    </select>
+                    <Field label="创建新版的原因" value={restoreReason} onChange={setRestoreReason} multiline />
+                    <button disabled={busy || !restoreRevision || !restoreReason.trim()} onClick={() => runAction('restore_spec_version')} className="ff-secondary-button ff-full-button">
+                      基于历史版本创建新版
+                    </button>
+                  </details>
                 )}
               </div>
 
-              <button disabled={busy} onClick={clearSession} className="w-full text-xs text-slate-500 hover:text-slate-300 disabled:opacity-50">返回项目入口（保留数据）</button>
-            </section>
+              <footer className="ff-chat-composer">
+                {state.legal_actions.includes('message') && (
+                  <label className="ff-composer-input">
+                    <span>澄清答案</span>
+                    <textarea
+                      aria-label="澄清答案"
+                      value={answer}
+                      onChange={(event) => setAnswer(event.target.value)}
+                      placeholder="回复 Agent 的澄清问题，或输入下一步指令…"
+                    />
+                  </label>
+                )}
+                <div className="ff-composer-actions">
+                  {state.legal_actions.includes('message') && (
+                    <button disabled={busy} onClick={() => runAction('message')} className="ff-primary-button">
+                      提交澄清 <CornerDownLeft aria-hidden="true" />
+                    </button>
+                  )}
+                  {sidebarActions.includes('skip_clarification') && (
+                    <button disabled={busy} onClick={() => runAction('skip_clarification')} className="ff-secondary-button">
+                      {state.current_spec_version_id ? '跳过澄清，确认当前 PRD 并拆分子任务' : '跳过澄清并生成 PRD'}
+                    </button>
+                  )}
+                  {sidebarActions.filter((action) => !['message', 'skip_clarification'].includes(action)).map((action) => (
+                    <button key={action} disabled={busy} onClick={() => runAction(action)} className="ff-secondary-button">
+                      {actionLabels[action]}
+                    </button>
+                  ))}
+                  {state.legal_actions.includes('convert_to_work_item') && (
+                    <button type="button" disabled={busy} onClick={() => runAction('convert_to_work_item')} className="ff-secondary-button">
+                      继续拆分子任务
+                    </button>
+                  )}
+                </div>
+                <div className="ff-composer-foot">
+                  <span><span className="ff-small-dot" /> 后端状态驱动</span>
+                  <button disabled={busy} onClick={clearSession}>返回项目入口（保留数据）</button>
+                </div>
+              </footer>
+            </>
           )}
         </aside>
+      )}
 
-        <section className="space-y-5">
-          {error && <div className="flex gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200"><AlertCircle className="h-5 w-5 shrink-0" /><span>{error}</span></div>}
-          {workflowProgress && <div className="flex items-center gap-3 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-sm text-cyan-100"><Loader2 className="h-5 w-5 animate-spin" /><span>{workflowProgress}</span></div>}
-          {!state ? <div className="grid min-h-80 place-items-center rounded-2xl border border-dashed border-slate-800 text-sm text-slate-500">创建或恢复 Session 后，这里显示真实 Spec、WorkItem 和审计记录。</div> : <>
-            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-medium">规划看板</h2><p className="mt-1 text-xs text-slate-500">点击项目卡片阅读 PRD 正文与 Diff，并查看审核意见；拆解后的子任务可查看执行规格。</p></div>{currentSpec && <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">PRD v{currentSpec.revision} · {displayLabel(currentSpec.status)}</span>}</div>
-              <div className="grid gap-4 xl:grid-cols-3">
-                {([
-                  { kind: 'ROOT', title: '项目需求' },
-                  { kind: 'MILESTONE', title: '里程碑' },
-                  { kind: 'TASK', title: '子任务' },
-                ] as const).map((column) => {
-                  const items = resources.workItems.filter((item) => item.kind === column.kind);
-                  return <div key={column.kind} className="rounded-xl border border-slate-800 bg-slate-950/70 p-3"><div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-medium text-slate-200">{column.title}</h3><span className="text-xs text-slate-500">{items.length}</span></div><div className="space-y-3">{items.map((item) => {
-                    const hasAgentSpec = resources.agentSpecs.some((spec) => spec.work_item_id === item.id);
-                    const presentation = workItemPresentation(item.kind, hasAgentSpec);
-                    const disabled = presentation.detailKind === 'prd' && !currentSpec;
-                    return <button key={item.id} disabled={disabled} onClick={() => setSelectedWorkItemId(item.id)} className={`w-full rounded-xl border p-4 text-left transition ${selectedWorkItemId === item.id ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-600'} disabled:cursor-not-allowed disabled:opacity-50`}><div className="flex items-start justify-between gap-2"><h4 className="font-medium">{item.title || item.id}</h4><span className="text-[11px] text-cyan-300">{item.kind}</span></div><p className="mt-2 line-clamp-3 text-sm text-slate-400">{item.objective || item.description || '未提供目标'}</p><p className="mt-3 text-xs font-medium text-cyan-300">{disabled ? 'PRD 生成后可打开' : presentation.cardLabel}</p></button>;
-                  })}{items.length === 0 && <p className="rounded-lg border border-dashed border-slate-800 p-4 text-xs text-slate-600">当前阶段尚无卡片</p>}</div></div>;
-                })}
-              </div>
-            </section>
-            {selectedWorkItem && <WorkItemDialog title={selectedWorkItem.kind === 'ROOT' ? 'PRD 审核' : '任务详情'} onClose={() => setSelectedWorkItemId(null)}>
-            {selectedWorkItem?.kind === 'ROOT' && rootWorkItem && currentSpec && <PrdReviewPanel key={`${rootWorkItem.id}:${currentSpec.id}`} fallbackSpec={currentSpec} wi={rootWorkItem.id} sessionState={state} workflowBusy={busy} onConfirmAndDecompose={confirmPrdAndDecompose} onResourcesChanged={refreshCurrentResources} />}
-            {selectedWorkItem && selectedWorkItem.kind !== 'ROOT' && <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5"><div className="mb-4 flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-medium">{selectedWorkItem.title || selectedWorkItem.id}</h2><p className="mt-1 text-xs text-slate-500">{selectedWorkItem.kind} · 负责人 {selectedWorkItem.suggested_assignee || selectedWorkItem.responsible_role || '未提供'}</p></div><span className="text-xs text-slate-500">依赖：{selectedWorkItem.dependency_work_item_ids.join(', ') || '无'}</span></div><p className="text-sm leading-6 text-slate-300">{selectedWorkItem.objective || selectedWorkItem.description || '未提供目标'}</p>{selectedAgentSpecs.length > 0 ? <div className="mt-4 space-y-3">{selectedAgentSpecs.map((agentSpec) => <div key={agentSpec.id} className="rounded-xl border border-cyan-500/20 bg-slate-950 p-4"><h3 className="text-sm font-medium text-cyan-200">任务 Agent Spec</h3><pre className="mt-3 max-h-[520px] overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-300">{JSON.stringify(agentSpec.content, null, 2)}</pre></div>)}</div> : <p className="mt-4 rounded-lg border border-dashed border-slate-800 p-4 text-sm text-slate-500">该卡片当前没有 Agent Spec。</p>}</section>}
-            </WorkItemDialog>}
-            <AuditTrail events={resources.events} specs={resources.specs} />
-          </>}
+      <main className="ff-workspace">
+        <header className="ff-top-tabs">
+          <div className="ff-tabs">
+            <button className={activeTab === 'kanban' ? 'is-active' : ''} onClick={() => setActiveTab('kanban')}>
+              <LayoutGrid aria-hidden="true" />
+              Kanban Board (敏捷看板)
+              <span>{resources.workItems.length}</span>
+            </button>
+            <button className={activeTab === 'flow' ? 'is-active' : ''} onClick={() => setActiveTab('flow')}>
+              <GitFork aria-hidden="true" />
+              DAG Flow Map (任务流转图)
+            </button>
+            <button className={activeTab === 'audit' ? 'is-active' : ''} onClick={() => setActiveTab('audit')}>
+              <ClipboardList aria-hidden="true" />
+              Audit Trail (审计记录)
+              <span>{resources.events.length}</span>
+            </button>
+          </div>
+          <div className="ff-api-status">
+            <Server aria-hidden="true" />
+            <span className={health === 'ok' ? 'is-online' : 'is-offline'}>
+              {health === 'ok' ? 'Backend Online' : health === 'error' ? 'Backend Offline' : 'Checking API'}
+            </span>
+          </div>
+        </header>
+
+        <section className={activeTab === 'kanban' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'kanban'}>
+          <div className="ff-board-toolbar">
+            <label className="ff-search-box">
+              <Search aria-hidden="true" />
+              <input aria-label="搜索工单" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索工单 ID、标题或 Agent…" />
+            </label>
+            <label className="ff-filter-label">
+              类型：
+              <select aria-label="工单类型" value={kindFilter} onChange={(event) => setKindFilter(event.target.value as typeof kindFilter)}>
+                <option value="ALL">全部类型</option>
+                <option value="ROOT">项目需求</option>
+                <option value="MILESTONE">里程碑</option>
+                <option value="TASK">子任务</option>
+              </select>
+            </label>
+            <label className="ff-filter-label">
+              执行者：
+              <select aria-label="执行者" value={agentFilter} onChange={(event) => setAgentFilter(event.target.value)}>
+                <option value="ALL">所有 Agent</option>
+                {availableAgents.map((agent) => <option key={agent}>{agent}</option>)}
+              </select>
+            </label>
+            <div className="ff-toolbar-spacer" />
+            {currentSpec && <button onClick={downloadCurrentPrd} className="ff-download-button"><FileText aria-hidden="true" />下载 PRD.md</button>}
+            <button onClick={clearSession} disabled={busy} className="ff-new-epic-button"><Plus aria-hidden="true" />规划新主工单</button>
+          </div>
+
+          {(error || workflowProgress) && (
+            <div className="ff-alert-stack">
+              {error && <div role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{error}</span></div>}
+              {workflowProgress && <div className="ff-page-alert ff-page-alert-progress"><Loader2 className="ff-spin" aria-hidden="true" /><span>{workflowProgress}</span></div>}
+            </div>
+          )}
+
+          <div className="ff-board-scroll">
+            {boardColumns.map((column) => {
+              const items = visibleWorkItems.filter((item) => item.kind === column.kind
+                && (!column.taskLane || workItemLane(item.status) === column.taskLane));
+              return (
+                <section key={column.key} className={`ff-board-column ${column.taskLane ? `is-task-lane is-${column.taskLane}` : ''}`} aria-label={column.title}>
+                  <header>
+                    <div>
+                      <h2>{column.title}</h2>
+                      <p>{column.subtitle}</p>
+                    </div>
+                    <span>{items.length}</span>
+                  </header>
+                  <div className="ff-card-list">
+                    {items.map((item) => {
+                      const hasAgentSpec = resources.agentSpecs.some((spec) => spec.work_item_id === item.id);
+                      const presentation = workItemPresentation(item.kind, hasAgentSpec);
+                      const disabled = presentation.detailKind === 'prd' && !currentSpec;
+                      const progress = state ? workItemProgress(item, state, hasAgentSpec) : 0;
+                      return (
+                        <button key={item.id} disabled={disabled} onClick={() => setSelectedWorkItemId(item.id)} className={'ff-work-card ' + (selectedWorkItemId === item.id ? 'is-selected' : '')}>
+                          <div className="ff-card-tags">
+                            <span className="ff-item-id">#{item.id}</span>
+                            <span className="ff-priority">{item.kind === 'ROOT' ? 'P0' : item.kind === 'MILESTONE' ? 'P1' : 'P2'}</span>
+                            {item.kind === 'TASK' && <span className={`ff-card-status is-${workItemLane(item.status)}`}>{workItemStatusLabel(item.status)}</span>}
+                            <span className="ff-card-kind">{item.kind === 'ROOT' ? 'Epic' : item.kind === 'MILESTONE' ? 'Milestone' : 'Subtask'}</span>
+                          </div>
+                          <h3>{item.title || item.id}</h3>
+                          <p>{item.objective || item.description || '未提供任务目标'}</p>
+                          {item.parent_id && <div className="ff-parent-link">产生自：#{item.parent_id}</div>}
+                          <div className="ff-card-footer">
+                            <span className="ff-assignee"><i>{assigneeInitial(item)}</i>{assigneeLabel(item)}</span>
+                            <span className="ff-progress-label">{progress}%</span>
+                          </div>
+                          <div className="ff-progress-track"><span style={{ width: progress + '%' }} /></div>
+                          <span className="ff-card-action">{disabled ? 'PRD 生成后可打开' : presentation.cardLabel}</span>
+                        </button>
+                      );
+                    })}
+                    {items.length === 0 && <div className="ff-empty-column">当前阶段尚无卡片</div>}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
         </section>
-      </div>
-    </main>
+
+        <section className={activeTab === 'flow' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'flow'}>
+          <div className="ff-flow-toolbar">
+            <div><h2>任务依赖流转图</h2><p>根据后端返回的 WorkItem 层级和依赖关系展示，只读，不在浏览器中修改状态。</p></div>
+            <span>{resources.workItems.length} NODES</span>
+          </div>
+          <div className="ff-flow-canvas">
+            {hierarchyColumns.map((column, columnIndex) => (
+              <div key={column.kind} className="ff-flow-lane">
+                <header><span>{columnIndex + 1}</span>{column.title}</header>
+                {resources.workItems.filter((item) => item.kind === column.kind).map((item) => (
+                  <button key={item.id} onClick={() => setSelectedWorkItemId(item.id)} className="ff-flow-node">
+                    <span className="ff-flow-node-icon">{item.kind === 'ROOT' ? <ShieldCheck aria-hidden="true" /> : <GitFork aria-hidden="true" />}</span>
+                    <span><strong>{item.title || item.id}</strong><small>#{item.id} · {assigneeLabel(item)}</small></span>
+                    {item.dependency_work_item_ids.length > 0 && <em>依赖 {item.dependency_work_item_ids.length}</em>}
+                  </button>
+                ))}
+                {resources.workItems.every((item) => item.kind !== column.kind) && <div className="ff-flow-empty">等待后端生成</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className={activeTab === 'audit' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'audit'}>
+          <div className="ff-audit-scroll">
+            {activeTab === 'audit' && error && <div role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{error}</span></div>}
+            <AuditTrail events={resources.events} specs={resources.specs} />
+          </div>
+        </section>
+
+        <footer className="ff-status-bar">
+          <div><span className="ff-small-dot" /> AI STUDIO ENGINE <span>UTF-8</span><span>Backend Contract</span></div>
+          <div><span className={health === 'ok' ? 'ff-small-dot' : 'ff-small-dot is-error'} /> AGENT NETWORK {health === 'ok' ? 'ONLINE' : 'OFFLINE'} <span>{resources.agentSpecs.length} SPECS</span></div>
+        </footer>
+      </main>
+
+      {selectedWorkItem && (
+        <WorkItemDialog title={selectedWorkItem.kind === 'ROOT' ? 'PRD 审核' : '任务详情'} onClose={() => setSelectedWorkItemId(null)}>
+          {selectedWorkItem.kind === 'ROOT' && rootWorkItem && currentSpec && (
+            <PrdReviewPanel
+              key={rootWorkItem.id + ':' + currentSpec.id}
+              fallbackSpec={currentSpec}
+              wi={rootWorkItem.id}
+              sessionState={state!}
+              workflowBusy={busy}
+              onConfirmAndDecompose={confirmPrdAndDecompose}
+              onResourcesChanged={refreshCurrentResources}
+            />
+          )}
+          {selectedWorkItem.kind !== 'ROOT' && (
+            <AgentSpecDetail item={selectedWorkItem} agentSpecs={selectedAgentSpecs} />
+          )}
+        </WorkItemDialog>
+      )}
+    </div>
   );
 }

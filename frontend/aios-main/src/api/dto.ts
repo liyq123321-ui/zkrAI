@@ -78,6 +78,7 @@ export interface WorkItemDto {
   title: string | null;
   description: string | null;
   objective: string | null;
+  status?: string | null;
   scope: string[] | null;
   exclusions: string[] | null;
   outputs: unknown[] | null;

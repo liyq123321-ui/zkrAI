@@ -22,16 +22,20 @@ let failLines = false;
 let failComments = false;
 let failDocument = false;
 let failDiff = false;
+let missingSavedSession = false;
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   // jsdom has no native dialog implementation; exercise visibility here and native focus in browser QA.
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; };
-  failLines = false; failComments = false; failDocument = false; failDiff = false;
+  failLines = false; failComments = false; failDocument = false; failDiff = false; missingSavedSession = false;
   localStorage.clear();
   fetchSpy = vi.fn(async (input: string | URL | Request) => {
     const path = new URL(String(input)).pathname;
+    if (missingSavedSession && path.startsWith('/sessions/session-missing/')) {
+      return new Response(JSON.stringify({detail:{code:'NOT_FOUND',message:'The requested workflow resource was not found.'}}), {status:404});
+    }
     if ((failLines && path.endsWith('/commentable-lines')) || (failComments && path.endsWith('/comments')) || (failDocument && path === '/prd/root-1') || (failDiff && path.endsWith('/diff'))) {
       return new Response(JSON.stringify({detail:{code:'GITEA_UNAVAILABLE',message:'Gitea is temporarily unavailable.'}}), {status:503});
     }
@@ -39,8 +43,13 @@ beforeEach(() => {
       '/healthz':{status:'ok',database:'ok'},
       '/sessions/session-1/state':state,
       '/sessions/session-1/specs':[spec],
-      '/sessions/session-1/work-items':[{id:'root-1',parent_id:null,kind:'ROOT',title:'知识问答',description:null,objective:'回答问题',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:null,responsible_role:'Owner',suggested_assignee:'owner-1',dependency_work_item_ids:[]}],
-      '/sessions/session-1/agent-specs':[],
+      '/sessions/session-1/work-items':[
+        {id:'root-1',parent_id:null,kind:'ROOT',title:'知识问答',description:null,objective:'回答问题',status:'in_progress',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:null,responsible_role:'Owner',suggested_assignee:'owner-1',dependency_work_item_ids:[]},
+        {id:'task-todo',parent_id:'root-1',kind:'TASK',title:'实现问答 API',description:null,objective:'提供问答接口',status:'todo',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:['FastAPI'],responsible_role:'Backend Engineer',suggested_assignee:'Backend Agent',dependency_work_item_ids:[]},
+        {id:'task-running',parent_id:'root-1',kind:'TASK',title:'构建检索流程',description:null,objective:'接入检索能力',status:'in_progress',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:['Retrieval'],responsible_role:'AI Engineer',suggested_assignee:'AI Agent',dependency_work_item_ids:['task-todo']},
+        {id:'task-done',parent_id:'root-1',kind:'TASK',title:'定义验收用例',description:null,objective:'建立测试基线',status:'completed',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:['Testing'],responsible_role:'QA Engineer',suggested_assignee:'QA Agent',dependency_work_item_ids:[]},
+      ],
+      '/sessions/session-1/agent-specs':[{id:'agent-spec-todo',work_item_id:'task-todo',source_spec_version_id:'spec-1',dependency_work_item_ids:[],created_at:'2026-09-03T02:47:00Z',content:{objective:'实现带权限控制的问答 API',scope:['实现 POST /questions'],exclusions:['不处理部署'],inputs:['已批准 PRD'],outputs:[{name:'问答 API',format:'JSON',required:true}],acceptance_criteria:[{requirement_ids:['FR-001'],criterion:'可以提交问题',verification_method:'API 测试',expected_result:'返回 200'}],required_skills:['FastAPI'],allowed_tools:['pytest'],allowed_paths:['backend/app/api'],test_obligations:['覆盖成功场景'],fixed_constraints:['保持接口契约'],configurable_parts:[],extension_points:[],risks:[],open_questions:[],responsible_role:'Backend Engineer',suggested_assignee:'Backend Agent'}}],
       '/sessions/session-1/events':[{id:'event-1',event_type:'AGENT_TRACE',actor_id:null,created_at:'2026-09-03T02:45:00',payload:{trace_id:'command-1',agent_call_id:'review-call-1',phase:'review_spec',status:'done',summary:'Reviewing specification quality',input_hash:'input-proof',output_hash:'output-proof',started_at:'2026-09-03T02:45:00',completed_at:'2026-09-03T02:46:00',safe_error_code:null}}],
       '/prd/root-1':doc,
       '/prd/root-1/diff':{wi:'root-1',version:1,filename:doc.filename,commit_sha:'abc123',patch:'@@ -1,2 +1,2 @@\n # 需求说明\n-旧要求\n+这是已保存的 PRD 正文。\n'},
@@ -55,22 +64,30 @@ beforeEach(() => {
 });
 afterEach(() => {cleanup();localStorage.clear();vi.unstubAllGlobals();});
 
-function renderPanel() {
-  return render(<PrdReviewPanel wi="root-1" sessionState={state} fallbackSpec={spec} onConfirmAndDecompose={async () => undefined} />);
+function renderPanel(onConfirmAndDecompose: (reviewNote: string) => Promise<void> = async () => undefined) {
+  return render(<PrdReviewPanel wi="root-1" sessionState={state} fallbackSpec={spec} onConfirmAndDecompose={onConfirmAndDecompose} />);
 }
 
 describe('workspace regression', () => {
-  it.each(['lines','comments','document','diff'])('keeps saved PRD readable and blocks decisions when %s cannot load', async (resource) => {
+  it.each(['lines','comments','document','diff'])('keeps saved PRD readable and offers explicit fallback confirmation when %s cannot load', async (resource) => {
     failLines = resource === 'lines'; failComments = resource === 'comments'; failDocument = resource === 'document'; failDiff = resource === 'diff';
-    renderPanel();
+    const confirm = vi.fn(async () => undefined);
+    renderPanel(confirm);
     fireEvent.click(screen.getByRole('button',{name:'正文'}));
     expect(await within(screen.getByRole('region',{name:'PRD 正文'})).findByText('这是已保存的 PRD 正文。')).toBeTruthy();
     await screen.findByRole('alert');
-    const approve = screen.queryByRole('button',{name:'确认 PRD 并开始任务拆解'});
-    expect(!approve || (approve as HTMLButtonElement).disabled).toBe(true);
+    const approve = screen.getByRole('button',{name:'确认 PRD 并开始任务拆解'});
+    expect((approve as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole('button',{name:'发布批注并生成新版'})).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText('说明为什么接受当前审核发现'), {
+      target: {value: '已阅读并接受当前审核发现'},
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect((approve as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(approve);
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith('已阅读并接受当前审核发现'));
     failLines = false; failComments = false; failDocument = false; failDiff = false;
-    fireEvent.click(screen.getByRole('button',{name:'重试加载'}));
+    fireEvent.click(screen.getByRole('button',{name:'刷新 PRD'}));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
     expect(screen.getByRole('button',{name:'确认 PRD 并开始任务拆解'})).toBeTruthy();
   });
@@ -84,6 +101,34 @@ describe('workspace regression', () => {
     expect(await within(within(dialog).getByRole('region',{name:'PRD Diff'})).findByText('+这是已保存的 PRD 正文。')).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button',{name:'关闭详情'}));
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('clears a saved Session that no longer exists after the local database is reset', async () => {
+    missingSavedSession = true;
+    localStorage.setItem('firstflight.active-session-id','session-missing');
+    render(<ApiWorkspace />);
+
+    await waitFor(() => expect(localStorage.getItem('firstflight.active-session-id')).toBeNull());
+    expect(screen.getByText('新项目需求')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('places child WorkItems into three status columns using backend status', async () => {
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+
+    const todo = await screen.findByRole('region',{name:'待开始 (To Do)'});
+    const running = screen.getByRole('region',{name:'进行中 (In Progress)'});
+    const done = screen.getByRole('region',{name:'已完成 (Done)'});
+    expect(within(todo).getByRole('button',{name:/实现问答 API/})).toBeTruthy();
+    expect(within(running).getByRole('button',{name:/构建检索流程/})).toBeTruthy();
+    expect(within(done).getByRole('button',{name:/定义验收用例/})).toBeTruthy();
+
+    fireEvent.click(within(todo).getByRole('button',{name:/实现问答 API/}));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading',{name:'工作范围'})).toBeTruthy();
+    expect(within(dialog).getByText('实现 POST /questions')).toBeTruthy();
+    expect(within(dialog).queryByText(/"objective"/)).toBeNull();
   });
 
   it('expands audit evidence and the review output associated with that event', async () => {

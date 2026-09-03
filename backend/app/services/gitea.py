@@ -480,7 +480,9 @@ class GiteaClient:
 
     @staticmethod
     def _classified_error(status_code: int, *, resource_not_found: bool = False) -> GiteaError:
-        if status_code in (401, 403):
+        if status_code == 401:
+            return GiteaError("GITEA_UNAUTHORIZED", "Gitea rejected the configured token.", False)
+        if status_code == 403:
             return GiteaError("GITEA_FORBIDDEN", "Gitea access is forbidden.", False)
         if status_code == 429:
             return GiteaError("GITEA_RATE_LIMITED", "Gitea is rate limited.", True)

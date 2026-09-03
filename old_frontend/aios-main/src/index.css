@@ -1,0 +1,252 @@
+@import "tailwindcss";
+
+:root, [data-theme="dark"] {
+  --color-canvas-default: #0d1117;
+  --color-canvas-subtle: #161b22;
+  --color-canvas-inset: #010409;
+  --color-border-default: #30363d;
+  --color-border-muted: #21262d;
+  --color-fg-default: #f0f6fc;
+  --color-fg-muted: #8b949e;
+  --color-fg-subtle: #6e7681;
+  --color-accent-fg: #58a6ff;
+  --color-success-fg: #3fb950;
+  --color-danger-fg: #f85149;
+  --color-attention-fg: #d29922;
+  color-scheme: dark;
+}
+
+[data-theme="light"], .light {
+  --color-canvas-default: #ffffff;
+  --color-canvas-subtle: #f6f8fa;
+  --color-canvas-inset: #f6f8fa;
+  --color-border-default: #d0d7de;
+  --color-border-muted: #e1e4e8;
+  --color-fg-default: #1f2328;
+  --color-fg-muted: #656d76;
+  --color-fg-subtle: #8c959f;
+  --color-accent-fg: #0969da;
+  --color-success-fg: #1a7f37;
+  --color-danger-fg: #cf222e;
+  --color-attention-fg: #9a6700;
+  color-scheme: light;
+}
+
+/* GitHub Light Mode Overrides */
+[data-theme="light"] {
+  background-color: #ffffff;
+  color: #1f2328;
+}
+
+[data-theme="light"] #codex-app-root {
+  background-color: #ffffff !important;
+  color: #1f2328 !important;
+}
+
+/* Surfaces */
+[data-theme="light"] .bg-\[\#131314\] {
+  background-color: #ffffff !important;
+}
+
+[data-theme="light"] .bg-\[\#1e1f20\] {
+  background-color: #f6f8fa !important;
+}
+
+[data-theme="light"] .bg-\[\#18191b\] {
+  background-color: #ffffff !important;
+}
+
+[data-theme="light"] .bg-\[\#282a2c\] {
+  background-color: #eaecf0 !important;
+}
+
+[data-theme="light"] .bg-\[\#101112\] {
+  background-color: #f6f8fa !important;
+}
+
+[data-theme="light"] .bg-zinc-900,
+[data-theme="light"] .bg-zinc-950 {
+  background-color: #f6f8fa !important;
+}
+
+[data-theme="light"] .bg-zinc-800 {
+  background-color: #eaecf0 !important;
+}
+
+/* Hover States */
+[data-theme="light"] .hover\:bg-\[\#1e1f20\]:hover,
+[data-theme="light"] .hover\:bg-\[\#131314\]:hover {
+  background-color: #f3f4f6 !important;
+}
+
+[data-theme="light"] .hover\:bg-\[\#282a2c\]:hover,
+[data-theme="light"] .hover\:bg-zinc-800:hover {
+  background-color: #eaecf0 !important;
+}
+
+/* Borders */
+[data-theme="light"] .border-\[\#333538\],
+[data-theme="light"] .border-\[\#3c4043\],
+[data-theme="light"] .border-\[\#282a2c\],
+[data-theme="light"] .border-zinc-800,
+[data-theme="light"] .border-zinc-700 {
+  border-color: #d0d7de !important;
+}
+
+[data-theme="light"] .border-zinc-600,
+[data-theme="light"] .border-zinc-500 {
+  border-color: #afb8c1 !important;
+}
+
+[data-theme="light"] .border-white {
+  border-color: #0969da !important;
+}
+
+/* Typography Colors */
+[data-theme="light"] .text-\[\#e3e3e3\],
+[data-theme="light"] .text-zinc-100 {
+  color: #1f2328 !important;
+}
+
+[data-theme="light"] .text-white:not(.keep-white) {
+  color: #1f2328 !important;
+}
+
+[data-theme="light"] .text-zinc-200,
+[data-theme="light"] .text-zinc-300 {
+  color: #24292f !important;
+}
+
+[data-theme="light"] .text-zinc-400 {
+  color: #656d76 !important;
+}
+
+[data-theme="light"] .text-zinc-500 {
+  color: #8c959f !important;
+}
+
+/* Input Fields & Textareas */
+[data-theme="light"] input,
+[data-theme="light"] textarea,
+[data-theme="light"] select {
+  background-color: #ffffff !important;
+  color: #1f2328 !important;
+  border-color: #d0d7de !important;
+}
+
+[data-theme="light"] input::placeholder,
+[data-theme="light"] textarea::placeholder {
+  color: #8c959f !important;
+}
+
+[data-theme="light"] input:focus,
+[data-theme="light"] textarea:focus,
+[data-theme="light"] select:focus {
+  border-color: #0969da !important;
+  box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.2) !important;
+}
+
+/* GitHub Primary Buttons */
+[data-theme="light"] button.bg-white:not(.keep-white-btn) {
+  background-color: #1f883d !important;
+  color: #ffffff !important;
+  border-color: #1f883d !important;
+}
+
+[data-theme="light"] button.bg-white:not(.keep-white-btn):hover {
+  background-color: #1a7f37 !important;
+}
+
+[data-theme="light"] button.bg-white:not(.keep-white-btn) svg {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] button.bg-white:not(.keep-white-btn) span {
+  color: #ffffff !important;
+}
+
+/* GitHub Light Badges & Chips */
+[data-theme="light"] .bg-white.text-black {
+  background-color: #f6f8fa !important;
+  color: #1f2328 !important;
+  border: 1px solid #d0d7de !important;
+}
+
+/* Alert / Status Blocks in GitHub Light */
+[data-theme="light"] .bg-emerald-950,
+[data-theme="light"] .bg-emerald-950\/40,
+[data-theme="light"] .bg-emerald-950\/60 {
+  background-color: #dafbe1 !important;
+  border-color: #4ac26b !important;
+  color: #1a7f37 !important;
+}
+
+[data-theme="light"] .text-emerald-400,
+[data-theme="light"] .text-emerald-300 {
+  color: #1a7f37 !important;
+}
+
+[data-theme="light"] .bg-red-950,
+[data-theme="light"] .bg-red-950\/60,
+[data-theme="light"] .bg-red-900\/80 {
+  background-color: #ffebe9 !important;
+  border-color: #ff8182 !important;
+  color: #cf222e !important;
+}
+
+[data-theme="light"] .text-red-400,
+[data-theme="light"] .text-red-300,
+[data-theme="light"] .text-red-200 {
+  color: #cf222e !important;
+}
+
+[data-theme="light"] .bg-amber-950,
+[data-theme="light"] .bg-amber-950\/60 {
+  background-color: #fff8c5 !important;
+  border-color: #d4a72c !important;
+  color: #9a6700 !important;
+}
+
+[data-theme="light"] .text-amber-400,
+[data-theme="light"] .text-amber-300 {
+  color: #9a6700 !important;
+}
+
+/* Modals & Backdrop in Light Mode */
+[data-theme="light"] .bg-black\/80,
+[data-theme="light"] .bg-black\/85 {
+  background-color: rgba(31, 35, 40, 0.6) !important;
+}
+
+/* Custom Scrollbar for GitHub Theme */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: #131314;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #333538;
+  border-radius: 4px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-track {
+  background: #f6f8fa;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #d0d7de;
+  border-radius: 4px;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #afb8c1;
+}
+

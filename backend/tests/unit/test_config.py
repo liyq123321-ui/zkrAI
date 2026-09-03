@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import app.config as config_module
 from app.config import Settings
 
 
@@ -13,6 +14,21 @@ def test_settings_use_codex_home_without_overriding_process_home(tmp_path: Path)
     )
     assert settings.codex_home == tmp_path / "codex-home"
     assert settings.codex_cwd == tmp_path
+
+
+def test_settings_load_backend_dotenv_without_overriding_process_environment(monkeypatch):
+    calls: list[tuple[Path, bool]] = []
+
+    def fake_load_dotenv(path: Path, *, override: bool) -> None:
+        calls.append((path, override))
+
+    monkeypatch.setattr(config_module, "load_dotenv", fake_load_dotenv)
+    monkeypatch.setenv("GITEA_OWNER", "process-owner")
+
+    settings = Settings.from_env()
+
+    assert calls == [(Path(config_module.__file__).resolve().parents[1] / ".env", False)]
+    assert settings.gitea_owner == "process-owner"
 
 
 def test_settings_can_allow_codex_outside_git_repository(monkeypatch):

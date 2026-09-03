@@ -77,7 +77,13 @@ def _http_error(error: Exception) -> HTTPException:
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
     elif isinstance(error, GiteaError):
-        if error.code == "GITEA_FORBIDDEN":
+        if error.code == "GITEA_UNAUTHORIZED":
+            code, message, code_status = (
+                error.code,
+                "The configured Gitea token is invalid or has been revoked.",
+                status.HTTP_401_UNAUTHORIZED,
+            )
+        elif error.code == "GITEA_FORBIDDEN":
             code, message, code_status = (
                 error.code,
                 "The configured Gitea identity is not allowed to perform this action.",

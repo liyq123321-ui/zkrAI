@@ -91,3 +91,41 @@ export function workItemPresentation(
   }
   return { cardLabel: '查看规划详情', detailKind: 'work-item' };
 }
+
+export type WorkItemLane = 'todo' | 'in_progress' | 'done';
+
+export function workItemLane(status: string | null | undefined): WorkItemLane {
+  const normalized = (status ?? 'todo').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['done', 'completed', 'complete', 'success', 'succeeded', 'closed'].includes(normalized)) {
+    return 'done';
+  }
+  if (['in_progress', 'active', 'running', 'processing', 'in_review', 'review', 'blocked'].includes(normalized)) {
+    return 'in_progress';
+  }
+  return 'todo';
+}
+
+export function workItemStatusLabel(status: string | null | undefined): string {
+  const normalized = (status ?? 'todo').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const labels: Record<string, string> = {
+    backlog: '待开始',
+    todo: '待开始',
+    pending: '待开始',
+    ready: '待开始',
+    queued: '待开始',
+    in_progress: '进行中',
+    active: '进行中',
+    running: '执行中',
+    processing: '处理中',
+    in_review: '评审中',
+    review: '评审中',
+    blocked: '受阻',
+    done: '已完成',
+    completed: '已完成',
+    complete: '已完成',
+    success: '已完成',
+    succeeded: '已完成',
+    closed: '已完成',
+  };
+  return labels[normalized] ?? status?.trim() ?? '待开始';
+}

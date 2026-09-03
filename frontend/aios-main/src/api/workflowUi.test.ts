@@ -6,7 +6,9 @@ import {
   nextPrdConfirmationStep,
   normalizeSessionId,
   reviewTaskRecoveryAction,
+  workItemLane,
   workItemPresentation,
+  workItemStatusLabel,
 } from './workflowUi';
 
 const state = (overrides: Partial<SessionStateDto> = {}): SessionStateDto => ({
@@ -72,6 +74,16 @@ describe('API workspace workflow presentation', () => {
       cardLabel: '查看规划详情',
       detailKind: 'work-item',
     });
+  });
+
+  it('places backend work-item states into the three task lanes', () => {
+    expect(workItemLane('todo')).toBe('todo');
+    expect(workItemLane('queued')).toBe('todo');
+    expect(workItemLane('in_progress')).toBe('in_progress');
+    expect(workItemLane('blocked')).toBe('in_progress');
+    expect(workItemLane('completed')).toBe('done');
+    expect(workItemLane(null)).toBe('todo');
+    expect(workItemStatusLabel('blocked')).toBe('受阻');
   });
 
   it('accepts an existing backend Session ID without creating a new Agent run', () => {
