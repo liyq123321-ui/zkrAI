@@ -1,12 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './client';
 import { ApiError } from './errors';
-import { createSession } from './sessions';
+import { commandTimeoutMs, createSession } from './sessions';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+function fetchUntilAborted() {
+  return vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      reject(new DOMException('aborted', 'AbortError'));
+    }, { once: true });
+  }));
+}
 
 describe('ApiClient', () => {
   it('parses JSON success and supports 204 responses', async () => {
@@ -36,6 +45,36 @@ describe('ApiClient', () => {
     const error = await client.request('/sessions/1/commands').catch((reason) => reason);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 409, code: 'STALE_STATE', retryable: false });
+  });
+
+  it('distinguishes an internal timeout from a caller cancellation', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', fetchUntilAborted());
+    const client = new ApiClient('http://backend.test');
+
+    const timedOut = client.request('/slow', { timeoutMs: 10 }).catch((reason) => reason);
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(timedOut).resolves.toMatchObject({
+      code: 'REQUEST_TIMEOUT',
+      retryable: true,
+    });
+
+    const caller = new AbortController();
+    const cancelled = client.request('/cancelled', { signal: caller.signal }).catch((reason) => reason);
+    caller.abort();
+    await expect(cancelled).resolves.toMatchObject({
+      code: 'REQUEST_ABORTED',
+      retryable: false,
+    });
+  });
+
+  it('allows two backend Agent calls to finish before timing out the command', () => {
+    expect(commandTimeoutMs('create_spec')).toBeGreaterThan(1_800_000);
+    expect(commandTimeoutMs('revise')).toBeGreaterThan(1_800_000);
+    expect(commandTimeoutMs('restore_spec_version')).toBeGreaterThan(1_800_000);
+    expect(commandTimeoutMs('convert_to_work_item')).toBeGreaterThan(1_800_000);
+    expect(commandTimeoutMs('message')).toBeGreaterThan(900_000);
+    expect(commandTimeoutMs('skip_clarification')).toBe(130_000);
   });
 
   it('never injects a browser actor into session creation', async () => {

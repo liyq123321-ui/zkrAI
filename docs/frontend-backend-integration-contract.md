@@ -193,6 +193,8 @@ src/api/
 - `expected_state_version`：始终取自最新 SessionState。
 - 命令成功后用响应中的完整 `state` 原子替换本地状态。
 - 遇到 `STALE_STATE` 时重新读取状态，让用户确认是否重新执行。
+- 前端超时预算不得短于后端 Agent 执行预算：普通事务 130 秒、单 Agent 975 秒、双 Agent 串联 1950 秒。
+- 内部计时器触发使用 `REQUEST_TIMEOUT`，调用方取消使用 `REQUEST_ABORTED`；超时后读取最新 Session，避免把后端已完成误报为失败。
 - 不对 `approve`、`reject`、`rework`、`revise`、`convert_to_work_item` 做静默自动重试。
 
 ### 8.3 UI 合法动作

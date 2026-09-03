@@ -1,5 +1,5 @@
 import { appConfig } from './config';
-import { normalizeNetworkError, responseToApiError } from './errors';
+import { ApiError, normalizeNetworkError, responseToApiError } from './errors';
 
 export interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
@@ -14,11 +14,18 @@ export class ApiClient {
 
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const controller = new AbortController();
+    let abortCause: 'timeout' | 'caller' | null = null;
     const timeoutId = globalThis.setTimeout(
-      () => controller.abort(),
+      () => {
+        if (!controller.signal.aborted) abortCause = 'timeout';
+        controller.abort();
+      },
       options.timeoutMs ?? this.defaultTimeoutMs,
     );
-    const abortFromCaller = () => controller.abort();
+    const abortFromCaller = () => {
+      if (!controller.signal.aborted) abortCause = 'caller';
+      controller.abort();
+    };
     options.signal?.addEventListener('abort', abortFromCaller, { once: true });
 
     try {
@@ -36,6 +43,14 @@ export class ApiClient {
       if (response.status === 204) return undefined as T;
       return (await response.json()) as T;
     } catch (error) {
+      if (abortCause === 'timeout') {
+        throw new ApiError({
+          status: 0,
+          code: 'REQUEST_TIMEOUT',
+          message: '请求处理超时，后台可能仍在执行。',
+          retryable: true,
+        });
+      }
       throw normalizeNetworkError(error);
     } finally {
       globalThis.clearTimeout(timeoutId);

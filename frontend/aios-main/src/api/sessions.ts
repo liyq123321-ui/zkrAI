@@ -10,12 +10,30 @@ import type {
   WorkItemDto,
 } from './dto';
 
+const STANDARD_COMMAND_TIMEOUT_MS = 130_000;
+const SINGLE_AGENT_COMMAND_TIMEOUT_MS = 975_000;
+const DOUBLE_AGENT_COMMAND_TIMEOUT_MS = 1_950_000;
+
+const DOUBLE_AGENT_ACTIONS = new Set<CommandAction>([
+  'create_spec',
+  'revise',
+  'restore_spec_version',
+  'convert_to_work_item',
+  'publish_review',
+]);
+
+export function commandTimeoutMs(action: CommandAction): number {
+  if (DOUBLE_AGENT_ACTIONS.has(action)) return DOUBLE_AGENT_COMMAND_TIMEOUT_MS;
+  if (action === 'message') return SINGLE_AGENT_COMMAND_TIMEOUT_MS;
+  return STANDARD_COMMAND_TIMEOUT_MS;
+}
+
 export function createSession(requestId: string, brief: ProjectBriefDto, signal?: AbortSignal) {
   return apiClient.request<SessionStateDto>('/sessions', {
     method: 'POST',
     body: { request_id: requestId, brief },
     signal,
-    timeoutMs: 130_000,
+    timeoutMs: SINGLE_AGENT_COMMAND_TIMEOUT_MS,
   });
 }
 
@@ -44,7 +62,7 @@ export function executeCommand(
       payload: input.payload ?? {},
     },
     signal,
-    timeoutMs: 130_000,
+    timeoutMs: commandTimeoutMs(input.action),
   });
 }
 

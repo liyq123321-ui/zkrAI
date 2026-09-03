@@ -299,6 +299,13 @@ export function ApiWorkspace() {
         pendingCommandIds.current.clear();
         await refreshResources(state.session_id).catch(() => undefined);
         setError('状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。');
+      } else if (normalized.code === 'REQUEST_TIMEOUT') {
+        const refreshed = await refreshResources(state.session_id).catch(() => null);
+        if (refreshed && refreshed.state.state_version !== state.state_version) {
+          setError(null);
+        } else {
+          setError('REQUEST_TIMEOUT：后台可能仍在执行。请稍后刷新页面，系统会从后端恢复最新状态。');
+        }
       } else {
         setError(errorText(reason));
       }
