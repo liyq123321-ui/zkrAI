@@ -9,7 +9,12 @@ from app.database.models import AgentCall, AgentSpec, AuditEvent, Project, SpecV
 from app.domain.types import AgentSpecProposal, CommandAction, ReviewFinding, ReviewVerdict, SemanticReview
 from app.schemas.workflow import SessionCommandRequest
 from app.services.command_service import CommandHandlerFailure, CommandHandlerRejected, CommandService
-from app.services.decomposition_service import DecompositionService, DecompositionNotAllowed, SemanticReviewRejected
+from app.services.decomposition_service import (
+    BreakdownReviewerFailure,
+    DecompositionNotAllowed,
+    DecompositionService,
+    SemanticReviewRejected,
+)
 from tests.helpers.fake_agent import ScriptedAgentGateway
 from tests.helpers.implementation_plans import implementation_plan
 from tests.helpers.scripted_codex import gateway_with_outputs
@@ -492,6 +497,57 @@ async def test_existing_rejection_is_revised_without_generating_a_new_breakdown(
     assert len(agent.calls) == 2
     assert agent.calls[0][1]["previous_breakdown"] == valid_breakdown.model_dump(mode="json")
     assert agent.calls[0][1]["previous_review_call_id"] == "old-review"
+
+
+@pytest.mark.asyncio
+async def test_failed_later_reviewer_does_not_hide_same_command_rejection(
+    session_factory,
+    db_session,
+    complete_brief,
+    valid_spec,
+    valid_breakdown,
+    passing_semantic_review,
+):
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([valid_breakdown] * 3),
+        review_breakdown_results=deque(
+            [
+                source_review(),
+                RuntimeError("round-one reviewer failed"),
+                passing_semantic_review,
+            ]
+        ),
+    )
+    decomposition = DecompositionService(session_factory, agent)
+
+    with pytest.raises(BreakdownReviewerFailure, match="round-one reviewer failed"):
+        await decomposition.prepare(
+            project.id,
+            command_id="resume-review-failure",
+            input_hash="same-input",
+        )
+
+    with session_factory() as db:
+        rejected_call = db.query(AgentCall).filter_by(
+            project_id=project.id,
+            operation="review_breakdown",
+            status="RESULT_READY",
+        ).one()
+
+    prepared = await decomposition.prepare(
+        project.id,
+        command_id="resume-review-failure",
+        input_hash="same-input",
+    )
+
+    with session_factory() as db:
+        final_decompose_payload = db.get(
+            AgentCall, prepared.pm_agent_call_id
+        ).request
+    assert final_decompose_payload["repair_round"] == 1
+    assert final_decompose_payload["previous_review_call_id"] == rejected_call.id
+    assert final_decompose_payload["review_feedback"] == rejected_call.response
 
 
 @pytest.mark.asyncio

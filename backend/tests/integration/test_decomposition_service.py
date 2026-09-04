@@ -13,7 +13,11 @@ from app.domain.types import CommandAction
 from app.schemas.workflow import SessionCommandRequest
 from app.agents.codex import build_node_prompt
 from app.services.command_service import ActionScopedUnitOfWork, CommandHandlerFailure, CommandHandlerRejected, CommandService
-from app.services.decomposition_service import BreakdownValidationError, DecompositionService
+from app.services.decomposition_service import (
+    BreakdownValidationError,
+    DecompositionPlanningFailure,
+    DecompositionService,
+)
 from tests.helpers.fake_agent import ScriptedAgentGateway
 from tests.helpers.factories import make_valid_breakdown
 from tests.helpers.implementation_plans import implementation_plan
@@ -180,6 +184,11 @@ async def test_dependency_task_planner_receives_validated_upstream_contract(
     assert api_payload["dependency_contract_hashes"] == {
         "t-domain": api_payload["dependency_contracts"][0]["contract_hash"]
     }
+    assert all(
+        "implementation_plan" not in related
+        for payload in planner_payloads.values()
+        for related in payload["related_tasks"]
+    )
 
 
 @pytest.mark.asyncio
@@ -289,6 +298,49 @@ async def test_staged_checkpoint_is_not_reused_after_approved_spec_changes(
 
     assert len(created) == 2
     assert [operation for operation, _ in agent.calls].count("decompose_spec") == 2
+
+
+@pytest.mark.asyncio
+async def test_snapshot_change_before_first_plan_keeps_base_call_evidence(
+    session_factory,
+    db_session,
+    complete_brief,
+    valid_spec,
+    valid_breakdown,
+    monkeypatch,
+):
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    agent = ScriptedAgentGateway(decompose_results=deque([base]))
+    decomposition = DecompositionService(session_factory, agent)
+    original_plan_task = decomposition._plan_task
+    snapshot_changed = False
+
+    async def change_snapshot_before_plan(*args, **kwargs):
+        nonlocal snapshot_changed
+        if not snapshot_changed:
+            with session_factory() as db:
+                version = db.get(SpecVersion, project.current_spec_version_id)
+                version.content_hash = "e" * 64
+                db.commit()
+            snapshot_changed = True
+        return await original_plan_task(*args, **kwargs)
+
+    monkeypatch.setattr(decomposition, "_plan_task", change_snapshot_before_plan)
+
+    with pytest.raises(
+        DecompositionPlanningFailure,
+        match="approved Spec changed during decomposition",
+    ) as error:
+        await decomposition.convert(project.id)
+
+    assert [operation for operation, _ in agent.calls] == ["decompose_spec"]
+    with session_factory() as db:
+        calls = db.query(AgentCall).filter_by(project_id=project.id).all()
+    assert [call.operation for call in calls] == ["decompose_spec"]
+    assert error.value.agent_call_ids == [calls[0].id]
 
 
 @pytest.mark.asyncio
@@ -589,6 +641,25 @@ async def test_structural_failure_prevents_reviewer_execution(
     with pytest.raises(BreakdownValidationError, match="MISSING_OUTPUT"):
         await DecompositionService(session_factory, agent).convert(project.id)
 
+    assert [operation for operation, _ in agent.calls] == ["decompose_spec"]
+
+
+@pytest.mark.asyncio
+async def test_milestone_dependency_is_rejected_before_task_planning(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown
+):
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    base.tasks[1].dependency_keys = ["m-api"]
+    base.agent_specs[1].dependency_keys = ["m-api"]
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    agent = ScriptedAgentGateway(decompose_results=deque([base]))
+
+    with pytest.raises(BreakdownValidationError) as error:
+        await DecompositionService(session_factory, agent).convert(project.id)
+
+    assert error.value.code == "INVALID_DEPENDENCY_TARGET"
     assert [operation for operation, _ in agent.calls] == ["decompose_spec"]
 
 

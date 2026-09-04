@@ -53,7 +53,7 @@ class BreakdownReviewerFailure(RuntimeError):
 
     def __init__(self, message: str, agent_call_ids: list[str]) -> None:
         self.agent_call_ids = list(agent_call_ids)
-        self.agent_call_id = self.agent_call_ids[-1]
+        self.agent_call_id = self.agent_call_ids[-1] if self.agent_call_ids else None
         super().__init__(message)
 
 
@@ -284,6 +284,15 @@ def validate_breakdown(
                 _error("INVALID_DEPENDENCY", proposal.local_key, "dependency key must not be blank")
             if dependency_key not in by_key:
                 _error("UNKNOWN_DEPENDENCY", proposal.local_key, f"dependency {dependency_key!r} is not proposed")
+            if (
+                proposal.kind is WorkItemKind.TASK
+                and by_key[dependency_key].kind is not WorkItemKind.TASK
+            ):
+                _error(
+                    "INVALID_DEPENDENCY_TARGET",
+                    proposal.local_key,
+                    f"dependency {dependency_key!r} must target an executable task",
+                )
 
     dependency_edges = {proposal.local_key: set(proposal.dependency_keys) for proposal in proposals}
     leftovers = _kahn_leftovers(dependency_edges)
@@ -349,6 +358,12 @@ def validate_breakdown(
                 _error("INVALID_DEPENDENCY", key, "dependency key must not be blank")
             if dependency_key not in by_key:
                 _error("UNKNOWN_DEPENDENCY", key, f"dependency {dependency_key!r} is not proposed")
+            if by_key[dependency_key].kind is not WorkItemKind.TASK:
+                _error(
+                    "INVALID_DEPENDENCY_TARGET",
+                    key,
+                    f"dependency {dependency_key!r} must target an executable task",
+                )
         if set(proposal.dependency_keys) != set(by_key[key].dependency_keys):
             _error("DEPENDENCY_MISMATCH", key, "AgentSpec dependencies must match its task prerequisites")
 
@@ -543,6 +558,8 @@ class DecompositionService:
                     or request.get("source_spec_content_hash") != snapshot.content_hash
                     or tuple(request.get("input_refs", [])) != snapshot.input_refs
                     or request.get("approved_spec") != snapshot.content):
+                continue
+            if call.status == "FAILED":
                 continue
             if call.status != "RESULT_READY":
                 return None
@@ -1031,7 +1048,9 @@ class DecompositionService:
                 ),
                 "approved_spec": json.loads(json.dumps(dict(snapshot.content))),
                 "related_tasks": [
-                    related.model_dump(mode="json")
+                    related.model_dump(
+                        mode="json", exclude={"implementation_plan"}
+                    )
                     for related in breakdown.agent_specs
                     if related.work_item_key != task.work_item_key
                 ],
