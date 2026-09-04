@@ -68,12 +68,12 @@ describe('ApiClient', () => {
     });
   });
 
-  it('allows two backend Agent calls to finish before timing out the command', () => {
-    expect(commandTimeoutMs('create_spec')).toBeGreaterThan(1_800_000);
-    expect(commandTimeoutMs('revise')).toBeGreaterThan(1_800_000);
-    expect(commandTimeoutMs('restore_spec_version')).toBeGreaterThan(1_800_000);
-    expect(commandTimeoutMs('convert_to_work_item')).toBeGreaterThan(1_800_000);
-    expect(commandTimeoutMs('message')).toBeGreaterThan(900_000);
+  it('allows the configured backend Agent calls to finish before timing out the command', () => {
+    expect(commandTimeoutMs('create_spec')).toBe(4_150_000);
+    expect(commandTimeoutMs('revise')).toBe(4_150_000);
+    expect(commandTimeoutMs('restore_spec_version')).toBe(4_150_000);
+    expect(commandTimeoutMs('convert_to_work_item')).toBe(4_150_000);
+    expect(commandTimeoutMs('message')).toBe(2_075_000);
     expect(commandTimeoutMs('skip_clarification')).toBe(130_000);
   });
 
