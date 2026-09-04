@@ -38,7 +38,30 @@ def _breakdown_with_context_refs(payload):
     )
 
 
-def _app(session_factory):
+def _breakdown_with_two_prerequisites(payload):
+    breakdown = _breakdown_with_context_refs(payload)
+    storage_task = breakdown.tasks[0].model_copy(
+        update={"local_key": "t-storage", "title": "Define storage contracts"},
+        deep=True,
+    )
+    storage_spec = breakdown.agent_specs[0].model_copy(
+        update={
+            "work_item_key": "t-storage",
+            "objective": "Implement the storage contracts",
+        },
+        deep=True,
+    )
+    # Keep the completed dependency last so the old scalar projection would
+    # incorrectly forget the still-blocking storage prerequisite.
+    dependency_keys = ["t-storage", "t-domain"]
+    breakdown.tasks.append(storage_task)
+    breakdown.agent_specs.append(storage_spec)
+    breakdown.tasks[1].dependency_keys = dependency_keys
+    breakdown.agent_specs[1].dependency_keys = dependency_keys
+    return breakdown
+
+
+def _app(session_factory, breakdown_factory=_breakdown_with_context_refs):
     agent = ScriptedAgentGateway(
         analyze_results=deque(
             [ClarificationAnalysis(ready_for_spec=True, questions=[], assumptions=[])]
@@ -46,7 +69,7 @@ def _app(session_factory):
         generate_results=deque([make_valid_spec()]),
         review_results=deque([make_passing_semantic_review()]),
         review_breakdown_results=deque([make_passing_semantic_review()]),
-        decompose_results=deque([_breakdown_with_context_refs]),
+        decompose_results=deque([breakdown_factory]),
     )
     return create_app(agent_gateway=agent, session_factory=session_factory)
 
@@ -174,6 +197,46 @@ def test_starting_a_blocked_task_is_rejected(ready_state):
     code = _reject(client, state, "start-blocked", "start_task",
                    {"work_item_id": api["id"]})
     assert code == "VALIDATION_ERROR"
+
+
+def test_starting_task_requires_every_prerequisite(session_factory):
+    """Completing one of two prerequisites must not authorize a forged start."""
+
+    with TestClient(
+        _app(session_factory, _breakdown_with_two_prerequisites)
+    ) as client:
+        state = _reach_agent_specs_ready(client)
+        items = _items(client, state["session_id"])
+        domain = _by_key(items, "t-domain")
+        storage = _by_key(items, "t-storage")
+        api = _by_key(items, "t-api")
+
+        assert set(api["dependency_work_item_ids"]) == {domain["id"], storage["id"]}
+        state = _run(
+            client,
+            state,
+            "start-one-of-two",
+            "start_task",
+            {"work_item_id": domain["id"]},
+        )
+        state = _run(
+            client,
+            state,
+            "complete-one-of-two",
+            "complete_task",
+            {"work_item_id": domain["id"]},
+        )
+
+        assert _by_key(_items(client, state["session_id"]), "t-api")[
+            "available_actions"
+        ] == []
+        assert _reject(
+            client,
+            state,
+            "start-with-one-of-two",
+            "start_task",
+            {"work_item_id": api["id"]},
+        ) == "VALIDATION_ERROR"
 
 
 def test_start_task_twice_is_rejected(ready_state):
