@@ -83,6 +83,15 @@ def _repair_required_outputs(
             agent_spec.outputs[0].required = True
 
 
+def _normalize_base_breakdown(
+    result: WorkBreakdown | WorkBreakdownRevision,
+) -> None:
+    """Keep the structural stage small even if the Agent emitted full plans."""
+
+    for agent_spec in result.agent_specs:
+        agent_spec.implementation_plan = None
+
+
 def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str, object]) -> WorkBreakdown:
     previous = WorkBreakdown.model_validate(payload.get("previous_breakdown"))
     merged = previous.model_dump(mode="json")
@@ -105,6 +114,8 @@ def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str,
 def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
     """Repair structural omissions; human decisions remain in the review workflow."""
     if isinstance(result, (WorkBreakdown, WorkBreakdownRevision)):
+        if payload.get("decomposition_stage") == "base":
+            _normalize_base_breakdown(result)
         _repair_required_outputs(result)
         allowed_refs = {
             reference
@@ -156,7 +167,13 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
             raise ValueError("decomposition requires an approved_spec snapshot")
         snapshot = {**approved, "source_refs": payload.get("input_refs", approved.get("source_refs", []))}
         try:
-            validate_breakdown(result, snapshot)
+            validate_breakdown(
+                result,
+                snapshot,
+                require_implementation_plan=(
+                    payload.get("decomposition_stage") != "base"
+                ),
+            )
         except BreakdownValidationError as error:
             # A genuinely unresolved decision still fails through the service gate.
             if error.code in {"BLOCKING_OPEN_QUESTION", "UNACCEPTED_RISK"}:

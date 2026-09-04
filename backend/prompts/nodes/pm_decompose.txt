@@ -26,6 +26,8 @@ needs a required output, consistent dependencies and its own Agent Spec. A requi
 output is a future deliverable, not a claim that implementation has been completed.
 When validation diagnostics are supplied, repair the complete connected proposal
 and return the full breakdown, preserving all valid tasks and approved scope.
+When the trusted payload identifies the base decomposition stage, leave every
+implementation_plan null; later task-specific calls provide those plans.
 
 If previous_breakdown and review_feedback are present, revise that existing
 breakdown against the same approved_spec. Address each applicable finding and

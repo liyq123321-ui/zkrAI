@@ -136,6 +136,26 @@ async def test_decomposition_repairs_related_structural_gaps(
 
 
 @pytest.mark.asyncio
+async def test_base_decomposition_discards_embedded_plans_before_validation(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown
+):
+    """A base-stage response must not fail because the model emitted a bad full plan."""
+
+    candidate = valid_breakdown.model_copy(deep=True)
+    candidate.agent_specs[0].implementation_plan.steps[0].requirement_ids = ["FR-999"]
+    gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [candidate])
+
+    result = await gateway.decompose_spec({
+        "decomposition_stage": "base",
+        "approved_spec": valid_spec.model_dump(mode="json"),
+        "input_refs": valid_spec.source_refs,
+    })
+
+    assert all(task.implementation_plan is None for task in result.agent_specs)
+    assert len(prompts) == 1
+
+
+@pytest.mark.asyncio
 async def test_decomposition_promotes_only_the_first_output_when_all_are_optional(
     tmp_path, monkeypatch, valid_spec, valid_breakdown
 ):

@@ -275,7 +275,18 @@ class CodexAgentGateway:
         self, node_name: str, payload: dict[str, object], output_type: type[ModelT]
     ) -> ModelT:
         objective = (NODE_PROMPT_DIR / f"{node_name}.txt").read_text(encoding="utf-8")
-        if node_name in {"pm_decompose", "pm_revise_breakdown", "pm_plan_task", "reviewer_breakdown"}:
+        base_decomposition = (
+            node_name in {"pm_decompose", "pm_revise_breakdown"}
+            and payload.get("decomposition_stage") == "base"
+        )
+        if base_decomposition:
+            objective += (
+                "\n\nThis is the base decomposition stage. Set implementation_plan to null "
+                "for every Agent Spec. Produce only task boundaries, dependencies, outputs, "
+                "acceptance mappings and execution constraints; detailed plans are generated "
+                "by separate per-task calls."
+            )
+        elif node_name in {"pm_decompose", "pm_revise_breakdown", "pm_plan_task", "reviewer_breakdown"}:
             objective += "\n\n" + (NODE_PROMPT_DIR / "task_implementation_rules.txt").read_text(encoding="utf-8")
         prompt = build_node_prompt(objective=objective, input_payload=payload)
         if node_name in {"pm_generate_spec", "pm_rewrite_prd", "pm_decompose", "pm_revise_breakdown", "pm_plan_task"}:
