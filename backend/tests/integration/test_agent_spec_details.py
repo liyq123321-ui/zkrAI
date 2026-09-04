@@ -188,6 +188,88 @@ async def test_enrichment_plans_dependency_order_in_waves_with_durable_contracts
 
 
 @pytest.mark.asyncio
+async def test_reconstruct_preserves_declared_direct_dependency_order(
+    legacy_project, session_factory
+):
+    with session_factory() as db:
+        items = {item.local_key: item for item in db.query(WorkItem).all()}
+        api_spec = db.query(AgentSpec).filter_by(
+            work_item_id=items["t-api"].id
+        ).one()
+        db.add(
+            WorkItemDependency(
+                id="declared-order-edge",
+                project_id=legacy_project,
+                from_work_item_id=items["t-api"].id,
+                to_work_item_id=items["extra-1"].id,
+            )
+        )
+        declared_ids = [items["t-domain"].id, items["extra-1"].id]
+        content = deepcopy(api_spec.content)
+        content["dependency_work_item_ids"] = declared_ids
+        api_spec.dependency_work_item_ids = declared_ids
+        api_spec.content = content
+        api_spec.content_hash = _canonical_hash(content)
+        db.commit()
+
+    api_payload = None
+
+    async def plan(payload):
+        nonlocal api_payload
+        if payload["task_spec"]["work_item_key"] == "t-api":
+            api_payload = deepcopy(payload)
+        return good_plan(payload)
+
+    await service(
+        session_factory,
+        SimpleNamespace(plan_task=plan, review_breakdown=pass_review),
+    ).enrich(legacy_project, "approver-1")
+
+    assert api_payload is not None
+    assert api_payload["task_spec"]["dependency_keys"] == [
+        "t-domain",
+        "extra-1",
+    ]
+    assert [
+        contract["work_item_key"]
+        for contract in api_payload["dependency_contracts"]
+    ] == ["t-domain", "extra-1"]
+
+
+@pytest.mark.asyncio
+async def test_reviewer_plan_evidence_follows_canonical_agent_spec_order(
+    legacy_project, session_factory
+):
+    review_payload = None
+
+    async def plan(payload):
+        return good_plan(payload)
+
+    async def review(payload):
+        nonlocal review_payload
+        review_payload = deepcopy(payload)
+        return await pass_review(payload)
+
+    await service(
+        session_factory,
+        SimpleNamespace(plan_task=plan, review_breakdown=review),
+    ).enrich(legacy_project, "approver-1")
+
+    assert review_payload is not None
+    canonical_keys = [
+        task["work_item_key"]
+        for task in review_payload["canonical_breakdown"]["agent_specs"]
+    ]
+    with session_factory() as db:
+        evidence_keys = [
+            db.get(AgentCall, call_id).request["task_spec"]["work_item_key"]
+            for call_id in review_payload["plan_agent_call_ids"]
+        ]
+    assert canonical_keys == ["extra-1", "extra-2", "t-api", "t-domain"]
+    assert evidence_keys == canonical_keys
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["plan", "invalid_plan", "review", "human", "need_info", "blocking_pass"])
 async def test_failure_never_partially_saves_and_keeps_call_evidence(legacy_project, session_factory, failure):
     before = state(session_factory)
@@ -371,6 +453,54 @@ async def test_only_missing_plans_are_generated_and_existing_plan_is_retained(le
     assert next(s for s in result if s.id == existing_id).content["implementation_plan"] == original_plan
     with session_factory() as db:
         assert db.query(AgentCall).filter_by(operation="plan_task").count() == 3
+
+
+@pytest.mark.asyncio
+async def test_missing_producer_replans_existing_consumers_but_retains_unrelated_plans(
+    legacy_project, session_factory
+):
+    with session_factory() as db:
+        items = {item.local_key: item for item in db.query(WorkItem).all()}
+        specs = {
+            item.local_key: db.query(AgentSpec).filter_by(work_item_id=item.id).one()
+            for item in items.values()
+            if item.kind == "TASK"
+        }
+        retained = {}
+        for key in ("extra-1", "t-api"):
+            spec = specs[key]
+            content = deepcopy(spec.content)
+            plan = good_plan({"task_spec": content}).model_dump(mode="json")
+            plan["overview"] = f"existing {key} plan"
+            content["implementation_plan"] = plan
+            spec.content = content
+            spec.content_hash = _canonical_hash(content)
+            retained[key] = deepcopy(plan)
+        db.commit()
+
+    planned = []
+
+    async def plan(payload):
+        key = payload["task_spec"]["work_item_key"]
+        planned.append(key)
+        result = good_plan(payload)
+        result.overview = f"regenerated {key} plan"
+        return result
+
+    result = await service(
+        session_factory,
+        SimpleNamespace(plan_task=plan, review_breakdown=pass_review),
+    ).enrich(legacy_project, "approver-1")
+
+    assert planned == ["extra-2", "t-domain", "t-api"]
+    with session_factory() as db:
+        keys_by_id = {item.id: item.local_key for item in db.query(WorkItem).all()}
+    plans = {
+        keys_by_id[spec.work_item_id]: spec.content["implementation_plan"]
+        for spec in result
+    }
+    assert plans["extra-1"] == retained["extra-1"]
+    assert plans["t-api"]["overview"] == "regenerated t-api plan"
 
 
 @pytest.mark.asyncio

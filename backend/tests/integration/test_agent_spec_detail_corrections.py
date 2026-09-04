@@ -47,13 +47,13 @@ def evidence(factory):
 
 
 @pytest.mark.asyncio
-async def test_queued_planner_sees_completed_peer_plan_but_not_pending_peer(
+async def test_queued_planner_never_sees_timing_dependent_peer_plans(
     legacy_project, session_factory,
 ):
     before = state(session_factory)
     first_two_started, third_started = asyncio.Event(), asyncio.Event()
     release_first, release_rest = asyncio.Event(), asyncio.Event()
-    started, returned = [], {}
+    started = []
     active = peak = 0
 
     async def plan(payload):
@@ -73,7 +73,6 @@ async def test_queued_planner_sees_completed_peer_plan_but_not_pending_peer(
                 await release_rest.wait()
             result = good_plan(payload)
             result.interfaces[0].name = "CreateSession"
-            returned[index] = result.model_dump(mode="json")
             return result
         finally:
             active -= 1
@@ -90,11 +89,13 @@ async def test_queued_planner_sees_completed_peer_plan_but_not_pending_peer(
         release_first.set()
         await asyncio.wait_for(third_started.wait(), timeout=5)
         assert len(started) == 3 and active == 2
-        peers = {task["work_item_key"]: task for task in started[2]["related_tasks"]}
-        first_key, second_key = [payload["task_spec"]["work_item_key"] for payload in started[:2]]
-        assert peers[first_key]["implementation_plan"] == returned[0]
-        assert peers[second_key]["implementation_plan"] is None
-        assert "producer contracts" in started[2]["planning_guidance"]
+        assert all(
+            "implementation_plan" not in peer
+            for payload in started
+            for peer in payload["related_tasks"]
+        )
+        assert "dependency_contracts" in started[2]["planning_guidance"]
+        assert "only authoritative" in started[2]["planning_guidance"]
         assert "explicit adapters" in started[2]["planning_guidance"]
         assert state(session_factory) == before
     finally:
