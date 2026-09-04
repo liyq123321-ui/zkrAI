@@ -15,6 +15,7 @@ from app.domain.implementation_plan import ImplementationPlan
 from app.domain.types import AgentSpecProposal, ReviewVerdict, SemanticReview, WorkBreakdown, WorkItemProposal
 from app.services.command_service import assert_reviewer
 from app.services.decomposition_service import ApprovedSpecSnapshot, DecompositionService, _canonical_hash, _new_id, _now, validate_breakdown
+from app.services.task_plan_graph import dependency_contracts, topological_plan_waves, transitive_dependent_keys
 from app.services.task_specifications import requirement_snapshots, validate_implementation_plan
 
 
@@ -115,7 +116,7 @@ class AgentSpecDetailService:
                 raise ValueError(f"AgentSpec {spec.id} has inconsistent source, content hash, task or dependencies")
             fields = {key: deepcopy(value) for key, value in content.items() if key in AgentSpecProposal.model_fields}
             fields.update(work_item_key=keys[spec.work_item_id],
-                          dependency_keys=sorted(keys[dep] for dep in spec.dependency_work_item_ids))
+                          dependency_keys=[keys[dep] for dep in spec.dependency_work_item_ids])
             task = AgentSpecProposal.model_validate(fields)
             if "requirements" in content and content["requirements"] != requirement_snapshots(task, dict(approved.content)):
                 raise ValueError(f"AgentSpec {spec.id} requirements differ from the approved PRD")
@@ -127,7 +128,19 @@ class AgentSpecDetailService:
     async def enrich(self, project_id: str, actor_id: str) -> list[AgentSpec]:
         with self._session_factory() as db:
             snapshot = self._snapshot(db, project_id, actor_id)
-        targets = [task for task in snapshot.breakdown.agent_specs if task.implementation_plan is None]
+        missing_keys = {
+            task.work_item_key
+            for task in snapshot.breakdown.agent_specs
+            if task.implementation_plan is None
+        }
+        target_keys = (
+            transitive_dependent_keys(snapshot.breakdown.agent_specs, missing_keys)
+            if missing_keys else set()
+        )
+        targets = [
+            task for task in snapshot.breakdown.agent_specs
+            if task.work_item_key in target_keys
+        ]
         if not targets and all("requirements" in spec.content for spec in snapshot.specs):
             return snapshot.specs
         call_ids, adopted = [], {}
@@ -135,23 +148,30 @@ class AgentSpecDetailService:
             previous_review, previous_review_id = None, None
             for repair_round in range(3):
                 # Settle every in-flight call before returning a failure; no orphaned PENDING calls.
-                results = await asyncio.gather(*(self._plan(snapshot, task, actor_id, call_ids, repair_round,
-                                                         previous_review, previous_review_id)
-                                                 for task in targets), return_exceptions=True)
-                for result in results:
-                    if isinstance(result, BaseException):
-                        raise result
-                for task, (plan, call_id) in zip(targets, results):
-                    task.implementation_plan = plan
-                    adopted[task.work_item_key] = call_id
+                target_keys = {task.work_item_key for task in targets}
+                for wave in topological_plan_waves(snapshot.breakdown.agent_specs, target_keys):
+                    results = await asyncio.gather(*(self._plan(snapshot, task, actor_id, call_ids, repair_round,
+                                                             previous_review, previous_review_id)
+                                                     for task in wave), return_exceptions=True)
+                    for result in results:
+                        if isinstance(result, BaseException):
+                            raise result
+                    for task, (plan, call_id) in zip(wave, results, strict=True):
+                        task.implementation_plan = plan
+                        adopted[task.work_item_key] = call_id
                 validate_breakdown(snapshot.breakdown, snapshot.approved, require_implementation_plan=True)
+                plan_agent_call_ids = [
+                    adopted[task.work_item_key]
+                    for task in snapshot.breakdown.agent_specs
+                    if task.work_item_key in adopted
+                ]
                 payload = self._decomposition._reviewer_payload(project_id, snapshot.approved, snapshot.breakdown,
                                                                command_id=None, input_hash=None)
                 payload.update(self._binding(snapshot, actor_id), repair_round=repair_round,
-                               plan_agent_call_ids=list(adopted.values()), previous_review_call_id=previous_review_id)
+                               plan_agent_call_ids=plan_agent_call_ids, previous_review_call_id=previous_review_id)
                 review, reviewer_id = await self._call(project_id, "review_breakdown", payload, call_ids, SemanticReview)
                 if not self._decomposition._review_blocks(review):
-                    return self._persist(snapshot, actor_id, call_ids, [*adopted.values(), reviewer_id])
+                    return self._persist(snapshot, actor_id, call_ids, [*plan_agent_call_ids, reviewer_id])
                 if repair_round == 2 or not self._decomposition._can_repair_review(review):
                     raise AgentSpecDetailsReviewRejected(
                         "Reviewer blocked enrichment; resolve human decisions or review findings before retrying", call_ids)
@@ -259,21 +279,27 @@ class AgentSpecDetailService:
                                               "legacy output names/formats in expected_output, interfaces and data definitions "
                                               "using concrete proposed formats; record these choices as PROPOSED design_decisions. "
                                               "Never propagate placeholders as implementation definitions or claim proposed formats "
-                                              "are already approved. Do not rewrite the original outputs. Reuse producer contracts "
-                                              "from already-returned related_tasks implementation_plan values, or define explicit adapters "
-                                              "where needed. Do not invent renamed equivalent types."),
-                           related_tasks=[other.model_dump(mode="json") for other in snapshot.breakdown.agent_specs
+                                              "are already approved. Do not rewrite the original outputs. Treat dependency_contracts "
+                                              "as the only authoritative producer contracts; reuse them exactly or define explicit adapters "
+                                              "where needed. related_tasks are plan-free context only. Do not invent renamed equivalent types."),
+                           related_tasks=[other.model_dump(mode="json", exclude={"implementation_plan"})
+                                          for other in snapshot.breakdown.agent_specs
                                           if other.work_item_key != task.work_item_key], repair_round=repair_round)
             if review is not None:
                 payload.update(previous_plan=task.implementation_plan.model_dump(mode="json"),
                                review_feedback=review, previous_review_call_id=review_id)
+            contracts = dependency_contracts(
+                task, {other.work_item_key: other for other in snapshot.breakdown.agent_specs},
+            )
+            payload["dependency_contracts"] = contracts
+            payload["dependency_contract_hashes"] = {
+                str(contract["work_item_key"]): str(contract["contract_hash"])
+                for contract in contracts
+            }
             approved_ids = {r["requirement_id"] for section in ("functional_requirements", "non_functional_requirements")
                             for r in snapshot.approved.content.get(section, [])}
             plan, call_id = await self._call(snapshot.rows["project"]["id"], "plan_task", payload, call_ids, ImplementationPlan,
                                            lambda plan: validate_implementation_plan(plan, task, approved_ids))
-            # Publish validated contracts to queued planners before releasing the slot.
-            # AgentSpec persistence still waits for the whole round and a passing review.
-            task.implementation_plan = plan
             return plan, call_id
 
     async def _call(self, project_id, operation, payload, call_ids, output_type, validate=None):
@@ -315,6 +341,7 @@ class AgentSpecDetailService:
             if match is None or match[1] not in keys:
                 return breakdown.agent_specs
             targets.add(match[1])
+        targets = transitive_dependent_keys(breakdown.agent_specs, targets)
         return [task for task in breakdown.agent_specs if task.work_item_key in targets]
 
     def _persist(self, snapshot, actor_id, call_ids, adopted_ids):

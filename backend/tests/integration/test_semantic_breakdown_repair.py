@@ -8,8 +8,13 @@ import pytest
 from app.database.models import AgentCall, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem
 from app.domain.types import AgentSpecProposal, CommandAction, ReviewFinding, ReviewVerdict, SemanticReview
 from app.schemas.workflow import SessionCommandRequest
-from app.services.command_service import CommandHandlerRejected, CommandService
-from app.services.decomposition_service import DecompositionService, DecompositionNotAllowed, SemanticReviewRejected
+from app.services.command_service import CommandHandlerFailure, CommandHandlerRejected, CommandService
+from app.services.decomposition_service import (
+    BreakdownReviewerFailure,
+    DecompositionNotAllowed,
+    DecompositionService,
+    SemanticReviewRejected,
+)
 from tests.helpers.fake_agent import ScriptedAgentGateway
 from tests.helpers.implementation_plans import implementation_plan
 from tests.helpers.scripted_codex import gateway_with_outputs
@@ -80,6 +85,168 @@ async def test_staged_review_repairs_only_the_implicated_task_plan(
 
 
 @pytest.mark.asyncio
+async def test_upstream_plan_repair_cascades_to_dependents_with_repaired_contract(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+    passing_semantic_review,
+):
+    """Repairing an upstream interface must regenerate every dependent handoff."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    initial_domain = _plan_for(base.agent_specs[0])
+    repaired_domain = initial_domain.model_copy(deep=True)
+    repaired_domain.overview = "Repaired domain handoff contract."
+    rejected = SemanticReview(verdict=ReviewVerdict.REJECT, findings=[
+        ReviewFinding(
+            code="DOMAIN_CONTRACT", severity="BLOCKER",
+            spec_path="agent_specs[t-domain].implementation_plan.interfaces[0]",
+            message="The domain contract needs repair.",
+            suggested_resolution="Regenerate the domain plan.", blocks_progress=True,
+        )
+    ])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            initial_domain,
+            _plan_for(base.agent_specs[1]),
+            repaired_domain,
+            _plan_for(base.agent_specs[1]),
+        ]),
+        review_breakdown_results=deque([rejected, passing_semantic_review]),
+    )
+
+    await DecompositionService(session_factory, agent).convert(project.id)
+
+    planner_payloads = [
+        payload for operation, payload in agent.calls if operation == "plan_task"
+    ]
+    assert [payload["task_spec"]["work_item_key"] for payload in planner_payloads] == [
+        "t-domain", "t-api", "t-domain", "t-api",
+    ]
+    assert planner_payloads[3]["dependency_contracts"][0]["implementation_plan"] == repaired_domain.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_leaf_plan_repair_keeps_upstream_plan_and_uses_its_contract(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+    passing_semantic_review,
+):
+    """Repairing a leaf plan must preserve its unaffected upstream plan."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    domain_plan = _plan_for(base.agent_specs[0])
+    rejected = SemanticReview(verdict=ReviewVerdict.REJECT, findings=[
+        ReviewFinding(
+            code="API_CONTRACT", severity="BLOCKER",
+            spec_path="agent_specs[t-api].implementation_plan.interfaces[0]",
+            message="The API contract needs repair.",
+            suggested_resolution="Regenerate the API plan.", blocks_progress=True,
+        )
+    ])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            domain_plan,
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+        ]),
+        review_breakdown_results=deque([rejected, passing_semantic_review]),
+    )
+
+    await DecompositionService(session_factory, agent).convert(project.id)
+
+    planner_payloads = [
+        payload for operation, payload in agent.calls if operation == "plan_task"
+    ]
+    assert [payload["task_spec"]["work_item_key"] for payload in planner_payloads] == [
+        "t-domain", "t-api", "t-api",
+    ]
+    assert planner_payloads[2]["dependency_contracts"][0]["implementation_plan"] == domain_plan.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_recovery_replans_stale_dependent_contract_and_adopts_independent_task(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+):
+    """A changed upstream checkpoint invalidates only dependent task checkpoints."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    independent_task = base.tasks[0].model_copy(deep=True)
+    independent_task.local_key = "t-independent"
+    independent_task.dependency_keys = []
+    independent_spec = base.agent_specs[0].model_copy(deep=True)
+    independent_spec.work_item_key = "t-independent"
+    independent_spec.dependency_keys = []
+    base.tasks.append(independent_task)
+    base.agent_specs.append(independent_spec)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+
+    initial_domain = _plan_for(base.agent_specs[0])
+    repaired_domain = initial_domain.model_copy(deep=True)
+    repaired_domain.overview = "Recovered domain contract differs from the old one."
+    initial_api = _plan_for(base.agent_specs[1])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            initial_domain,
+            _plan_for(independent_spec),
+            RuntimeError("api planner failed"),
+            initial_api,
+        ]),
+    )
+    commands = command_service(session_factory, agent)
+    first_request = SessionCommandRequest(
+        command_id="checkpoint-contract-1", action=CommandAction.CONVERT_TO_WORK_ITEM,
+        expected_state_version=7, actor_id="owner",
+    )
+    with pytest.raises(CommandHandlerFailure, match="api planner failed"):
+        await commands.execute(project.session_id, first_request)
+
+    with session_factory() as db:
+        domain_call = next(
+            call for call in db.query(AgentCall).filter_by(
+                project_id=project.id, operation="plan_task", status="RESULT_READY",
+            ) if call.request["task_spec"]["work_item_key"] == "t-domain"
+        )
+        stale_api_call = next(
+            call for call in db.query(AgentCall).filter_by(
+                project_id=project.id, operation="plan_task", status="FAILED",
+            ) if call.request["task_spec"]["work_item_key"] == "t-api"
+        )
+        domain_call.response = repaired_domain.model_dump(mode="json")
+        stale_api_call.status = "RESULT_READY"
+        stale_api_call.response = initial_api.model_dump(mode="json")
+        stale_api_call.error = None
+        db.commit()
+
+    await commands.execute(project.session_id, SessionCommandRequest(
+        command_id="checkpoint-contract-2", action=CommandAction.CONVERT_TO_WORK_ITEM,
+        expected_state_version=7, actor_id="owner",
+    ))
+
+    assert [operation for operation, _ in agent.calls].count("plan_task") == 4
+    retry_api_payload = [
+        payload for operation, payload in agent.calls
+        if operation == "plan_task" and payload["task_spec"]["work_item_key"] == "t-api"
+    ][-1]
+    assert retry_api_payload["dependency_contracts"][0]["implementation_plan"] == repaired_domain.model_dump(mode="json")
+    with session_factory() as db:
+        adopted = {
+            call.request["task_spec"]["work_item_key"]
+            for call in db.query(AgentCall).filter_by(project_id=project.id, operation="plan_task")
+            if call.request.get("checkpoint_source_call_id")
+        }
+    assert adopted == {"t-domain", "t-independent"}
+
+
+@pytest.mark.asyncio
 async def test_staged_review_keeps_plan_evidence_order_when_findings_are_reversed(
     session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
     passing_semantic_review,
@@ -126,6 +293,62 @@ async def test_staged_review_keeps_plan_evidence_order_when_findings_are_reverse
 
 
 @pytest.mark.asyncio
+async def test_new_command_resumes_exhausted_plan_review_from_checkpoints(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+    passing_semantic_review,
+):
+    """A plan-only rejection must never force regeneration of the base tree."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    rejected = SemanticReview(verdict=ReviewVerdict.REJECT, findings=[
+        ReviewFinding(
+            code="PLAN_CONTRACT_MISMATCH", severity="BLOCKER",
+            spec_path="agent_specs[t-api].implementation_plan.interfaces[0]",
+            message="The task plan contract is inconsistent.",
+            suggested_resolution="Regenerate the t-api plan only.",
+            blocks_progress=True,
+        )
+    ])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            _plan_for(base.agent_specs[0]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+        ]),
+        review_breakdown_results=deque([
+            rejected, rejected, rejected, rejected, passing_semantic_review,
+        ]),
+    )
+    commands = command_service(session_factory, agent)
+
+    with pytest.raises(CommandHandlerRejected):
+        await commands.execute(project.session_id, SessionCommandRequest(
+            command_id="staged-review-exhausted-1",
+            action=CommandAction.CONVERT_TO_WORK_ITEM,
+            expected_state_version=7,
+            actor_id="owner",
+        ))
+    recovered = await commands.execute(project.session_id, SessionCommandRequest(
+        command_id="staged-review-exhausted-2",
+        action=CommandAction.CONVERT_TO_WORK_ITEM,
+        expected_state_version=7,
+        actor_id="owner",
+    ))
+
+    assert recovered.state.phase == "AGENT_SPECS_READY"
+    operations = [operation for operation, _ in agent.calls]
+    assert operations.count("decompose_spec") == 1
+    assert operations.count("plan_task") == 5
+    assert operations.count("review_breakdown") == 5
+
+
+@pytest.mark.asyncio
 async def test_cancelled_task_planner_settles_every_started_call(
     session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
 ):
@@ -150,7 +373,7 @@ async def test_cancelled_task_planner_settles_every_started_call(
         plan_calls = db.query(AgentCall).filter_by(
             project_id=project.id, operation="plan_task"
         ).all()
-        assert len(plan_calls) == 2
+        assert len(plan_calls) == 1
         assert all(call.status != "PENDING" for call in plan_calls)
 
 
@@ -274,6 +497,57 @@ async def test_existing_rejection_is_revised_without_generating_a_new_breakdown(
     assert len(agent.calls) == 2
     assert agent.calls[0][1]["previous_breakdown"] == valid_breakdown.model_dump(mode="json")
     assert agent.calls[0][1]["previous_review_call_id"] == "old-review"
+
+
+@pytest.mark.asyncio
+async def test_failed_later_reviewer_does_not_hide_same_command_rejection(
+    session_factory,
+    db_session,
+    complete_brief,
+    valid_spec,
+    valid_breakdown,
+    passing_semantic_review,
+):
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([valid_breakdown] * 3),
+        review_breakdown_results=deque(
+            [
+                source_review(),
+                RuntimeError("round-one reviewer failed"),
+                passing_semantic_review,
+            ]
+        ),
+    )
+    decomposition = DecompositionService(session_factory, agent)
+
+    with pytest.raises(BreakdownReviewerFailure, match="round-one reviewer failed"):
+        await decomposition.prepare(
+            project.id,
+            command_id="resume-review-failure",
+            input_hash="same-input",
+        )
+
+    with session_factory() as db:
+        rejected_call = db.query(AgentCall).filter_by(
+            project_id=project.id,
+            operation="review_breakdown",
+            status="RESULT_READY",
+        ).one()
+
+    prepared = await decomposition.prepare(
+        project.id,
+        command_id="resume-review-failure",
+        input_hash="same-input",
+    )
+
+    with session_factory() as db:
+        final_decompose_payload = db.get(
+            AgentCall, prepared.pm_agent_call_id
+        ).request
+    assert final_decompose_payload["repair_round"] == 1
+    assert final_decompose_payload["previous_review_call_id"] == rejected_call.id
+    assert final_decompose_payload["review_feedback"] == rejected_call.response
 
 
 @pytest.mark.asyncio

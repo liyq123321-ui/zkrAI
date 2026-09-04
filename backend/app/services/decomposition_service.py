@@ -19,6 +19,11 @@ from app.agents.gateway import AgentGateway
 from app.database.models import AgentCall, AgentSession, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem, WorkItemDependency
 from app.domain.implementation_plan import ImplementationPlan
 from app.domain.types import AgentSpecProposal, ProjectPhase, ProjectSpecPayload, ReviewVerdict, SemanticReview, SpecStatus, WorkBreakdown, WorkItemKind
+from app.services.task_plan_graph import (
+    dependency_contracts,
+    topological_plan_waves,
+    transitive_dependent_keys,
+)
 from app.services.task_specifications import ImplementationPlanError, requirement_snapshots, validate_implementation_plan
 
 
@@ -48,7 +53,7 @@ class BreakdownReviewerFailure(RuntimeError):
 
     def __init__(self, message: str, agent_call_ids: list[str]) -> None:
         self.agent_call_ids = list(agent_call_ids)
-        self.agent_call_id = self.agent_call_ids[-1]
+        self.agent_call_id = self.agent_call_ids[-1] if self.agent_call_ids else None
         super().__init__(message)
 
 
@@ -279,6 +284,15 @@ def validate_breakdown(
                 _error("INVALID_DEPENDENCY", proposal.local_key, "dependency key must not be blank")
             if dependency_key not in by_key:
                 _error("UNKNOWN_DEPENDENCY", proposal.local_key, f"dependency {dependency_key!r} is not proposed")
+            if (
+                proposal.kind is WorkItemKind.TASK
+                and by_key[dependency_key].kind is not WorkItemKind.TASK
+            ):
+                _error(
+                    "INVALID_DEPENDENCY_TARGET",
+                    proposal.local_key,
+                    f"dependency {dependency_key!r} must target an executable task",
+                )
 
     dependency_edges = {proposal.local_key: set(proposal.dependency_keys) for proposal in proposals}
     leftovers = _kahn_leftovers(dependency_edges)
@@ -344,6 +358,12 @@ def validate_breakdown(
                 _error("INVALID_DEPENDENCY", key, "dependency key must not be blank")
             if dependency_key not in by_key:
                 _error("UNKNOWN_DEPENDENCY", key, f"dependency {dependency_key!r} is not proposed")
+            if by_key[dependency_key].kind is not WorkItemKind.TASK:
+                _error(
+                    "INVALID_DEPENDENCY_TARGET",
+                    key,
+                    f"dependency {dependency_key!r} must target an executable task",
+                )
         if set(proposal.dependency_keys) != set(by_key[key].dependency_keys):
             _error("DEPENDENCY_MISMATCH", key, "AgentSpec dependencies must match its task prerequisites")
 
@@ -539,6 +559,8 @@ class DecompositionService:
                     or tuple(request.get("input_refs", [])) != snapshot.input_refs
                     or request.get("approved_spec") != snapshot.content):
                 continue
+            if call.status == "FAILED":
+                continue
             if call.status != "RESULT_READY":
                 return None
             try:
@@ -550,6 +572,15 @@ class DecompositionService:
             if not self._review_blocks(review) or not self._can_repair_review(review):
                 return None
             same_attempt = command_id is not None and request.get("command_id") == command_id and request.get("input_hash") == input_hash
+            if (
+                not same_attempt
+                and request.get("plan_agent_call_ids")
+                and self._review_targets_plans(review)
+            ):
+                # A new explicit command gets a fresh semantic-repair budget, but
+                # starts from exact base/task checkpoints instead of revising the
+                # task tree in response to plan-only findings.
+                return None
             completed_round = request.get("repair_round", 0) if same_attempt else 0
             if type(completed_round) is not int or not 0 <= completed_round <= 2:
                 raise DecompositionNotAllowed("invalid persisted semantic repair round")
@@ -852,7 +883,13 @@ class DecompositionService:
                 return list(breakdown.agent_specs)
             if key not in keys:
                 keys.append(key)
-        return [by_key[key] for key in keys] or list(breakdown.agent_specs)
+        if not keys:
+            return list(breakdown.agent_specs)
+        target_keys = transitive_dependent_keys(breakdown.agent_specs, set(keys))
+        return [
+            task for task in breakdown.agent_specs
+            if task.work_item_key in target_keys
+        ]
 
     @staticmethod
     def _review_targets_plans(review: SemanticReview) -> bool:
@@ -929,44 +966,59 @@ class DecompositionService:
         ]
         if not targets:
             return []
-        results = await asyncio.gather(
-            *(
-                self._plan_task(
-                    project_id,
-                    snapshot,
-                    breakdown,
-                    task,
-                    base_checkpoint_call_id=base_checkpoint_call_id,
-                    command_id=command_id,
-                    input_hash=input_hash,
-                    previous_plan=(previous_plans or {}).get(task.work_item_key),
-                    review_feedback=review_feedback,
-                    previous_review_call_id=previous_review_call_id,
-                )
-                for task in targets
-            ),
-            return_exceptions=True,
-        )
-        call_ids: list[str] = []
-        failure: Exception | None = None
-        cancellation: BaseException | None = None
-        for task, result in zip(targets, results, strict=True):
-            if isinstance(result, BaseException):
-                if isinstance(result, DecompositionPlanningFailure):
-                    call_ids.extend(result.agent_call_ids)
-                if failure is None and isinstance(result, Exception):
-                    failure = result
-                elif cancellation is None and not isinstance(result, Exception):
-                    cancellation = result
-                continue
-            plan, call_id = result
-            task.implementation_plan = plan
-            call_ids.append(call_id)
-        if failure is not None:
-            raise DecompositionPlanningFailure(str(failure), call_ids) from failure
-        if cancellation is not None:
-            raise cancellation
-        return call_ids
+        call_ids_by_key: dict[str, str] = {}
+        target_keys = {task.work_item_key for task in targets}
+        for wave in topological_plan_waves(
+            breakdown.agent_specs, selected_keys=target_keys
+        ):
+            results = await asyncio.gather(
+                *(
+                    self._plan_task(
+                        project_id,
+                        snapshot,
+                        breakdown,
+                        task,
+                        base_checkpoint_call_id=base_checkpoint_call_id,
+                        command_id=command_id,
+                        input_hash=input_hash,
+                        previous_plan=(previous_plans or {}).get(task.work_item_key),
+                        review_feedback=review_feedback,
+                        previous_review_call_id=previous_review_call_id,
+                    )
+                    for task in wave
+                ),
+                return_exceptions=True,
+            )
+            failure: Exception | None = None
+            cancellation: BaseException | None = None
+            for task, result in zip(wave, results, strict=True):
+                if isinstance(result, BaseException):
+                    if isinstance(result, DecompositionPlanningFailure):
+                        call_ids_by_key[task.work_item_key] = result.agent_call_id
+                    if failure is None and isinstance(result, Exception):
+                        failure = result
+                    elif cancellation is None and not isinstance(result, Exception):
+                        cancellation = result
+                    continue
+                plan, call_id = result
+                task.implementation_plan = plan
+                call_ids_by_key[task.work_item_key] = call_id
+            ordered_call_ids = [
+                call_ids_by_key[task.work_item_key]
+                for task in breakdown.agent_specs
+                if task.work_item_key in call_ids_by_key
+            ]
+            if failure is not None:
+                raise DecompositionPlanningFailure(
+                    str(failure), ordered_call_ids
+                ) from failure
+            if cancellation is not None:
+                raise cancellation
+        return [
+            call_ids_by_key[task.work_item_key]
+            for task in breakdown.agent_specs
+            if task.work_item_key in call_ids_by_key
+        ]
 
     async def _plan_task(
         self,
@@ -996,7 +1048,9 @@ class DecompositionService:
                 ),
                 "approved_spec": json.loads(json.dumps(dict(snapshot.content))),
                 "related_tasks": [
-                    related.model_dump(mode="json")
+                    related.model_dump(
+                        mode="json", exclude={"implementation_plan"}
+                    )
                     for related in breakdown.agent_specs
                     if related.work_item_key != task.work_item_key
                 ],
@@ -1017,6 +1071,15 @@ class DecompositionService:
             with self._session_factory() as db:
                 self._assert_snapshot_current(db, project_id, snapshot)
                 session = self._pm_session(db, project_id)
+                contracts = dependency_contracts(
+                    task,
+                    {item.work_item_key: item for item in breakdown.agent_specs},
+                )
+                payload["dependency_contracts"] = contracts
+                payload["dependency_contract_hashes"] = {
+                    str(contract["work_item_key"]): str(contract["contract_hash"])
+                    for contract in contracts
+                }
                 call_id = _new_id()
                 checkpoint = self._task_plan_checkpoint(
                     db, project_id, snapshot, payload, task
@@ -1110,6 +1173,8 @@ class DecompositionService:
                 or request.get("base_checkpoint_call_id") != payload.get("base_checkpoint_call_id")
                 or request.get("task_spec_hash") != payload.get("task_spec_hash")
                 or request.get("task_spec") != payload.get("task_spec")
+                or request.get("dependency_contract_hashes") != payload.get("dependency_contract_hashes")
+                or request.get("dependency_contracts") != payload.get("dependency_contracts")
             ):
                 continue
             try:

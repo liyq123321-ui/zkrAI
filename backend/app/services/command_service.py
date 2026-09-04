@@ -204,15 +204,15 @@ class ActionScopedUnitOfWork:
             .all()
         )
         status_by_item = collapse_runs(runs)
-        dependencies = {
-            edge.from_work_item_id: edge.to_work_item_id
-            for edge in self.__session.query(WorkItemDependency)
+        edges: dict[str, list[str]] = {}
+        for edge in (
+            self.__session.query(WorkItemDependency)
             .filter(WorkItemDependency.project_id == self.__project_id)
             .all()
-        }
-        edges: dict[str, list[str]] = {}
-        for from_id, to_id in dependencies.items():
-            edges.setdefault(from_id, []).append(to_id)
+        ):
+            edges.setdefault(edge.from_work_item_id, []).append(
+                edge.to_work_item_id
+            )
         executable_ids = {
             row.id for row in items if row.executable and row.id is not None
         }

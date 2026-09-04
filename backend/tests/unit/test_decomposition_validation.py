@@ -33,6 +33,33 @@ def test_duplicate_dependency_key_is_rejected_before_persistence(valid_breakdown
         validate_breakdown(valid_breakdown, valid_spec)
 
 
+def test_task_dependency_must_target_an_executable_task(valid_breakdown, valid_spec):
+    valid_breakdown.tasks[1].dependency_keys = ["m-api"]
+    valid_breakdown.agent_specs[1].dependency_keys = ["m-api"]
+
+    with pytest.raises(BreakdownValidationError) as error:
+        validate_breakdown(valid_breakdown, valid_spec)
+
+    assert (error.value.code, error.value.local_key) == (
+        "INVALID_DEPENDENCY_TARGET",
+        "t-api",
+    )
+
+
+def test_agent_spec_dependency_must_target_an_executable_task(
+    valid_breakdown, valid_spec
+):
+    valid_breakdown.agent_specs[1].dependency_keys = ["m-api"]
+
+    with pytest.raises(BreakdownValidationError) as error:
+        validate_breakdown(valid_breakdown, valid_spec)
+
+    assert (error.value.code, error.value.local_key) == (
+        "INVALID_DEPENDENCY_TARGET",
+        "t-api",
+    )
+
+
 def test_unrequired_output_still_needs_a_name_and_format(valid_breakdown, valid_spec):
     valid_breakdown.agent_specs[1].outputs.append({"name": " ", "format": "json", "required": False})
 
