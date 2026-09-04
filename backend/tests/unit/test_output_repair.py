@@ -111,14 +111,12 @@ async def test_decomposition_repairs_legacy_reference_and_keeps_approved_spec(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("defect", ["outputs", "dependency", "coverage", "source"])
+@pytest.mark.parametrize("defect", ["dependency", "coverage", "source"])
 async def test_decomposition_repairs_related_structural_gaps(
     tmp_path, monkeypatch, valid_spec, valid_breakdown, defect
 ):
     broken = valid_breakdown.model_copy(deep=True)
-    if defect == "outputs":
-        broken.agent_specs[0].outputs[0].required = False
-    elif defect == "dependency":
+    if defect == "dependency":
         broken.agent_specs[1].dependency_keys = ["absent-task"]
     elif defect == "coverage":
         for item in broken.agent_specs:
@@ -135,6 +133,73 @@ async def test_decomposition_repairs_related_structural_gaps(
     validate_breakdown(result, valid_spec)
     assert result == valid_breakdown
     assert len(prompts) == 2
+
+
+@pytest.mark.asyncio
+async def test_decomposition_promotes_only_the_first_output_when_all_are_optional(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown
+):
+    broken = valid_breakdown.model_copy(deep=True)
+    first = broken.agent_specs[0].outputs[0].model_copy(update={"required": False})
+    second = first.model_copy(update={"name": "model documentation"})
+    broken.agent_specs[0].outputs = [first, second]
+    gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [broken])
+
+    result = await gateway.decompose_spec({
+        "approved_spec": valid_spec.model_dump(mode="json"),
+        "input_refs": valid_spec.source_refs,
+    })
+
+    assert [item.required for item in result.agent_specs[0].outputs] == [True, False]
+    assert [item.name for item in result.agent_specs[0].outputs] == [
+        "models",
+        "model documentation",
+    ]
+    assert len(prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_decomposition_revision_promotes_an_existing_optional_output(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown
+):
+    revised = valid_breakdown.agent_specs[0].model_copy(deep=True)
+    revised.outputs[0].required = False
+    revision = json.dumps({
+        "milestones": [],
+        "tasks": [],
+        "agent_specs": [revised.model_dump(mode="json")],
+    })
+    gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [revision])
+
+    result = await gateway.decompose_spec({
+        "approved_spec": valid_spec.model_dump(mode="json"),
+        "input_refs": valid_spec.source_refs,
+        "previous_breakdown": valid_breakdown.model_dump(mode="json"),
+        "review_feedback": {"verdict": "REJECT", "findings": []},
+    })
+
+    assert result.agent_specs[0].outputs[0].required is True
+    assert len(prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_decomposition_does_not_normalize_an_empty_output_list(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown
+):
+    invalid = valid_breakdown.model_dump(mode="json")
+    invalid["agent_specs"][0]["outputs"] = []
+    encoded = json.dumps(invalid)
+    gateway, prompts = gateway_with_outputs(
+        tmp_path, monkeypatch, [encoded, encoded, encoded]
+    )
+
+    with pytest.raises(AgentOutputError, match="outputs"):
+        await gateway.decompose_spec({
+            "approved_spec": valid_spec.model_dump(mode="json"),
+            "input_refs": valid_spec.source_refs,
+        })
+
+    assert len(prompts) == 3
 
 
 @pytest.mark.asyncio

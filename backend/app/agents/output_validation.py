@@ -73,6 +73,16 @@ def _repair_context_refs(
         agent_spec.context_refs = repaired
 
 
+def _repair_required_outputs(
+    result: WorkBreakdown | WorkBreakdownRevision,
+) -> None:
+    """Promote one existing deliverable when the Agent marked all as optional."""
+
+    for agent_spec in result.agent_specs:
+        if agent_spec.outputs and not any(output.required for output in agent_spec.outputs):
+            agent_spec.outputs[0].required = True
+
+
 def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str, object]) -> WorkBreakdown:
     previous = WorkBreakdown.model_validate(payload.get("previous_breakdown"))
     merged = previous.model_dump(mode="json")
@@ -95,6 +105,7 @@ def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str,
 def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
     """Repair structural omissions; human decisions remain in the review workflow."""
     if isinstance(result, (WorkBreakdown, WorkBreakdownRevision)):
+        _repair_required_outputs(result)
         allowed_refs = {
             reference
             for reference in payload.get("input_refs", [])
