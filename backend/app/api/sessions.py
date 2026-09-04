@@ -18,6 +18,7 @@ from app.services.query_service import (
     AgentSpecRead,
     AuditEventRead,
     QueryService,
+    SessionSummaryRead,
     SpecVersionRead,
     WorkItemRead,
 )
@@ -57,6 +58,13 @@ def build_router(
             status_code=public_error.status_code,
             detail={"code": public_error.code, "message": public_error.message},
         )
+
+    @router.get("", response_model=list[SessionSummaryRead])
+    def list_sessions() -> list[SessionSummaryRead]:
+        try:
+            return queries.sessions()
+        except Exception as error:
+            raise http_error(error) from error
 
     @router.post("", response_model=SessionState, status_code=status.HTTP_201_CREATED)
     async def create_session(

@@ -22,6 +22,13 @@ export interface ClarificationQuestionDto {
   [key: string]: unknown;
 }
 
+export interface SessionSummaryDto {
+  session_id: string;
+  project_id: string;
+  root_work_item_id: string | null;
+  title: string;
+}
+
 export interface SessionStateDto {
   session_id: string;
   project_id: string;

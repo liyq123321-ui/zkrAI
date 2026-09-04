@@ -11,6 +11,7 @@ from app.database.models import (
     ClarificationRequest,
     ClarificationResponse,
     Project,
+    WorkItem,
 )
 from app.domain.types import ClarificationAnalysis, ReviewVerdict, SemanticReview
 from app.services.decomposition_service import BreakdownValidationError, DecompositionService
@@ -92,6 +93,39 @@ def test_session_creation_returns_state(session_factory):
     assert body["session_id"]
     assert body["phase"] in {"NEED_CLARIFICATION", "SPECIFICATION"}
     assert body["state_version"] == 1
+
+
+def test_session_catalog_lists_database_roots_without_creating_agent_runs(session_factory):
+    agent = ScriptedAgentGateway(analyze_results=deque([
+        ClarificationAnalysis(ready_for_spec=True, questions=[], assumptions=[]),
+        ClarificationAnalysis(ready_for_spec=True, questions=[], assumptions=[]),
+    ]))
+    with TestClient(create_app(agent_gateway=agent, session_factory=session_factory)) as client:
+        empty = client.get("/sessions")
+        assert empty.status_code == 200
+        assert empty.json() == []
+        for index in range(2):
+            brief = make_complete_brief().model_copy(update={"final_objective": f"项目 {index}"})
+            response = client.post("/sessions", json={
+                "request_id": f"catalog-{index}", "actor_id": "approver-1",
+                "brief": brief.model_dump(mode="json"),
+            })
+            assert response.status_code == 201
+        with session_factory() as db:
+            roots = db.query(WorkItem).filter_by(kind="ROOT").all()
+            expected = {root.session_id: (root.project_id, root.id, root.title) for root in roots}
+            versions_before = {item.id: item.state_version for item in db.query(Project).all()}
+            event_count = db.query(AuditEvent).count()
+        calls_before = len(agent.calls)
+        response = client.get("/sessions")
+        assert response.status_code == 200
+        assert {item["session_id"]: (item["project_id"], item["root_work_item_id"], item["title"]) for item in response.json()} == expected
+        assert len(response.json()) == 2
+        assert client.get("/sessions").json() == response.json()
+        assert len(agent.calls) == calls_before
+        with session_factory() as db:
+            assert {item.id: item.state_version for item in db.query(Project).all()} == versions_before
+            assert db.query(AuditEvent).count() == event_count
 
 
 def test_user_can_skip_intake_clarification_and_generate_spec_with_agent_assumptions(

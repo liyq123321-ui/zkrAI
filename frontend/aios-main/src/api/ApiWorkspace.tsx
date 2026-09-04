@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -20,29 +20,25 @@ import {
 } from 'lucide-react';
 import { apiClient } from './client';
 import type {
-  AgentSpecDto,
-  AuditEventDto,
   CommandAction,
   HealthDto,
   ProjectBriefDto,
   SessionStateDto,
-  SpecVersionDto,
   WorkItemDto,
 } from './dto';
 import { ApiError, normalizeNetworkError } from './errors';
 import { AuditTrail } from './AuditTrail';
-import { AgentSpecDetail } from './AgentSpecDetail';
+import { AgentSpecDetail, type WorkItemPreview } from './AgentSpecDetail';
+import { getEmployeeOptions } from './employeeDirectory';
 import { WorkItemDialog } from './WorkItemDialog';
+import { RootTaskFilter } from './RootTaskFilter';
+import { TaskDependencyGraph, type TaskDagProject } from './TaskDependencyGraph';
+import { emptyResources, projectSpec, projectTitle, useWorkspaceProjects, type ResourceBundle } from './useWorkspaceProjects';
 import { auditTitle, displayLabel, displayTime, progressDescription } from './presentation';
 import { PrdReviewPanel } from './PrdReviewPanel';
 import {
   createSession,
   executeCommand,
-  getSessionState,
-  listAgentSpecs,
-  listEvents,
-  listSpecs,
-  listWorkItems,
 } from './sessions';
 import {
   actionPlacement,
@@ -54,7 +50,6 @@ import {
   type WorkItemLane,
 } from './workflowUi';
 
-const SESSION_KEY = 'firstflight.active-session-id';
 const actionLabels: Record<CommandAction, string> = {
   message: '提交澄清',
   skip_clarification: '跳过澄清并生成 PRD',
@@ -78,21 +73,11 @@ const workItemActionLabels: Partial<Record<CommandAction, string>> = {
   fail_task: '失败',
 };
 
-type ResourceBundle = {
-  specs: SpecVersionDto[];
-  workItems: WorkItemDto[];
-  agentSpecs: AgentSpecDto[];
-  events: AuditEventDto[];
-};
-
-const emptyResources: ResourceBundle = { specs: [], workItems: [], agentSpecs: [], events: [] };
-
 type WorkspaceTab = 'kanban' | 'flow' | 'audit';
 
 const hierarchyColumns: Array<{ kind: NonNullable<WorkItemDto['kind']>; title: string; subtitle: string }> = [
   { kind: 'ROOT', title: '项目需求 (Root)', subtitle: '需求、PRD 与人工审核' },
   { kind: 'MILESTONE', title: '里程碑 (Milestones)', subtitle: '交付阶段与关键节点' },
-  { kind: 'TASK', title: '子任务 (Tasks)', subtitle: 'Agent 可执行规格' },
 ];
 
 type BoardColumn = {
@@ -181,8 +166,10 @@ function StatusBadge({ state }: { state: SessionStateDto }) {
 
 export function ApiWorkspace() {
   const [health, setHealth] = useState<'checking' | 'ok' | 'error'>('checking');
-  const [state, setState] = useState<SessionStateDto | null>(null);
-  const [resources, setResources] = useState<ResourceBundle>(emptyResources);
+  const {
+    projects, catalog, activeSessionId, state, resources, loading: projectsLoading, loadErrors,
+    selectSession, updateSessionState, refreshResources, refreshAllProjects,
+  } = useWorkspaceProjects();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [answer, setAnswer] = useState('');
@@ -197,78 +184,15 @@ export function ApiWorkspace() {
   );
   const [resumeSessionId, setResumeSessionId] = useState('');
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
+  const [workItemPreviews, setWorkItemPreviews] = useState<Record<string, WorkItemPreview>>({});
   const [workflowProgress, setWorkflowProgress] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('kanban');
   const [chatOpen, setChatOpen] = useState(true);
   const [search, setSearch] = useState('');
   const [kindFilter, setKindFilter] = useState<'ALL' | NonNullable<WorkItemDto['kind']>>('ALL');
   const [agentFilter, setAgentFilter] = useState('ALL');
+  const [selectedRootIds, setSelectedRootIds] = useState<string[] | null>(null);
   const pendingCommandIds = useRef(new Map<string, string>());
-
-  // --- Flow view: measured dependency edges ---------------------------------
-  // The backend ships the dependency graph; the UI only renders it (never
-  // derives workflow rules). Edges are drawn as an SVG overlay positioned over
-  // the flow graph, with coordinates measured from the live DOM so they stay
-  // correct under any layout/lane arrangement.
-  const flowGraphRef = useRef<HTMLDivElement | null>(null);
-  const flowNodeRefs = useRef<Map<string, HTMLElement>>(new Map());
-  const [flowEdges, setFlowEdges] = useState<Array<{ key: string; x1: number; y1: number; x2: number; y2: number }>>([]);
-
-  const measureFlowEdges = useCallback(() => {
-    const graph = flowGraphRef.current;
-    if (!graph) {
-      setFlowEdges([]);
-      return;
-    }
-    const gRect = graph.getBoundingClientRect();
-    const edges: Array<{ key: string; x1: number; y1: number; x2: number; y2: number }> = [];
-    for (const item of resources.workItems) {
-      const toEl = flowNodeRefs.current.get(item.id);
-      if (!toEl) continue;
-      const toRect = toEl.getBoundingClientRect();
-      const x2 = toRect.left + toRect.width / 2 - gRect.left;
-      const y2 = toRect.top - gRect.top;
-      for (const dep of item.dependency_work_item_ids) {
-        const fromEl = flowNodeRefs.current.get(dep);
-        if (!fromEl) continue;
-        const fromRect = fromEl.getBoundingClientRect();
-        const x1 = fromRect.left + fromRect.width / 2 - gRect.left;
-        const y1 = fromRect.top + fromRect.height - gRect.top;
-        edges.push({ key: `${dep}->${item.id}`, x1, y1, x2, y2 });
-      }
-    }
-    setFlowEdges(edges);
-  }, [resources.workItems]);
-
-  // Recompute when the flow tab becomes visible or its node set changes.
-  useLayoutEffect(() => {
-    if (activeTab !== 'flow') {
-      setFlowEdges([]);
-      return;
-    }
-    measureFlowEdges();
-  }, [activeTab, measureFlowEdges]);
-
-  useEffect(() => {
-    if (activeTab !== 'flow') return;
-    const onResize = () => measureFlowEdges();
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [activeTab, measureFlowEdges]);
-
-  const refreshResources = useCallback(async (sessionId: string, signal?: AbortSignal) => {
-    const [nextState, specs, workItems, agentSpecs, events] = await Promise.all([
-      getSessionState(sessionId, signal),
-      listSpecs(sessionId, signal),
-      listWorkItems(sessionId, signal),
-      listAgentSpecs(sessionId, signal),
-      listEvents(sessionId, signal),
-    ]);
-    const bundle = { specs, workItems, agentSpecs, events };
-    setState(nextState);
-    setResources(bundle);
-    return { state: nextState, resources: bundle };
-  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -281,41 +205,45 @@ export function ApiWorkspace() {
         }
       });
 
-    const savedSessionId = localStorage.getItem(SESSION_KEY);
-    if (savedSessionId) {
-      refreshResources(savedSessionId, controller.signal).catch((reason) => {
-        const normalized = normalizeNetworkError(reason);
-        if (normalized.code === 'REQUEST_ABORTED') return;
-        if (normalized.status === 404 || normalized.code === 'NOT_FOUND') {
-          localStorage.removeItem(SESSION_KEY);
-          setState(null);
-          setResources(emptyResources);
-          setSelectedWorkItemId(null);
-          setError(null);
-          return;
-        }
-        setError(errorText(normalized));
-      });
-    }
     return () => controller.abort();
-  }, [refreshResources]);
+  }, []);
 
-  const currentSpec = useMemo(
-    () => resources.specs.find((spec) => spec.id === state?.current_spec_version_id) ?? [...resources.specs].sort((left, right) => right.revision - left.revision)[0],
-    [resources.specs, state?.current_spec_version_id],
-  );
+  const projectList = useMemo(() => Object.values(projects), [projects]);
+  const allResources = useMemo<ResourceBundle>(() => ({
+    specs: projectList.flatMap((project) => project.resources.specs),
+    workItems: projectList.flatMap((project) => project.resources.workItems),
+    agentSpecs: projectList.flatMap((project) => project.resources.agentSpecs),
+    events: projectList.flatMap((project) => project.resources.events),
+  }), [projectList]);
+  const workItemProjects = useMemo(() => new Map(projectList.flatMap((project) =>
+    project.resources.workItems.map((item) => [item.id, project] as const))), [projectList]);
+  const currentSpec = projectSpec(activeSessionId ? projects[activeSessionId] : undefined);
   const rootWorkItem = useMemo(
     () => resources.workItems.find((item) => item.kind === 'ROOT'),
     [resources.workItems],
   );
   const selectedWorkItem = useMemo(
-    () => resources.workItems.find((item) => item.id === selectedWorkItemId) ?? null,
-    [resources.workItems, selectedWorkItemId],
+    () => allResources.workItems.find((item) => item.id === selectedWorkItemId) ?? null,
+    [allResources.workItems, selectedWorkItemId],
   );
+  const selectedProject = selectedWorkItemId ? workItemProjects.get(selectedWorkItemId) : undefined;
+  const selectedResources = selectedProject?.resources ?? emptyResources;
+  const selectedSpec = projectSpec(selectedProject);
   const selectedAgentSpecs = useMemo(
-    () => resources.agentSpecs.filter((item) => item.work_item_id === selectedWorkItemId),
-    [resources.agentSpecs, selectedWorkItemId],
+    () => selectedResources.agentSpecs.filter((item) => item.work_item_id === selectedWorkItemId),
+    [selectedResources.agentSpecs, selectedWorkItemId],
   );
+  const employees = useMemo(
+    () => getEmployeeOptions(allResources.workItems, allResources.agentSpecs),
+    [allResources.workItems, allResources.agentSpecs],
+  );
+  const previewKey = (workItemId: string) => JSON.stringify([workItemProjects.get(workItemId)?.state.session_id, workItemId]);
+  const displayWorkItems = useMemo(() => allResources.workItems.map((item) => {
+    const projectId = workItemProjects.get(item.id)?.state.session_id;
+    const assigneeId = workItemPreviews[JSON.stringify([projectId, item.id])]?.assigneeId;
+    if (item.kind === 'ROOT' || assigneeId === undefined) return item;
+    return { ...item, suggested_assignee: assigneeId === '' ? '未指派' : employees.find((employee) => employee.id === assigneeId)?.name || assigneeId };
+  }), [allResources.workItems, employees, workItemPreviews, workItemProjects]);
   const placedActions = useMemo(
     () => actionPlacement(state?.legal_actions ?? []),
     [state?.legal_actions],
@@ -326,21 +254,28 @@ export function ApiWorkspace() {
   ];
 
   const historicalSpecs = resources.specs.filter((spec) => spec.id !== state?.current_spec_version_id);
-  const availableAgents = useMemo(
-    () => Array.from(new Set(resources.workItems.map(assigneeLabel))).sort(),
-    [resources.workItems],
-  );
-  const visibleWorkItems = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return resources.workItems.filter((item) => {
-      if (kindFilter !== 'ALL' && item.kind !== kindFilter) return false;
-      if (agentFilter !== 'ALL' && assigneeLabel(item) !== agentFilter) return false;
-      if (!query) return true;
-      return [item.id, item.title, item.objective, item.description, assigneeLabel(item)]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query));
-    });
-  }, [agentFilter, kindFilter, resources.workItems, search]);
+  const availableAgents = Array.from(new Set(displayWorkItems.map(assigneeLabel))).sort();
+  const query = search.trim().toLowerCase();
+  const visibleWorkItems = displayWorkItems.filter((item) => {
+    if (selectedRootIds !== null) {
+      const project = workItemProjects.get(item.id);
+      const rootId = project?.resources.workItems.find((root) => root.kind === 'ROOT')?.id;
+      if (!rootId || !selectedRootIds.includes(rootId)) return false;
+    }
+    if (kindFilter !== 'ALL' && item.kind !== kindFilter) return false;
+    if (agentFilter !== 'ALL' && assigneeLabel(item) !== agentFilter) return false;
+    if (!query) return true;
+    return [item.id, item.title, item.objective, item.description, assigneeLabel(item)]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(query));
+  });
+  const taskDagProjects = useMemo<TaskDagProject[]>(() => projectList.map((project) => ({
+    id: project.state.session_id,
+    title: projectTitle(project),
+    tasks: displayWorkItems.filter((item) =>
+      item.kind === 'TASK'
+      && workItemProjects.get(item.id)?.state.session_id === project.state.session_id),
+  })), [displayWorkItems, projectList, workItemProjects]);
 
   function downloadCurrentPrd() {
     if (!currentSpec) return;
@@ -355,6 +290,7 @@ export function ApiWorkspace() {
 
   async function onCreate(event: FormEvent) {
     event.preventDefault();
+    if (busy || projectsLoading) return;
     setBusy(true);
     setError(null);
     const brief: ProjectBriefDto = {
@@ -372,8 +308,12 @@ export function ApiWorkspace() {
     };
     try {
       const created = await createSession(crypto.randomUUID(), brief);
-      localStorage.setItem(SESSION_KEY, created.session_id);
-      setState(created);
+      updateSessionState(created);
+      selectSession(created.session_id);
+      setMotivation('');
+      setObjective('');
+      setScope('');
+      setDeliverables('');
       await refreshResources(created.session_id);
     } catch (reason) {
       setError(errorText(reason));
@@ -388,7 +328,7 @@ export function ApiWorkspace() {
     try {
       const sessionId = normalizeSessionId(resumeSessionId);
       const refreshed = await refreshResources(sessionId);
-      localStorage.setItem(SESSION_KEY, sessionId);
+      selectSession(sessionId);
       setResumeSessionId('');
       const root = refreshed.resources.workItems.find((item) => item.kind === 'ROOT');
       if (root) setSelectedWorkItemId(root.id);
@@ -408,6 +348,7 @@ export function ApiWorkspace() {
     payload: Record<string, unknown> = {},
   ) {
     const fingerprint = JSON.stringify({
+      sessionId: baseState.session_id,
       action,
       stateVersion: baseState.state_version,
       message,
@@ -423,7 +364,7 @@ export function ApiWorkspace() {
       payload,
     });
     pendingCommandIds.current.delete(fingerprint);
-    setState(result.state);
+    updateSessionState(result.state);
     return result.state;
   }
 
@@ -511,20 +452,21 @@ export function ApiWorkspace() {
   }
 
   async function runWorkItemAction(item: WorkItemDto, action: CommandAction) {
-    if (!state || busy) return;
+    const targetState = workItemProjects.get(item.id)?.state;
+    if (!targetState || busy) return;
     setBusy(true);
     setError(null);
     try {
       // The backend already decided which actions this item may take and
       // shipped them as item.available_actions. This only forwards that
       // decision back as a command; the UI never derives workflow rules.
-      await submitCommand(state, action, undefined, { work_item_id: item.id });
-      await refreshResources(state.session_id);
+      await submitCommand(targetState, action, undefined, { work_item_id: item.id });
+      await refreshResources(targetState.session_id);
     } catch (reason) {
       const normalized = normalizeNetworkError(reason);
       if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
         pendingCommandIds.current.clear();
-        await refreshResources(state.session_id).catch(() => undefined);
+        await refreshResources(targetState.session_id).catch(() => undefined);
         setError('状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。');
       } else {
         setError(errorText(reason));
@@ -535,10 +477,11 @@ export function ApiWorkspace() {
   }
 
   async function confirmPrdAndDecompose(reviewNote: string) {
-    if (!state || busy) return;
+    const targetState = selectedProject?.state;
+    if (!targetState || busy) return;
     setBusy(true);
     setError(null);
-    let nextState = state;
+    let nextState = targetState;
     try {
       if (nextState.legal_actions.includes('approve')) {
         setWorkflowProgress('正在确认当前 PRD…');
@@ -555,7 +498,7 @@ export function ApiWorkspace() {
       const normalized = normalizeNetworkError(reason);
       if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
         pendingCommandIds.current.clear();
-        await refreshResources(state.session_id).catch(() => undefined);
+        await refreshResources(targetState.session_id).catch(() => undefined);
         setError('状态已被其他操作更新。页面已刷新，请确认最新 PRD 后重新提交。');
       } else {
         setError(errorText(reason));
@@ -581,15 +524,20 @@ export function ApiWorkspace() {
   }
 
   const refreshCurrentResources = useCallback(async () => {
-    if (state) await refreshResources(state.session_id);
-  }, [refreshResources, state?.session_id]);
+    if (selectedProject) await refreshResources(selectedProject.state.session_id);
+  }, [refreshResources, selectedProject?.state.session_id]);
 
-  function clearSession() {
-    localStorage.removeItem(SESSION_KEY);
-    setState(null);
-    setResources(emptyResources);
-    setSelectedWorkItemId(null);
+  function switchConversation(sessionId: string | null) {
+    selectSession(sessionId);
+    setAnswer('');
+    setRestoreRevision('');
+    setRestoreReason('');
     setError(null);
+  }
+
+  function startNewTask() {
+    switchConversation(null);
+    setChatOpen(true);
   }
 
   return (
@@ -617,7 +565,7 @@ export function ApiWorkspace() {
           aria-pressed={activeTab === 'kanban'}
         >
           <LayoutGrid aria-hidden="true" />
-          {resources.workItems.length > 0 && <span className="ff-activity-count">{resources.workItems.length}</span>}
+          {allResources.workItems.length > 0 && <span className="ff-activity-count">{allResources.workItems.length}</span>}
         </button>
         <button
           className={'ff-activity-button ' + (activeTab === 'flow' ? 'is-active' : '')}
@@ -662,6 +610,23 @@ export function ApiWorkspace() {
             <span className="ff-agent-select">Project Agent</span>
           </header>
 
+          {catalog.length > 0 && (
+            <label className="ff-conversation-picker">
+              <span>当前对话</span>
+              <select
+                aria-label="当前对话项目"
+                value={activeSessionId ?? ''}
+                disabled={busy}
+                onChange={(event) => switchConversation(event.target.value || null)}
+              >
+                <option value="">新任务</option>
+                {catalog.map((project) => (
+                  <option key={project.session_id} value={project.session_id} disabled={!projects[project.session_id]}>{project.title}</option>
+                ))}
+              </select>
+            </label>
+          )}
+
           {!state ? (
             <form onSubmit={onCreate} className="ff-intake-form">
               <div className="ff-quick-row">
@@ -686,7 +651,7 @@ export function ApiWorkspace() {
                   <Field label="已知范围（每行一项）" value={scope} onChange={setScope} multiline />
                   <Field label="预期交付物（每行一项）" value={deliverables} onChange={setDeliverables} multiline />
                   <Field label="负责人标识" value={ownerId} onChange={setOwnerId} />
-                  <button disabled={busy || health !== 'ok'} className="ff-primary-button ff-full-button">
+                  <button disabled={busy || projectsLoading || health !== 'ok'} className="ff-primary-button ff-full-button">
                     {busy && <Loader2 className="ff-spin" aria-hidden="true" />}
                     创建并分析
                   </button>
@@ -703,10 +668,20 @@ export function ApiWorkspace() {
             </form>
           ) : (
             <>
-              <div className="ff-quick-row">
+              <div className="ff-quick-row ff-chat-actions">
                 <button onClick={manualRefresh} disabled={busy} title="刷新项目状态" aria-label="刷新项目状态">
                   <RefreshCw className={busy ? 'ff-spin' : ''} aria-hidden="true" />
                   刷新状态
+                </button>
+                <button
+                  type="button"
+                  onClick={startNewTask}
+                  disabled={busy}
+                  className="ff-create-task-button"
+                  title="填写新任务需求，保留当前项目数据"
+                >
+                  <Plus aria-hidden="true" />
+                  创建新任务
                 </button>
                 <span className={health === 'ok' ? 'is-online' : 'is-offline'}>
                   {health === 'ok' ? 'API ONLINE' : 'API OFFLINE'}
@@ -831,7 +806,7 @@ export function ApiWorkspace() {
                 </div>
                 <div className="ff-composer-foot">
                   <span><span className="ff-small-dot" /> 后端状态驱动</span>
-                  <button disabled={busy} onClick={clearSession}>返回项目入口（保留数据）</button>
+                  <button disabled={busy} onClick={startNewTask}>返回项目入口（保留数据）</button>
                 </div>
               </footer>
             </>
@@ -845,7 +820,7 @@ export function ApiWorkspace() {
             <button className={activeTab === 'kanban' ? 'is-active' : ''} onClick={() => setActiveTab('kanban')}>
               <LayoutGrid aria-hidden="true" />
               Kanban Board (敏捷看板)
-              <span>{resources.workItems.length}</span>
+              <span>{allResources.workItems.length}</span>
             </button>
             <button className={activeTab === 'flow' ? 'is-active' : ''} onClick={() => setActiveTab('flow')}>
               <GitFork aria-hidden="true" />
@@ -854,7 +829,7 @@ export function ApiWorkspace() {
             <button className={activeTab === 'audit' ? 'is-active' : ''} onClick={() => setActiveTab('audit')}>
               <ClipboardList aria-hidden="true" />
               Audit Trail (审计记录)
-              <span>{resources.events.length}</span>
+              <span>{allResources.events.length}</span>
             </button>
           </div>
           <div className="ff-api-status">
@@ -871,6 +846,11 @@ export function ApiWorkspace() {
               <Search aria-hidden="true" />
               <input aria-label="搜索工单" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索工单 ID、标题或 Agent…" />
             </label>
+            <RootTaskFilter
+              roots={catalog.flatMap((project) => project.root_work_item_id ? [{ id: project.root_work_item_id, title: project.title }] : [])}
+              selectedIds={selectedRootIds}
+              onChange={setSelectedRootIds}
+            />
             <label className="ff-filter-label">
               类型：
               <select aria-label="工单类型" value={kindFilter} onChange={(event) => setKindFilter(event.target.value as typeof kindFilter)}>
@@ -889,7 +869,9 @@ export function ApiWorkspace() {
             </label>
             <div className="ff-toolbar-spacer" />
             {currentSpec && <button onClick={downloadCurrentPrd} className="ff-download-button"><FileText aria-hidden="true" />下载 PRD.md</button>}
-            <button onClick={clearSession} disabled={busy} className="ff-new-epic-button"><Plus aria-hidden="true" />规划新主工单</button>
+            <span className="ff-board-project-count">共 {catalog.length} 个项目</span>
+            <button onClick={() => void refreshAllProjects()} disabled={busy || projectsLoading} className="ff-secondary-button"><RefreshCw className={projectsLoading ? 'ff-spin' : ''} aria-hidden="true" />刷新看板</button>
+            <button onClick={startNewTask} disabled={busy} className="ff-new-epic-button"><Plus aria-hidden="true" />规划新主工单</button>
           </div>
 
           {(error || workflowProgress) && (
@@ -898,6 +880,10 @@ export function ApiWorkspace() {
               {workflowProgress && <div className="ff-page-alert ff-page-alert-progress"><Loader2 className="ff-spin" aria-hidden="true" /><span>{workflowProgress}</span></div>}
             </div>
           )}
+
+          {Object.entries(loadErrors).map(([sessionId, message]) => (
+            <div key={sessionId} role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{message}。可点击“刷新看板”重试。</span></div>
+          ))}
 
           <div className="ff-board-scroll">
             {boardColumns.map((column) => {
@@ -914,10 +900,11 @@ export function ApiWorkspace() {
                   </header>
                   <div className="ff-card-list">
                     {items.map((item) => {
-                      const hasAgentSpec = resources.agentSpecs.some((spec) => spec.work_item_id === item.id);
+                      const project = workItemProjects.get(item.id)!;
+                      const hasAgentSpec = project.resources.agentSpecs.some((spec) => spec.work_item_id === item.id);
                       const presentation = workItemPresentation(item.kind, hasAgentSpec);
-                      const disabled = presentation.detailKind === 'prd' && !currentSpec;
-                      const progress = state ? workItemProgress(item, state, hasAgentSpec) : 0;
+                      const disabled = presentation.detailKind === 'prd' && !projectSpec(project);
+                      const progress = workItemProgress(item, project.state, hasAgentSpec);
                       return (
                         <div
                           key={item.id}
@@ -941,6 +928,7 @@ export function ApiWorkspace() {
                             <span className="ff-card-kind">{item.kind === 'ROOT' ? 'Epic' : item.kind === 'MILESTONE' ? 'Milestone' : 'Subtask'}</span>
                           </div>
                           <h3>{item.title || item.id}</h3>
+                          {projectList.length > 1 && item.kind !== 'ROOT' && <span className="ff-card-project">项目：{projectTitle(project)}</span>}
                           <p>{item.objective || item.description || '未提供任务目标'}</p>
                           {item.parent_id && <div className="ff-parent-link">产生自：#{item.parent_id}</div>}
                           <div className="ff-card-footer">
@@ -978,34 +966,16 @@ export function ApiWorkspace() {
         <section className={activeTab === 'flow' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'flow'}>
           <div className="ff-flow-toolbar">
             <div><h2>任务依赖流转图</h2><p>根据后端返回的 WorkItem 层级和依赖关系展示，只读，不在浏览器中修改状态。</p></div>
-            <span>{resources.workItems.length} NODES</span>
+            <span>{allResources.workItems.length} NODES</span>
           </div>
           <div className="ff-flow-canvas">
-            <div className="ff-flow-graph" ref={flowGraphRef}>
-              {activeTab === 'flow' && flowEdges.length > 0 && (
-                <svg className="ff-flow-edges" aria-hidden="true">
-                  {flowEdges.map((edge) => {
-                    const midY = (edge.y1 + edge.y2) / 2;
-                    return (
-                      <path
-                        key={edge.key}
-                        className="ff-flow-edge"
-                        d={`M ${edge.x1} ${edge.y1} C ${edge.x1} ${midY}, ${edge.x2} ${midY}, ${edge.x2} ${edge.y2}`}
-                      />
-                    );
-                  })}
-                </svg>
-              )}
+            <div className="ff-flow-graph">
               {hierarchyColumns.map((column, columnIndex) => (
                 <div key={column.kind} className="ff-flow-lane">
                   <header><span>{columnIndex + 1}</span>{column.title}</header>
-                  {resources.workItems.filter((item) => item.kind === column.kind).map((item) => (
+                  {displayWorkItems.filter((item) => item.kind === column.kind).map((item) => (
                     <button
                       key={item.id}
-                      ref={(el) => {
-                        if (el) flowNodeRefs.current.set(item.id, el);
-                        else flowNodeRefs.current.delete(item.id);
-                      }}
                       data-wi-id={item.id}
                       onClick={() => setSelectedWorkItemId(item.id)}
                       className="ff-flow-node"
@@ -1015,9 +985,13 @@ export function ApiWorkspace() {
                       {item.dependency_work_item_ids.length > 0 && <em>依赖 {item.dependency_work_item_ids.length}</em>}
                     </button>
                   ))}
-                  {resources.workItems.every((item) => item.kind !== column.kind) && <div className="ff-flow-empty">等待后端生成</div>}
+                  {displayWorkItems.every((item) => item.kind !== column.kind) && <div className="ff-flow-empty">等待后端生成</div>}
                 </div>
               ))}
+              <section className="ff-flow-task-lane" aria-label="子任务 (Tasks)">
+                <header><span>3</span><div><strong>子任务 (Tasks)</strong><small>按项目与依赖深度排列</small></div></header>
+                <TaskDependencyGraph projects={taskDagProjects} onOpenWorkItem={setSelectedWorkItemId} />
+              </section>
             </div>
           </div>
         </section>
@@ -1025,31 +999,52 @@ export function ApiWorkspace() {
         <section className={activeTab === 'audit' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'audit'}>
           <div className="ff-audit-scroll">
             {activeTab === 'audit' && error && <div role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{error}</span></div>}
-            <AuditTrail events={resources.events} specs={resources.specs} />
+            <AuditTrail events={allResources.events} specs={allResources.specs} />
           </div>
         </section>
 
         <footer className="ff-status-bar">
           <div><span className="ff-small-dot" /> AI STUDIO ENGINE <span>UTF-8</span><span>Backend Contract</span></div>
-          <div><span className={health === 'ok' ? 'ff-small-dot' : 'ff-small-dot is-error'} /> AGENT NETWORK {health === 'ok' ? 'ONLINE' : 'OFFLINE'} <span>{resources.agentSpecs.length} SPECS</span></div>
+          <div><span className={health === 'ok' ? 'ff-small-dot' : 'ff-small-dot is-error'} /> AGENT NETWORK {health === 'ok' ? 'ONLINE' : 'OFFLINE'} <span>{allResources.agentSpecs.length} SPECS</span></div>
         </footer>
       </main>
 
       {selectedWorkItem && (
-        <WorkItemDialog title={selectedWorkItem.kind === 'ROOT' ? 'PRD 审核' : '任务详情'} onClose={() => setSelectedWorkItemId(null)}>
-          {selectedWorkItem.kind === 'ROOT' && rootWorkItem && currentSpec && (
+        <WorkItemDialog contentKey={selectedWorkItem.id} title={selectedWorkItem.kind === 'ROOT' ? 'PRD 审核' : '任务详情'} onClose={() => setSelectedWorkItemId(null)}>
+          {selectedWorkItem.kind === 'ROOT' && selectedProject && selectedSpec && (
             <PrdReviewPanel
-              key={rootWorkItem.id + ':' + currentSpec.id}
-              fallbackSpec={currentSpec}
-              wi={rootWorkItem.id}
-              sessionState={state!}
+              key={selectedWorkItem.id + ':' + selectedSpec.id}
+              fallbackSpec={selectedSpec}
+              wi={selectedWorkItem.id}
+              sessionState={selectedProject.state}
               workflowBusy={busy}
               onConfirmAndDecompose={confirmPrdAndDecompose}
               onResourcesChanged={refreshCurrentResources}
             />
           )}
+          {selectedWorkItem.kind === 'ROOT' && !selectedSpec && (
+            <div className="ff-empty-detail">
+              <h2>{selectedWorkItem.title || selectedWorkItem.id}</h2>
+              <p>{selectedWorkItem.objective || selectedWorkItem.description}</p>
+              <p>当前任务尚未生成 PRD。</p>
+            </div>
+          )}
           {selectedWorkItem.kind !== 'ROOT' && (
-            <AgentSpecDetail item={selectedWorkItem} agentSpecs={selectedAgentSpecs} sourceSpecs={resources.specs} />
+            <AgentSpecDetail
+              key={previewKey(selectedWorkItem.id)}
+              item={selectedWorkItem}
+              agentSpecs={selectedAgentSpecs}
+              sourceSpecs={selectedResources.specs}
+              employees={employees}
+              workItems={allResources.workItems}
+              onOpenWorkItem={setSelectedWorkItemId}
+              preview={workItemPreviews[previewKey(selectedWorkItem.id)]}
+              onPreviewChange={(patch) => {
+                const key = previewKey(selectedWorkItem.id);
+                setWorkItemPreviews((previous) => ({ ...previous, [key]: { draft: '', ...previous[key], ...patch } }));
+                if (patch.assigneeId !== undefined) setAgentFilter('ALL');
+              }}
+            />
           )}
         </WorkItemDialog>
       )}

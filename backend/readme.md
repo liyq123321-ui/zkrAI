@@ -14,6 +14,7 @@ FIRSTFLIGHT_CORS_ORIGINS=http://127.0.0.1:3001,http://localhost:3001
 - `proxy` 模式读取 `FIRSTFLIGHT_TRUSTED_ACTOR_HEADER`（默认 `X-FirstFlight-Actor`），只能放在可信反向代理之后。
 - `legacy` 仅为现有测试和旧客户端保留。
 - `GET /healthz` 只检查进程和数据库，不访问 Agent/Gitea。
+- `GET /sessions` 只读列出数据库中全部项目的 Session ID、项目 ID、Root WorkItem ID 与名称，供共享看板及主任务多选使用；不创建 Agent 运行。
 - `GET /prd/{wi}/commentable-lines` 只返回 Gitea diff 的 context/addition 行。
 - `restore_spec_version` 创建重新审核的 n+1 Spec，不覆盖历史。
 - `/sessions/{id}/events` 公开安全阶段摘要与哈希，不公开私有原始推理或受限诊断信息。

@@ -76,6 +76,7 @@ function mockHttp(initial: SessionStateDto, replies: Array<Reply | Promise<Reply
     }
     const payloads: Record<string, unknown> = {
       '/healthz': {status: 'ok', database: 'ok'},
+      '/sessions': [{session_id:'session-1',project_id:'project-1',root_work_item_id:root.id,title:root.title}],
       '/sessions/session-1/state': serverState,
       '/sessions/session-1/specs': serverState.current_spec_version_id ? [{...spec, status: serverState.current_spec_status}] : [],
       '/sessions/session-1/work-items': serverState.phase === 'AGENT_SPECS_READY' ? [root, task] : [root],

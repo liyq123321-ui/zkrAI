@@ -4,6 +4,26 @@
 >
 > 当前真实 UI 已支持 Session 创建/恢复、多轮澄清、显式跳过澄清并自动生成 PRD、由 `legal_actions` 驱动的 Spec 审核、主 WorkItem PRD 入口、子 WorkItem Agent Spec 展示、历史版本创建 n+1、Gitea diff 行批注/回复/解决、异步 PRD 发布恢复，以及安全 Agent 阶段摘要。浏览器不提交可信 `actor_id`，身份由后端注入。
 
+> **2026-09-03 前端增量**：子 WorkItem 详情新增子 Agent 对话占位与员工选择预览。二者不接入真实处理/指派接口，不代表子任务执行器已实现；具体边界见下文。
+
+### 子 WorkItem 对话与员工选择的当前边界
+
+- `src/api/WorkItemAgentPanel.tsx`：受控草稿输入、空会话视图、人工指令优先说明和修改需求快捷入口。发送/中断保持禁用，不模拟 Agent 回复，不调用项目 `/chat` 代替子任务对话。
+- `src/api/employeeDirectory.ts`：导出 `EmployeeOption { id, name, role? }` 和 `getEmployeeOptions(workItems, agentSpecs)`，合并已有负责人和标注为示例的前端名单。组件接收 `employees`，后续由上层替换数据来源，不在组件中查询数据库。
+- `src/api/AgentSpecDetail.tsx`：对话位于规格正文上方；责任卡片显示员工下拉框。通过 `preview` 和 `onPreviewChange` 接收页面状态与更新回调。
+- `src/api/ApiWorkspace.tsx`：以 Session / WorkItem 组合键保存草稿和 `assigneeId`，只在页面内存存活。`undefined` 表示未覆盖后端负责人，空字符串表示用户预览未指派。使用显示副本同步看板、流转图和筛选，原始 API 数据保持不变。
+- 关闭重开详情保留当前页状态，刷新清空草稿并恢复后端负责人。新增交互没有网络调用，没有员工指派、权限变更、需求写入或任务中断副作用。
+
+需求以仓库内 `docs/superpowers/specs/2026-09-03-work-item-control-design.md` 为准；接入真实子 Agent、员工数据库、持久化指派及最高权限控制属于后续范围。
+
+### 数据库共享看板与主任务多选
+
+- `GET /sessions` 返回数据库内全部项目的 `session_id`、`project_id`、`root_work_item_id`、Root `title`。这是只读目录，不创建 Agent 运行或修改数据库。后端读取规则与现有 Session 查询接口保持一致。
+- `src/api/useWorkspaceProjects.ts` 从该目录加载各 Session 的独立状态、WorkItem、Spec、Agent Spec 和审计快照，最多同时加载 4 个项目。当前左侧对话 ID 与项目集合分离；新建入口只切换对话，不清空看板。失败项目显示错误并可通过重新读取目录重试，成功项目继续显示。
+- `src/api/RootTaskFilter.tsx` 在搜索框旁提供主任务多选；标签来自目录中的 Root 名称，过滤键为 Root ID。`null` 表示全部（包括后续新增任务），数组表示明确选择（空数组不显示任何项目）。筛选覆盖该项目的完整 WorkItem 层级，并与搜索、类型和执行者条件取交集。
+- 看板与流转图共享所有项目资源；主任务多选只控制 Kanban 可见卡片。任务详情、来源 PRD、审核命令、状态版本与草稿始终绑定卡片所属 Session，不依赖左侧当前对话。
+- 每次打开页面或点击「刷新看板」均重新读取数据库目录，不依赖 localStorage 项目名单。浏览器只记录当前对话 ID；新建或切换对话不重置看板筛选。
+
 > **文档性质**: 工程实施标准 / 源码级架构解读 / 后端与 CodeX 编排引擎对接指南  
 > **文档版本**: `v2.1.0-REAL-INTEGRATION`
 > **前端技术栈**: 真实模式使用 React 19 + TypeScript 5.8 + Vite 6 + Vitest + Tailwind CSS 4 + Lucide Icons；Google Drive 与 Firebase 仅属于隔离的旧 Mock 功能

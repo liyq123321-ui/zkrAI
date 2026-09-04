@@ -214,7 +214,10 @@
           "rework",
           "publish_review",
           "convert_to_work_item",
-          "restore_spec_version"
+          "restore_spec_version",
+          "start_task",
+          "complete_task",
+          "fail_task"
         ],
         "title": "CommandAction",
         "type": "string"
@@ -1151,6 +1154,42 @@
         "title": "SessionState",
         "type": "object"
       },
+      "SessionSummaryRead": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "root_work_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Work Item Id"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "project_id",
+          "root_work_item_id",
+          "title"
+        ],
+        "title": "SessionSummaryRead",
+        "type": "object"
+      },
       "SpecStatus": {
         "enum": [
           "DRAFT",
@@ -1318,6 +1357,13 @@
             ],
             "title": "Acceptance Criteria"
           },
+          "available_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
           "department": {
             "anyOf": [
               {
@@ -1371,6 +1417,11 @@
               }
             ],
             "title": "Executable"
+          },
+          "graph_depth": {
+            "default": 0,
+            "title": "Graph Depth",
+            "type": "integer"
           },
           "id": {
             "title": "Id",
@@ -2145,6 +2196,29 @@
       }
     },
     "/sessions": {
+      "get": {
+        "operationId": "list_sessions_sessions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SessionSummaryRead"
+                  },
+                  "title": "Response List Sessions Sessions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Sessions",
+        "tags": [
+          "sessions"
+        ]
+      },
       "post": {
         "operationId": "create_session_sessions_post",
         "requestBody": {

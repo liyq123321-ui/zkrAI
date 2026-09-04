@@ -6,6 +6,7 @@ import type {
   CommandResultDto,
   ProjectBriefDto,
   SessionStateDto,
+  SessionSummaryDto,
   SpecVersionDto,
   WorkItemDto,
 } from './dto';
@@ -40,6 +41,9 @@ export function createSession(requestId: string, brief: ProjectBriefDto, signal?
 export function getSessionState(sessionId: string, signal?: AbortSignal) {
   return apiClient.request<SessionStateDto>(`/sessions/${sessionId}/state`, { signal });
 }
+
+export const listSessions = (signal?: AbortSignal) =>
+  apiClient.request<SessionSummaryDto[]>('/sessions', { signal });
 
 export function executeCommand(
   sessionId: string,

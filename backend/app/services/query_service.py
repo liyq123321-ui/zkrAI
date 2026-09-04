@@ -29,6 +29,15 @@ from app.services.execution_graph import (
 from app.services.state_projection import project_state
 
 
+class SessionSummaryRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    project_id: str
+    root_work_item_id: str | None
+    title: str
+
+
 class ReviewRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -125,6 +134,22 @@ class QueryService:
 
     def __init__(self, session_factory: Callable[[], Session]) -> None:
         self._session_factory = session_factory
+
+    def sessions(self) -> list[SessionSummaryRead]:
+        """List persisted projects for the shared board without invoking agents."""
+        with self._session_factory() as db:
+            projects = db.query(Project).order_by(Project.created_at, Project.id).all()
+            roots = {
+                item.project_id: item
+                for item in db.query(WorkItem).filter_by(kind="ROOT").order_by(WorkItem.id).all()
+            }
+            return [SessionSummaryRead(
+                session_id=project.session_id,
+                project_id=project.id,
+                root_work_item_id=roots[project.id].id if project.id in roots else None,
+                title=(roots[project.id].title if project.id in roots else None)
+                or (project.brief or {}).get("final_objective") or project.session_id,
+            ) for project in projects]
 
     def state(self, session_id: str) -> SessionState:
         with self._session_factory() as db:

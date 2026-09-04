@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ApiWorkspace } from './ApiWorkspace';
 import { PrdReviewPanel } from './PrdReviewPanel';
-import type { SessionStateDto, SpecVersionDto } from './dto';
+import type { SessionStateDto, SessionSummaryDto, SpecVersionDto } from './dto';
 
 const state: SessionStateDto = {
   session_id:'session-1', project_id:'project-1', phase:'REVIEW', state_version:6,
@@ -24,6 +24,8 @@ let failDocument = false;
 let failDiff = false;
 let missingSavedSession = false;
 let resourceOverrides: Record<string, unknown> = {};
+let resourceFailures: Record<string, number> = {};
+let sessionCatalog: SessionSummaryDto[] = [];
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -32,9 +34,19 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false; };
   failLines = false; failComments = false; failDocument = false; failDiff = false; missingSavedSession = false;
   resourceOverrides = {};
+  resourceFailures = {};
+  sessionCatalog = [{session_id:'session-1',project_id:'project-1',root_work_item_id:'root-1',title:'知识问答'}];
   localStorage.clear();
-  fetchSpy = vi.fn(async (input: string | URL | Request) => {
+  fetchSpy = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     const path = new URL(String(input)).pathname;
+    if (resourceFailures[path]) {
+      return new Response(JSON.stringify({detail:{code:'TEMPORARILY_UNAVAILABLE',message:'请稍后重试'}}),{status:resourceFailures[path]});
+    }
+    if (path === '/sessions' && options?.method !== 'POST') return new Response(JSON.stringify(sessionCatalog),{status:200});
+    if (path === '/sessions' && options?.method === 'POST' && resourceOverrides[path]) {
+      const created = resourceOverrides[path] as SessionStateDto;
+      sessionCatalog.push({session_id:created.session_id,project_id:created.project_id,root_work_item_id:'root-2',title:'客户支持助手'});
+    }
     if (missingSavedSession && path.startsWith('/sessions/session-missing/')) {
       return new Response(JSON.stringify({detail:{code:'NOT_FOUND',message:'The requested workflow resource was not found.'}}), {status:404});
     }
@@ -72,6 +84,268 @@ function renderPanel(onConfirmAndDecompose: (reviewNote: string) => Promise<void
 }
 
 describe('workspace regression', () => {
+  it('opens a dependency detail even when its card is filtered out and preserves the source draft', async () => {
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+    await screen.findByRole('button',{name:/构建检索流程.*查看规划详情/});
+    fireEvent.change(screen.getByRole('textbox',{name:'搜索工单'}),{target:{value:'构建检索流程'}});
+    expect(screen.queryByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:/构建检索流程.*查看规划详情/}));
+    const sourceDialog = await screen.findByRole('dialog',{name:'任务详情'});
+    fireEvent.change(within(sourceDialog).getByRole('textbox',{name:'给子 Agent 的指令'}),{target:{value:'保留检索任务草稿'}});
+    sourceDialog.scrollTop = 400;
+    fireEvent.click(within(sourceDialog).getByRole('button',{name:'打开依赖任务：实现问答 API'}));
+    const targetDialog = screen.getByRole('dialog',{name:'任务详情'});
+    expect(within(targetDialog).getByRole('heading',{name:'实现问答 API'})).toBeTruthy();
+    expect(within(targetDialog).getByText('实现带权限控制的问答 API')).toBeTruthy();
+    expect((within(targetDialog).getByRole('textbox',{name:'给子 Agent 的指令'}) as HTMLTextAreaElement).value).toBe('');
+    expect(targetDialog.scrollTop).toBe(0);
+    fireEvent.click(within(targetDialog).getByRole('button',{name:'关闭详情'}));
+    expect((screen.getByRole('textbox',{name:'搜索工单'}) as HTMLInputElement).value).toBe('构建检索流程');
+    fireEvent.click(screen.getByRole('button',{name:/构建检索流程.*查看规划详情/}));
+    expect((screen.getByRole('textbox',{name:'给子 Agent 的指令'}) as HTMLTextAreaElement).value).toBe('保留检索任务草稿');
+  });
+
+  it('loads all database projects without browser history and filters selected roots with their descendants', async () => {
+    sessionCatalog.push({session_id:'session-2',project_id:'project-2',root_work_item_id:'root-2',title:'客户支持助手'});
+    resourceOverrides = {
+      '/sessions/session-2/state':{...state,session_id:'session-2',project_id:'project-2',current_spec_version_id:null},
+      '/sessions/session-2/specs':[],
+      '/sessions/session-2/work-items':[
+        {id:'root-2',kind:'ROOT',title:'客户支持助手',parent_id:null,dependency_work_item_ids:[]},
+        {id:'milestone-2',kind:'MILESTONE',title:'支持流程里程碑',parent_id:'root-2',dependency_work_item_ids:[]},
+        {id:'task-2',kind:'TASK',title:'处理客服工单',parent_id:'milestone-2',status:'todo',dependency_work_item_ids:[]},
+      ],
+      '/sessions/session-2/agent-specs':[],
+      '/sessions/session-2/events':[],
+    };
+    render(<ApiWorkspace />);
+    await screen.findByRole('button',{name:/客户支持助手.*PRD 生成后可打开/});
+    await screen.findByRole('button',{name:/实现问答 API.*查看任务 Spec/});
+    fireEvent.click(screen.getByRole('button',{name:'筛选主任务'}));
+    const filter = within(screen.getByRole('group',{name:'主任务筛选'}));
+    expect(filter.getAllByRole('checkbox')).toHaveLength(2);
+    fireEvent.click(filter.getByRole('checkbox',{name:'知识问答'}));
+    expect(screen.queryByRole('button',{name:/知识问答.*打开 PRD 审核/})).toBeNull();
+    expect(screen.queryByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeNull();
+    expect(screen.getByRole('button',{name:/支持流程里程碑.*查看规划详情/})).toBeTruthy();
+    expect(screen.getByRole('button',{name:/处理客服工单.*查看规划详情/})).toBeTruthy();
+    fireEvent.click(filter.getByRole('checkbox',{name:'知识问答'}));
+    expect(screen.getByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeTruthy();
+    fireEvent.click(filter.getByRole('button',{name:'清空选择'}));
+    expect(screen.queryByRole('button',{name:/处理客服工单.*查看规划详情/})).toBeNull();
+    fireEvent.click(filter.getByRole('checkbox',{name:'客户支持助手'}));
+    fireEvent.keyDown(filter.getByRole('checkbox',{name:'客户支持助手'}),{key:'Escape'});
+    fireEvent.click(screen.getByRole('button',{name:'规划新主工单'}));
+    expect(screen.getByRole('button',{name:/处理客服工单.*查看规划详情/})).toBeTruthy();
+    expect(screen.queryByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'筛选主任务'}));
+    fireEvent.click(within(screen.getByRole('group',{name:'主任务筛选'})).getByRole('button',{name:'全部任务'}));
+    expect(screen.getByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeTruthy();
+  });
+
+  it('keeps the shared board when starting a new task and merges a newly created project across reloads', async () => {
+    const secondState = {...state, session_id:'session-2', project_id:'project-2', current_spec_version_id:null, phase:'NEED_CLARIFICATION', legal_actions:['message']};
+    resourceOverrides = {
+      '/sessions':secondState,
+      '/sessions/session-2/state':secondState,
+      '/sessions/session-2/specs':[],
+      '/sessions/session-2/work-items':[{id:'root-2',kind:'ROOT',title:'客户支持助手',objective:'处理客户问题',parent_id:null,dependency_work_item_ids:[]}],
+      '/sessions/session-2/agent-specs':[],
+      '/sessions/session-2/events':[],
+    };
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    const mounted = render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button',{name:/实现问答 API.*查看任务 Spec/}));
+    fireEvent.change(screen.getByRole('textbox',{name:'给子 Agent 的指令'}),{target:{value:'只修改问答 API 的草稿'}});
+    fireEvent.click(screen.getByRole('button',{name:'关闭详情'}));
+    fireEvent.change(screen.getByRole('textbox',{name:'搜索工单'}),{target:{value:'实现问答'}});
+    const requestCount = fetchSpy.mock.calls.length;
+    fireEvent.click(screen.getByRole('button',{name:'创建新任务'}));
+    expect(screen.getByText('新项目需求')).toBeTruthy();
+    expect(screen.getByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeTruthy();
+    expect(fetchSpy.mock.calls.length).toBe(requestCount);
+    expect((screen.getByRole('textbox',{name:'搜索工单'}) as HTMLInputElement).value).toBe('实现问答');
+    fireEvent.change(screen.getByRole('textbox',{name:'搜索工单'}),{target:{value:''}});
+    fireEvent.change(screen.getByRole('textbox',{name:'最终目标'}),{target:{value:'处理客户问题'}});
+    fireEvent.click(screen.getByRole('button',{name:'创建并分析'}));
+    await screen.findByRole('button',{name:/客户支持助手.*PRD 生成后可打开/});
+    expect(screen.getByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeTruthy();
+    expect(screen.getByRole('button',{name:/知识问答.*打开 PRD 审核/})).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button',{name:/实现问答 API.*查看任务 Spec/}));
+    expect((screen.getByRole('textbox',{name:'给子 Agent 的指令'}) as HTMLTextAreaElement).value).toBe('只修改问答 API 的草稿');
+    fireEvent.click(screen.getByRole('button',{name:'关闭详情'}));
+
+    // The old project's PRD remains bound to that project while the second chat is active.
+    fireEvent.click(screen.getByRole('button',{name:/知识问答.*打开 PRD 审核/}));
+    const dialog = within(await screen.findByRole('dialog',{name:'PRD 审核'}));
+    fireEvent.click(dialog.getByRole('button',{name:'正文'}));
+    expect(await dialog.findByText('这是已保存的 PRD 正文。')).toBeTruthy();
+    fireEvent.click(dialog.getByRole('button',{name:'关闭详情'}));
+    expect(within(screen.getByRole('complementary')).getByText('客户支持助手',{selector:'.ff-message-bubble'})).toBeTruthy();
+
+    mounted.unmount();
+    render(<ApiWorkspace />);
+    await screen.findByRole('button',{name:/客户支持助手.*PRD 生成后可打开/});
+    await screen.findByRole('button',{name:/实现问答 API.*查看任务 Spec/});
+    fireEvent.change(screen.getByRole('combobox',{name:'当前对话项目'}),{target:{value:'session-1'}});
+    expect(within(screen.getByRole('complementary')).getByText('知识问答',{selector:'.ff-message-bubble'})).toBeTruthy();
+    expect(screen.getByRole('button',{name:/客户支持助手.*PRD 生成后可打开/})).toBeTruthy();
+  });
+
+  it('restores healthy projects independently, removes missing sessions and retries temporary failures without changing the chat', async () => {
+    missingSavedSession = true;
+    localStorage.setItem('firstflight.active-session-id','session-missing');
+    sessionCatalog.push(
+      {session_id:'session-missing',project_id:'project-missing',root_work_item_id:null,title:'已删除项目'},
+      {session_id:'session-offline',project_id:'project-offline',root_work_item_id:'root-offline',title:'恢复后的项目'},
+    );
+    resourceFailures['/sessions/session-offline/state'] = 503;
+    render(<ApiWorkspace />);
+    await screen.findByRole('button',{name:/实现问答 API.*查看任务 Spec/});
+    expect(screen.getByText('新项目需求')).toBeTruthy();
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByRole('option',{name:'已删除项目'})).toBeNull();
+    resourceFailures = {};
+    resourceOverrides = {
+      '/sessions/session-offline/state':{...state,session_id:'session-offline',project_id:'project-offline',current_spec_version_id:null},
+      '/sessions/session-offline/specs':[],
+      '/sessions/session-offline/work-items':[{id:'root-offline',kind:'ROOT',title:'恢复后的项目',parent_id:null,dependency_work_item_ids:[]}],
+      '/sessions/session-offline/agent-specs':[],
+      '/sessions/session-offline/events':[],
+    };
+    await waitFor(() => expect((screen.getByRole('button',{name:'刷新看板'}) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button',{name:'刷新看板'}));
+    await screen.findByRole('button',{name:/恢复后的项目.*PRD 生成后可打开/});
+    expect(screen.getByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeTruthy();
+    expect(screen.getByText('新项目需求')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('sends PRD approval to the selected card project even when a different project chat is active', async () => {
+    localStorage.setItem('firstflight.active-session-id','session-2');
+    sessionCatalog.push({session_id:'session-2',project_id:'project-2',root_work_item_id:'root-2',title:'另一个项目'});
+    resourceOverrides = {
+      '/sessions/session-2/state':{...state,session_id:'session-2',project_id:'project-2',current_spec_version_id:null,legal_actions:[],phase:'NEED_CLARIFICATION'},
+      '/sessions/session-2/specs':[],
+      '/sessions/session-2/work-items':[{id:'root-2',kind:'ROOT',title:'另一个项目',parent_id:null,dependency_work_item_ids:[]}],
+      '/sessions/session-2/agent-specs':[],
+      '/sessions/session-2/events':[],
+      '/sessions/session-1/commands':{state:{...state,phase:'APPROVED',current_spec_status:'APPROVED',state_version:7,legal_actions:[]}},
+    };
+    render(<ApiWorkspace />);
+    await screen.findByRole('button',{name:/另一个项目.*PRD 生成后可打开/});
+    fireEvent.click(await screen.findByRole('button',{name:/知识问答.*打开 PRD 审核/}));
+    const dialog = within(await screen.findByRole('dialog',{name:'PRD 审核'}));
+    fireEvent.change(dialog.getByPlaceholderText('说明为什么接受当前审核发现'),{target:{value:'已确认范围'}});
+    const confirm = dialog.getByRole('button',{name:'确认 PRD 并开始任务拆解'});
+    await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(confirm);
+    await screen.findByRole('dialog',{name:'任务详情'});
+    const commands = fetchSpy.mock.calls.filter(([input, options]) => options?.method === 'POST' && String(input).endsWith('/commands'));
+    expect(commands).toHaveLength(1);
+    expect(String(commands[0][0])).toContain('/sessions/session-1/commands');
+    expect(JSON.parse(commands[0][1].body)).toMatchObject({action:'approve',expected_state_version:6});
+    fireEvent.click(screen.getByRole('button',{name:'关闭详情'}));
+    expect((screen.getByRole('combobox',{name:'当前对话项目'}) as HTMLSelectElement).value).toBe('session-2');
+    expect(within(screen.getByRole('complementary')).getByText('另一个项目',{selector:'.ff-message-bubble'})).toBeTruthy();
+  });
+
+  it('sends a work item execution command to its owning project instead of the active chat', async () => {
+    localStorage.setItem('firstflight.active-session-id','session-2');
+    sessionCatalog.push({session_id:'session-2',project_id:'project-2',root_work_item_id:'root-2',title:'另一个项目'});
+    resourceOverrides = {
+      '/sessions/session-1/work-items':[
+        {id:'root-1',parent_id:null,kind:'ROOT',title:'知识问答',status:'in_progress',dependency_work_item_ids:[]},
+        {id:'task-cross-project',parent_id:'root-1',kind:'TASK',title:'跨项目执行任务',status:'todo',suggested_assignee:'Backend Agent',dependency_work_item_ids:[],available_actions:['start_task']},
+      ],
+      '/sessions/session-2/state':{...state,session_id:'session-2',project_id:'project-2',current_spec_version_id:null,legal_actions:[],phase:'NEED_CLARIFICATION'},
+      '/sessions/session-2/specs':[],
+      '/sessions/session-2/work-items':[{id:'root-2',kind:'ROOT',title:'另一个项目',parent_id:null,dependency_work_item_ids:[]}],
+      '/sessions/session-2/agent-specs':[],
+      '/sessions/session-2/events':[],
+      '/sessions/session-1/commands':{command_id:'command-start',state:{...state,state_version:7},created_resource_ids:[]},
+    };
+    render(<ApiWorkspace />);
+    await screen.findByRole('button',{name:/跨项目执行任务/});
+    fireEvent.click(screen.getByRole('button',{name:'开始'}));
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([input, options]) =>
+      options?.method === 'POST' && String(input).endsWith('/sessions/session-1/commands'))).toBe(true));
+    const command = fetchSpy.mock.calls.find(([input, options]) =>
+      options?.method === 'POST' && String(input).endsWith('/sessions/session-1/commands'))!;
+    expect(JSON.parse(command[1].body)).toMatchObject({
+      action:'start_task',
+      expected_state_version:6,
+      payload:{work_item_id:'task-cross-project'},
+    });
+    expect((screen.getByRole('combobox',{name:'当前对话项目'}) as HTMLSelectElement).value).toBe('session-2');
+  });
+
+  it('keeps child-agent drafts separate between tasks without dispatching real commands', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', {name: /实现问答 API.*查看任务 Spec/}));
+    let dialog = within(await screen.findByRole('dialog', {name: '任务详情'}));
+    const requestCount = fetchSpy.mock.calls.length;
+    const panel = within(dialog.getByRole('region', {name: '子 Agent 对话'}));
+    const draft = panel.getByRole('textbox', {name: '给子 Agent 的指令'}) as HTMLTextAreaElement;
+    fireEvent.click(panel.getByRole('button', {name: '修改需求'}));
+    expect(draft.value).toContain('修改');
+    fireEvent.change(draft, {target: {value: '请补充请求超时的验收标准。'}});
+    fireEvent.click(panel.getByRole('button', {name: '修改需求'}));
+    expect(draft.value).toBe('请补充请求超时的验收标准。');
+    expect((panel.getByRole('button', {name: '发送指令'}) as HTMLButtonElement).disabled).toBe(true);
+    expect((panel.getByRole('button', {name: '中断任务'}) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(panel.getByRole('button', {name: '发送指令'}));
+    fireEvent.click(panel.getByRole('button', {name: '中断任务'}));
+    expect(dialog.getAllByText('待开始')).toHaveLength(2);
+    fireEvent.click(dialog.getByRole('button', {name: '关闭详情'}));
+
+    fireEvent.click(screen.getByRole('button', {name: /构建检索流程/}));
+    dialog = within(await screen.findByRole('dialog', {name: '任务详情'}));
+    expect((dialog.getByRole('textbox', {name: '给子 Agent 的指令'}) as HTMLTextAreaElement).value).toBe('');
+    fireEvent.change(dialog.getByRole('textbox', {name: '给子 Agent 的指令'}), {target: {value: '检索任务独立草稿'}});
+    fireEvent.click(dialog.getByRole('button', {name: '关闭详情'}));
+
+    fireEvent.click(screen.getByRole('button', {name: /实现问答 API.*查看任务 Spec/}));
+    dialog = within(await screen.findByRole('dialog', {name: '任务详情'}));
+    expect((dialog.getByRole('textbox', {name: '给子 Agent 的指令'}) as HTMLTextAreaElement).value).toBe('请补充请求超时的验收标准。');
+    expect(fetchSpy.mock.calls.length).toBe(requestCount);
+  });
+
+  it('previews employee selection and unassignment across cards while leaving stored assignments unchanged', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const mounted = render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', {name: /实现问答 API.*查看任务 Spec/}));
+    let dialog = within(await screen.findByRole('dialog', {name: '任务详情'}));
+    const requestCount = fetchSpy.mock.calls.length;
+    let select = dialog.getByRole('combobox', {name: '指派员工'}) as HTMLSelectElement;
+    expect(select.selectedOptions[0].textContent).toBe('Backend Agent');
+    fireEvent.change(select, {target: {value: 'preview-frontend'}});
+    expect(select.selectedOptions[0].textContent).toBe('前端同事（示例）');
+    fireEvent.click(dialog.getByRole('button', {name: '关闭详情'}));
+    expect(screen.getByRole('button', {name: /实现问答 API.*前端同事（示例）/})).toBeTruthy();
+    expect(screen.getByRole('button', {name: /构建检索流程.*AI Agent/})).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', {name: /实现问答 API.*查看任务 Spec/}));
+    dialog = within(await screen.findByRole('dialog', {name: '任务详情'}));
+    select = dialog.getByRole('combobox', {name: '指派员工'}) as HTMLSelectElement;
+    expect(select.value).toBe('preview-frontend');
+    fireEvent.change(select, {target: {value: ''}});
+    expect(select.selectedOptions[0].textContent).toBe('未指派');
+    fireEvent.click(dialog.getByRole('button', {name: '关闭详情'}));
+    expect(screen.getByRole('button', {name: /实现问答 API.*未指派/})).toBeTruthy();
+    expect(fetchSpy.mock.calls.length).toBe(requestCount);
+
+    mounted.unmount();
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', {name: /实现问答 API.*Backend Agent/}));
+    dialog = within(await screen.findByRole('dialog', {name: '任务详情'}));
+    expect((dialog.getByRole('combobox', {name: '指派员工'}) as HTMLSelectElement).selectedOptions[0].textContent).toBe('Backend Agent');
+    expect((dialog.getByRole('textbox', {name: '给子 Agent 的指令'}) as HTMLTextAreaElement).value).toBe('');
+  });
+
   it.each([
     {event_type:'AGENT_TRACE',payload:{phase:'plan_task',status:'done'},label:'细化任务实现方案'},
     {event_type:'AGENT_SPEC_DETAILS_ENRICHED',payload:{},label:'任务实现方案已补齐'},
@@ -192,6 +466,20 @@ describe('workspace regression', () => {
     expect(within(dialog).queryByText(/"objective"/)).toBeNull();
   });
 
+  it('renders task dependencies as project swimlanes in the flow map', async () => {
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+
+    fireEvent.click(await screen.findByRole('button',{name:/DAG Flow Map/}));
+    const graph = await screen.findByRole('region',{name:'知识问答任务依赖图'});
+    expect(within(graph).getByRole('button',{name:/实现问答 API/})).toBeTruthy();
+    expect(within(graph).getByRole('button',{name:/构建检索流程/})).toBeTruthy();
+
+    fireEvent.click(within(graph).getByRole('button',{name:/构建检索流程/}));
+    const dialog = await screen.findByRole('dialog',{name:'任务详情'});
+    expect(within(dialog).getByRole('heading',{name:'构建检索流程'})).toBeTruthy();
+  });
+
   it('expands audit evidence and the review output associated with that event', async () => {
     localStorage.setItem('firstflight.active-session-id','session-1');
     render(<ApiWorkspace />);
@@ -209,7 +497,7 @@ describe('workspace regression', () => {
     const sidebar = screen.getByRole('complementary');
     await within(sidebar).findByText('需要修改');
     expect(within(sidebar).getByRole('button',{name:'查看 PRD 与审核意见'})).toBeTruthy();
-    expect(within(sidebar).queryByRole('combobox')).toBeNull();
+    expect(within(sidebar).queryByRole('combobox',{name:'历史 PRD 版本'})).toBeNull();
     expect(within(sidebar).queryByRole('button',{name:'基于历史版本创建新版'})).toBeNull();
   });
 });

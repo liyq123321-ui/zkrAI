@@ -50,7 +50,9 @@ afterEach(cleanup);
 
 describe('AgentSpecDetail', () => {
   it('presents an Agent Spec as readable sections instead of raw JSON', () => {
-    render(<AgentSpecDetail item={item} agentSpecs={[agentSpec]} />);
+    render(<AgentSpecDetail item={item} agentSpecs={[agentSpec]} employees={[
+      {id: 'Backend Agent', name: 'Backend Agent', role: 'Project Owner'},
+    ]} />);
 
     expect(screen.getAllByText('待开始')).toHaveLength(2);
     expect(screen.getByRole('heading', { name: '工作范围' })).toBeTruthy();
