@@ -272,6 +272,17 @@ class ActionScopedUnitOfWork:
             raise ValueError("Agent call operation does not match this materialization")
         call.status, call.completed_at = "SUCCEEDED", _now()
 
+    def mark_task_plan_call_succeeded(self, call_id: str) -> None:
+        """Complete one task-plan call adopted by decomposition materialization."""
+        if self.__action is not CommandAction.CONVERT_TO_WORK_ITEM:
+            raise ValueError("this action cannot complete an Agent call")
+        call = self.__session.get(AgentCall, call_id)
+        if call is None or call.project_id != self.__project_id or call.status != "RESULT_READY":
+            raise ValueError("task-plan Agent call is not ready to complete")
+        if call.operation != "plan_task":
+            raise ValueError("Agent call operation does not match this materialization")
+        call.status, call.completed_at = "SUCCEEDED", _now()
+
     def mark_analysis_call_succeeded(self, call_id: str) -> None:
         self.__mark_staged_call_succeeded(
             call_id, "analyze_brief", {CommandAction.MESSAGE}

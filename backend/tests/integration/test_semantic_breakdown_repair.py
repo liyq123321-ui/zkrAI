@@ -10,8 +10,9 @@ from app.schemas.workflow import SessionCommandRequest
 from app.services.command_service import CommandHandlerRejected, CommandService
 from app.services.decomposition_service import DecompositionService, DecompositionNotAllowed, SemanticReviewRejected
 from tests.helpers.fake_agent import ScriptedAgentGateway
+from tests.helpers.implementation_plans import implementation_plan
 from tests.helpers.scripted_codex import gateway_with_outputs
-from tests.integration.test_decomposition_service import _approved_project
+from tests.integration.test_decomposition_service import _approved_project, _plan_for
 
 
 def source_review():
@@ -29,6 +30,55 @@ def command_service(session_factory, agent):
 
 
 @pytest.mark.asyncio
+async def test_staged_review_repairs_only_the_implicated_task_plan(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+    passing_semantic_review,
+):
+    """A plan finding must not regenerate the base tree or unaffected plans."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    rejected = SemanticReview(verdict=ReviewVerdict.REJECT, findings=[
+        ReviewFinding(
+            code="UNASSIGNED_IMPLEMENTATION_REQUIREMENT",
+            severity="BLOCKER",
+            spec_path="agent_specs[t-api].implementation_plan.steps[0]",
+            message="The step references requirements outside this task.",
+            suggested_resolution="Regenerate only the t-api implementation plan.",
+            blocks_progress=True,
+        )
+    ])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            _plan_for(base.agent_specs[0]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+        ]),
+        review_breakdown_results=deque([rejected, passing_semantic_review]),
+    )
+
+    specs = await DecompositionService(session_factory, agent).convert(project.id)
+
+    assert len(specs) == 2
+    assert [operation for operation, _ in agent.calls] == [
+        "decompose_spec",
+        "plan_task",
+        "plan_task",
+        "review_breakdown",
+        "plan_task",
+        "review_breakdown",
+    ]
+    repaired = agent.calls[4][1]
+    assert repaired["task_spec"]["work_item_key"] == "t-api"
+    assert repaired["previous_plan"] is not None
+    assert repaired["review_feedback"] == rejected.model_dump(mode="json")
+    assert repaired["previous_review_call_id"]
+
+
+@pytest.mark.asyncio
 async def test_semantic_revision_runs_through_real_gateway_validation(
     tmp_path, monkeypatch, session_factory, db_session, complete_brief, valid_spec, valid_breakdown, passing_semantic_review
 ):
@@ -41,16 +91,30 @@ async def test_semantic_revision_runs_through_real_gateway_validation(
         "milestones": [], "tasks": [],
         "agent_specs": [revised.agent_specs[1].model_dump(mode="json")],
     })
+    plans = [
+        implementation_plan(sorted({
+            requirement_id
+            for criterion in task.acceptance_criteria
+            for requirement_id in criterion.requirement_ids
+        }))
+        for task in valid_breakdown.agent_specs
+    ]
     gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [
-        valid_breakdown, source_review(), replacements, passing_semantic_review,
+        valid_breakdown,
+        *map(json.dumps, plans),
+        source_review(),
+        replacements,
+        json.dumps(plans[0]),
+        json.dumps(plans[1]),
+        passing_semantic_review,
     ])
 
     specs = await DecompositionService(session_factory, gateway).convert(project.id)
 
     assert len(specs) == 2
-    assert len(prompts) == 4
-    assert '"previous_breakdown"' in prompts[2]
-    assert '"SOURCE_EXTENSION"' in prompts[2]
+    assert len(prompts) == 8
+    assert '"previous_breakdown"' in prompts[4]
+    assert '"SOURCE_EXTENSION"' in prompts[4]
     assert any(s.content["extension_points"] == ["Extend only within approved boundaries"] for s in specs)
     assert any(s.content["extension_points"] == valid_breakdown.agent_specs[0].extension_points for s in specs)
 

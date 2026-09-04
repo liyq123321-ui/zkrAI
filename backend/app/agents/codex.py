@@ -262,7 +262,11 @@ class CodexAgentGateway:
     async def decompose_spec(self, payload: dict[str, object]) -> WorkBreakdown:
         if "previous_breakdown" in payload:
             revision = await self._run_node("pm_revise_breakdown", payload, WorkBreakdownRevision)
-            return merge_breakdown_revision(revision, payload)
+            breakdown = merge_breakdown_revision(revision, payload)
+            if payload.get("decomposition_stage") == "base":
+                for task in breakdown.agent_specs:
+                    task.implementation_plan = None
+            return breakdown
         return await self._run_node("pm_decompose", payload, WorkBreakdown)
 
     async def plan_task(self, payload: dict[str, object]) -> ImplementationPlan:

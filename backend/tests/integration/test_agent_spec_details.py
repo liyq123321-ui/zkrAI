@@ -1,6 +1,7 @@
 """Exercise enrichment against real persistence and gateway boundaries, without CLI calls."""
 
 import asyncio
+from collections import deque
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from app.domain.types import SemanticReview
 from app.services.command_service import ForbiddenActor
 from app.services.decomposition_service import DecompositionService, _canonical_hash
 from tests.helpers.implementation_plans import implementation_plan
+from tests.helpers.fake_agent import ScriptedAgentGateway
 from tests.helpers.scripted_codex import gateway_with_outputs
 from tests.integration.test_decomposition_service import _approved_project
 
@@ -45,7 +47,7 @@ async def legacy_project(tmp_path, monkeypatch, session_factory, db_session, com
         valid_breakdown.tasks.append(task)
         valid_breakdown.agent_specs.append(spec)
     project = _approved_project(db_session, complete_brief, valid_spec)
-    gateway, _ = gateway_with_outputs(tmp_path, monkeypatch, [valid_breakdown, passing_semantic_review])
+    gateway = ScriptedAgentGateway(decompose_results=deque([valid_breakdown]))
     await DecompositionService(session_factory, gateway).convert(project.id)
     with session_factory() as db:
         for spec in db.query(AgentSpec).all():

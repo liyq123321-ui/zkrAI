@@ -156,6 +156,30 @@ async def test_base_decomposition_discards_embedded_plans_before_validation(
 
 
 @pytest.mark.asyncio
+async def test_base_revision_discards_plans_retained_from_unchanged_tasks(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown
+):
+    changed = valid_breakdown.agent_specs[1].model_copy(deep=True)
+    changed.extension_points = ["Only owner-approved sources"]
+    revision = json.dumps({
+        "milestones": [],
+        "tasks": [],
+        "agent_specs": [changed.model_dump(mode="json")],
+    })
+    gateway, _ = gateway_with_outputs(tmp_path, monkeypatch, [revision])
+
+    result = await gateway.decompose_spec({
+        "decomposition_stage": "base",
+        "approved_spec": valid_spec.model_dump(mode="json"),
+        "input_refs": valid_spec.source_refs,
+        "previous_breakdown": valid_breakdown.model_dump(mode="json"),
+        "review_feedback": {"verdict": "REJECT", "findings": []},
+    })
+
+    assert all(task.implementation_plan is None for task in result.agent_specs)
+
+
+@pytest.mark.asyncio
 async def test_decomposition_promotes_only_the_first_output_when_all_are_optional(
     tmp_path, monkeypatch, valid_spec, valid_breakdown
 ):
