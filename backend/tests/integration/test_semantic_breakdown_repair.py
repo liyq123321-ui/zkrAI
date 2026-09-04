@@ -126,6 +126,62 @@ async def test_staged_review_keeps_plan_evidence_order_when_findings_are_reverse
 
 
 @pytest.mark.asyncio
+async def test_new_command_resumes_exhausted_plan_review_from_checkpoints(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+    passing_semantic_review,
+):
+    """A plan-only rejection must never force regeneration of the base tree."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    rejected = SemanticReview(verdict=ReviewVerdict.REJECT, findings=[
+        ReviewFinding(
+            code="PLAN_CONTRACT_MISMATCH", severity="BLOCKER",
+            spec_path="agent_specs[t-api].implementation_plan.interfaces[0]",
+            message="The task plan contract is inconsistent.",
+            suggested_resolution="Regenerate the t-api plan only.",
+            blocks_progress=True,
+        )
+    ])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            _plan_for(base.agent_specs[0]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+        ]),
+        review_breakdown_results=deque([
+            rejected, rejected, rejected, rejected, passing_semantic_review,
+        ]),
+    )
+    commands = command_service(session_factory, agent)
+
+    with pytest.raises(CommandHandlerRejected):
+        await commands.execute(project.session_id, SessionCommandRequest(
+            command_id="staged-review-exhausted-1",
+            action=CommandAction.CONVERT_TO_WORK_ITEM,
+            expected_state_version=7,
+            actor_id="owner",
+        ))
+    recovered = await commands.execute(project.session_id, SessionCommandRequest(
+        command_id="staged-review-exhausted-2",
+        action=CommandAction.CONVERT_TO_WORK_ITEM,
+        expected_state_version=7,
+        actor_id="owner",
+    ))
+
+    assert recovered.state.phase == "AGENT_SPECS_READY"
+    operations = [operation for operation, _ in agent.calls]
+    assert operations.count("decompose_spec") == 1
+    assert operations.count("plan_task") == 5
+    assert operations.count("review_breakdown") == 5
+
+
+@pytest.mark.asyncio
 async def test_cancelled_task_planner_settles_every_started_call(
     session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
 ):

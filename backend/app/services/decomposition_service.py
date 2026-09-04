@@ -550,6 +550,15 @@ class DecompositionService:
             if not self._review_blocks(review) or not self._can_repair_review(review):
                 return None
             same_attempt = command_id is not None and request.get("command_id") == command_id and request.get("input_hash") == input_hash
+            if (
+                not same_attempt
+                and request.get("plan_agent_call_ids")
+                and self._review_targets_plans(review)
+            ):
+                # A new explicit command gets a fresh semantic-repair budget, but
+                # starts from exact base/task checkpoints instead of revising the
+                # task tree in response to plan-only findings.
+                return None
             completed_round = request.get("repair_round", 0) if same_attempt else 0
             if type(completed_round) is not int or not 0 <= completed_round <= 2:
                 raise DecompositionNotAllowed("invalid persisted semantic repair round")
