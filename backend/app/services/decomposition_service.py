@@ -19,6 +19,7 @@ from app.agents.gateway import AgentGateway
 from app.database.models import AgentCall, AgentSession, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem, WorkItemDependency
 from app.domain.implementation_plan import ImplementationPlan
 from app.domain.types import AgentSpecProposal, ProjectPhase, ProjectSpecPayload, ReviewVerdict, SemanticReview, SpecStatus, WorkBreakdown, WorkItemKind
+from app.services.task_plan_graph import dependency_contracts, topological_plan_waves
 from app.services.task_specifications import ImplementationPlanError, requirement_snapshots, validate_implementation_plan
 
 
@@ -938,44 +939,59 @@ class DecompositionService:
         ]
         if not targets:
             return []
-        results = await asyncio.gather(
-            *(
-                self._plan_task(
-                    project_id,
-                    snapshot,
-                    breakdown,
-                    task,
-                    base_checkpoint_call_id=base_checkpoint_call_id,
-                    command_id=command_id,
-                    input_hash=input_hash,
-                    previous_plan=(previous_plans or {}).get(task.work_item_key),
-                    review_feedback=review_feedback,
-                    previous_review_call_id=previous_review_call_id,
-                )
-                for task in targets
-            ),
-            return_exceptions=True,
-        )
-        call_ids: list[str] = []
-        failure: Exception | None = None
-        cancellation: BaseException | None = None
-        for task, result in zip(targets, results, strict=True):
-            if isinstance(result, BaseException):
-                if isinstance(result, DecompositionPlanningFailure):
-                    call_ids.extend(result.agent_call_ids)
-                if failure is None and isinstance(result, Exception):
-                    failure = result
-                elif cancellation is None and not isinstance(result, Exception):
-                    cancellation = result
-                continue
-            plan, call_id = result
-            task.implementation_plan = plan
-            call_ids.append(call_id)
-        if failure is not None:
-            raise DecompositionPlanningFailure(str(failure), call_ids) from failure
-        if cancellation is not None:
-            raise cancellation
-        return call_ids
+        call_ids_by_key: dict[str, str] = {}
+        target_keys = {task.work_item_key for task in targets}
+        for wave in topological_plan_waves(
+            breakdown.agent_specs, selected_keys=target_keys
+        ):
+            results = await asyncio.gather(
+                *(
+                    self._plan_task(
+                        project_id,
+                        snapshot,
+                        breakdown,
+                        task,
+                        base_checkpoint_call_id=base_checkpoint_call_id,
+                        command_id=command_id,
+                        input_hash=input_hash,
+                        previous_plan=(previous_plans or {}).get(task.work_item_key),
+                        review_feedback=review_feedback,
+                        previous_review_call_id=previous_review_call_id,
+                    )
+                    for task in wave
+                ),
+                return_exceptions=True,
+            )
+            failure: Exception | None = None
+            cancellation: BaseException | None = None
+            for task, result in zip(wave, results, strict=True):
+                if isinstance(result, BaseException):
+                    if isinstance(result, DecompositionPlanningFailure):
+                        call_ids_by_key[task.work_item_key] = result.agent_call_id
+                    if failure is None and isinstance(result, Exception):
+                        failure = result
+                    elif cancellation is None and not isinstance(result, Exception):
+                        cancellation = result
+                    continue
+                plan, call_id = result
+                task.implementation_plan = plan
+                call_ids_by_key[task.work_item_key] = call_id
+            ordered_call_ids = [
+                call_ids_by_key[task.work_item_key]
+                for task in breakdown.agent_specs
+                if task.work_item_key in call_ids_by_key
+            ]
+            if failure is not None:
+                raise DecompositionPlanningFailure(
+                    str(failure), ordered_call_ids
+                ) from failure
+            if cancellation is not None:
+                raise cancellation
+        return [
+            call_ids_by_key[task.work_item_key]
+            for task in breakdown.agent_specs
+            if task.work_item_key in call_ids_by_key
+        ]
 
     async def _plan_task(
         self,
@@ -1026,6 +1042,15 @@ class DecompositionService:
             with self._session_factory() as db:
                 self._assert_snapshot_current(db, project_id, snapshot)
                 session = self._pm_session(db, project_id)
+                contracts = dependency_contracts(
+                    task,
+                    {item.work_item_key: item for item in breakdown.agent_specs},
+                )
+                payload["dependency_contracts"] = contracts
+                payload["dependency_contract_hashes"] = {
+                    str(contract["work_item_key"]): str(contract["contract_hash"])
+                    for contract in contracts
+                }
                 call_id = _new_id()
                 checkpoint = self._task_plan_checkpoint(
                     db, project_id, snapshot, payload, task
@@ -1119,6 +1144,8 @@ class DecompositionService:
                 or request.get("base_checkpoint_call_id") != payload.get("base_checkpoint_call_id")
                 or request.get("task_spec_hash") != payload.get("task_spec_hash")
                 or request.get("task_spec") != payload.get("task_spec")
+                or request.get("dependency_contract_hashes") != payload.get("dependency_contract_hashes")
+                or request.get("dependency_contracts") != payload.get("dependency_contracts")
             ):
                 continue
             try:

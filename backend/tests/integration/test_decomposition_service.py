@@ -93,6 +93,96 @@ async def test_staged_decomposition_plans_each_base_task_before_review(
 
 
 @pytest.mark.asyncio
+async def test_dependency_task_planning_waits_for_its_upstream_plan(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown
+):
+    """Starting all missing tasks together would start t-api before t-domain settles."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+
+    class DependencyOrderedGateway(ScriptedAgentGateway):
+        def __init__(self):
+            super().__init__(decompose_results=deque([base]))
+            self.domain_started = asyncio.Event()
+            self.release_domain = asyncio.Event()
+            self.domain_active = False
+            self.api_started_while_domain_active = False
+
+        async def plan_task(self, payload):
+            self.calls.append(("plan_task", payload))
+            task = AgentSpecProposal.model_validate(payload["task_spec"])
+            if task.work_item_key == "t-domain":
+                self.domain_active = True
+                self.domain_started.set()
+                try:
+                    await self.release_domain.wait()
+                    return _plan_for(task)
+                finally:
+                    self.domain_active = False
+            self.api_started_while_domain_active = self.domain_active
+            return _plan_for(task)
+
+    agent = DependencyOrderedGateway()
+    conversion = asyncio.create_task(
+        DecompositionService(session_factory, agent).convert(project.id)
+    )
+    await asyncio.wait_for(agent.domain_started.wait(), timeout=1)
+    await asyncio.sleep(0)
+    agent.release_domain.set()
+    await conversion
+
+    assert not agent.api_started_while_domain_active
+    assert [
+        payload["task_spec"]["work_item_key"]
+        for operation, payload in agent.calls
+        if operation == "plan_task"
+    ] == ["t-domain", "t-api"]
+
+
+@pytest.mark.asyncio
+async def test_dependency_task_planner_receives_validated_upstream_contract(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown
+):
+    """Dropping the upstream plan from the task payload would lose the handoff contract."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque(_plan_for(task) for task in base.agent_specs),
+    )
+
+    await DecompositionService(session_factory, agent).convert(project.id)
+
+    planner_payloads = {
+        payload["task_spec"]["work_item_key"]: payload
+        for operation, payload in agent.calls
+        if operation == "plan_task"
+    }
+    domain_payload = planner_payloads["t-domain"]
+    api_payload = planner_payloads["t-api"]
+    domain_task_spec = base.agent_specs[0].model_dump(mode="json")
+    domain_plan = domain_task_spec.pop("implementation_plan")
+
+    assert domain_payload["dependency_contracts"] == []
+    assert domain_payload["dependency_contract_hashes"] == {}
+    assert api_payload["dependency_contracts"] == [{
+        "work_item_key": "t-domain",
+        "task_spec": domain_task_spec,
+        "implementation_plan": domain_plan,
+        "contract_hash": api_payload["dependency_contract_hashes"]["t-domain"],
+    }]
+    assert api_payload["dependency_contract_hashes"] == {
+        "t-domain": api_payload["dependency_contracts"][0]["contract_hash"]
+    }
+
+
+@pytest.mark.asyncio
 async def test_staged_decomposition_retry_reuses_base_and_completed_task_plan(
     session_factory, db_session, complete_brief, valid_spec, valid_breakdown
 ):
