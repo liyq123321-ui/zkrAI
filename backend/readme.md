@@ -327,7 +327,9 @@ WebGUI 会在该命令成功后自动调用 `create_spec`，因此用户只需�
 
 ### 7. 从已批准 Spec 拆解：`convert_to_work_item`
 
-仅在 `REVIEW + APPROVED` 合法。PM Agent 生成结构化拆解，系统先执行硬性结构化验证（任务层级、依赖、来源、必填输出、验收等），再由 Reviewer Agent 审核语义冲突（包括排除项是否被违反）。验证和 Reviewer 都通过后，才持久化 WorkItem、依赖和 Agent Spec。
+仅在 `REVIEW + APPROVED` 合法。拆解按三个持久阶段执行：PM Agent 先生成不含实施计划的基础任务树；系统验证任务层级、依赖、来源、必填输出和验收映射后，以最多两个并发调用逐任务生成 `implementation_plan`；最后 Reviewer Agent 审核组装后的完整拆解（包括排除项是否被违反）。所有验证和 Reviewer 都通过后，才在一个事务中持久化 WorkItem、依赖和 Agent Spec。
+
+基础拆解和每个已通过验证的任务计划都会作为可恢复检查点保留。显式重试时，服务只复用与同一项目 UUID、已批准 Spec UUID/内容哈希、输入引用、基础调用 UUID 和任务内容哈希完全匹配的结果，并为当前命令创建新的采用证据；不会按项目名、任务名或裸 `FR-*` 标识查找。某个任务规划失败不会写入半成品业务行，重试只补缺失任务。最终审核若仅指出 `implementation_plan` 路径，会只重做对应任务计划；任务边界问题仍回到基础拆解修订。Spec 发生变化时，旧检查点自动失效。
 
 ```json
 {

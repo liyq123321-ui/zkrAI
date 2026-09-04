@@ -4,6 +4,7 @@ The PM Agent proposes local keys only.  This boundary validates every proposal
 before writes, assigns server IDs, and never starts a child Agent.
 """
 
+import asyncio
 import hashlib
 import json
 from collections import deque
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.gateway import AgentGateway
 from app.database.models import AgentCall, AgentSession, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem, WorkItemDependency
+from app.domain.implementation_plan import ImplementationPlan
 from app.domain.types import AgentSpecProposal, ProjectPhase, ProjectSpecPayload, ReviewVerdict, SemanticReview, SpecStatus, WorkBreakdown, WorkItemKind
 from app.services.task_specifications import ImplementationPlanError, requirement_snapshots, validate_implementation_plan
 
@@ -50,6 +52,10 @@ class BreakdownReviewerFailure(RuntimeError):
         super().__init__(message)
 
 
+class DecompositionPlanningFailure(BreakdownReviewerFailure):
+    """At least one independently persisted task-plan call failed."""
+
+
 class PreparedBreakdownValidationError(BreakdownValidationError):
     """A stable proposal error associated with the exact PM call that produced it."""
 
@@ -82,11 +88,16 @@ class PreparedDecomposition:
     approved_spec: ApprovedSpecSnapshot
     breakdown: WorkBreakdown
     pm_agent_call_id: str
+    plan_agent_call_ids: tuple[str, ...]
     reviewer_agent_call_id: str
 
     @property
     def agent_call_ids(self) -> list[str]:
-        return [self.pm_agent_call_id, self.reviewer_agent_call_id]
+        return [
+            self.pm_agent_call_id,
+            *self.plan_agent_call_ids,
+            self.reviewer_agent_call_id,
+        ]
 
     @property
     def agent_call_id(self) -> str:
@@ -352,7 +363,7 @@ def validate_breakdown(
                f"requirements without task acceptance coverage: {', '.join(sorted(uncovered))}")
 
     for proposal in breakdown.agent_specs:
-        if not require_implementation_plan and proposal.implementation_plan is None:
+        if proposal.implementation_plan is None and not require_implementation_plan:
             continue
         try:
             validate_implementation_plan(proposal.implementation_plan, proposal, allowed_requirement_ids)
@@ -395,6 +406,7 @@ class DecompositionService:
 
     def __init__(self, session_factory: Callable[[], Session], agent: AgentGateway) -> None:
         self._session_factory, self._agent = session_factory, agent
+        self._planning_semaphore = asyncio.Semaphore(2)
 
     async def convert(self, project_id: str) -> list[AgentSpec]:
         prepared = await self.prepare(project_id)
@@ -429,9 +441,12 @@ class DecompositionService:
                 "project_id": project_id,
                 "spec_version_id": snapshot.id,
                 "spec_content_hash": snapshot.content_hash,
+                "source_spec_version_id": snapshot.id,
+                "source_spec_content_hash": snapshot.content_hash,
                 "approved_spec": json.loads(json.dumps(dict(snapshot.content))),
                 "input_refs": list(snapshot.input_refs),
                 "repair_round": repair_round,
+                "decomposition_stage": "base",
             }
             if command_id is not None:
                 payload["command_id"] = command_id
@@ -439,11 +454,18 @@ class DecompositionService:
                 payload["input_hash"] = input_hash
             if previous:
                 payload.update(previous)
-            breakdown, review, call_id, reviewer_call_id = await self._prepare_round(
+            breakdown, review, call_id, plan_call_ids, reviewer_call_id = await self._prepare_round(
                 project_id, snapshot, payload, command_id=command_id, input_hash=input_hash,
             )
             if not self._review_blocks(review):
-                return PreparedDecomposition(project_id, snapshot, breakdown, call_id, reviewer_call_id)
+                return PreparedDecomposition(
+                    project_id,
+                    snapshot,
+                    breakdown,
+                    call_id,
+                    tuple(plan_call_ids),
+                    reviewer_call_id,
+                )
 
             will_repair = repair_round < 2 and self._can_repair_review(review)
             with self._session_factory() as db:
@@ -453,7 +475,7 @@ class DecompositionService:
                     event_type="DECOMPOSITION_REVIEW_REJECTED", actor_id=None,
                     payload={
                         "spec_version_id": snapshot.id, "command_id": command_id,
-                        "agent_call_ids": [call_id, reviewer_call_id], "repair_round": repair_round,
+                        "agent_call_ids": [call_id, *plan_call_ids, reviewer_call_id], "repair_round": repair_round,
                         "will_repair": will_repair, "review": review.model_dump(mode="json"),
                     },
                 ))
@@ -463,7 +485,22 @@ class DecompositionService:
                     "SEMANTIC_REVIEW_BLOCKED", self._review_implicated_path(review),
                     "Reviewer found a blocking semantic conflict",
                 )
-                raise SemanticReviewRejected(error, [call_id, reviewer_call_id])
+                raise SemanticReviewRejected(
+                    error, [call_id, *plan_call_ids, reviewer_call_id]
+                )
+            if plan_call_ids and self._review_targets_plans(review):
+                return await self._repair_staged_plans(
+                    project_id,
+                    snapshot,
+                    breakdown,
+                    review,
+                    base_call_id=call_id,
+                    plan_call_ids=plan_call_ids,
+                    reviewer_call_id=reviewer_call_id,
+                    completed_round=repair_round,
+                    command_id=command_id,
+                    input_hash=input_hash,
+                )
             previous = {
                 "previous_breakdown": breakdown.model_dump(mode="json"),
                 "review_feedback": review.model_dump(mode="json"),
@@ -499,6 +536,7 @@ class DecompositionService:
             if (request.get("project_id") != project_id
                     or request.get("source_spec_version_id") != snapshot.id
                     or request.get("source_spec_content_hash") != snapshot.content_hash
+                    or tuple(request.get("input_refs", [])) != snapshot.input_refs
                     or request.get("approved_spec") != snapshot.content):
                 continue
             if call.status != "RESULT_READY":
@@ -534,28 +572,50 @@ class DecompositionService:
     async def _prepare_round(
         self, project_id: str, snapshot: ApprovedSpecSnapshot, payload: dict[str, object], *,
         command_id: str | None, input_hash: str | None,
-    ) -> tuple[WorkBreakdown, SemanticReview, str, str]:
+    ) -> tuple[WorkBreakdown, SemanticReview, str, list[str], str]:
         with self._session_factory() as db:
             self._assert_snapshot_current(db, project_id, snapshot)
             pm = self._pm_session(db, project_id)
-            call = AgentCall(id=_new_id(), project_id=project_id, agent_session_id=pm.id, operation="decompose_spec", request=payload, status="PENDING")
+            checkpoint = self._base_checkpoint(db, project_id, snapshot, payload)
+            call_id = _new_id()
+            if checkpoint is None:
+                call = AgentCall(
+                    id=call_id, project_id=project_id,
+                    agent_session_id=pm.id, operation="decompose_spec",
+                    request=payload, status="PENDING",
+                )
+                base_checkpoint_call_id = call_id
+            else:
+                breakdown, source_call_id = checkpoint
+                adopted_request = json.loads(json.dumps(payload))
+                adopted_request["checkpoint_source_call_id"] = source_call_id
+                call = AgentCall(
+                    id=call_id, project_id=project_id,
+                    agent_session_id=pm.id, operation="decompose_spec",
+                    request=adopted_request,
+                    response=breakdown.model_dump(mode="json"),
+                    status="RESULT_READY", completed_at=_now(),
+                )
+                base_checkpoint_call_id = source_call_id
             db.add(call)
             db.commit()
-            call_id = call.id
 
+        if checkpoint is None:
+            try:
+                breakdown = await self._agent.decompose_spec(payload)
+            except Exception as error:
+                self._record_failure(project_id, call_id, error)
+                raise DecompositionAgentFailure(str(error), call_id) from error
+            with self._session_factory() as db:
+                call = db.get(AgentCall, call_id)
+                if call is None:
+                    raise RuntimeError("decomposition Agent call disappeared")
+                call.status, call.response, call.completed_at = "RESULT_READY", breakdown.model_dump(mode="json"), _now()
+                db.commit()
         try:
-            breakdown = await self._agent.decompose_spec(payload)
-        except Exception as error:
-            self._record_failure(project_id, call_id, error)
-            raise DecompositionAgentFailure(str(error), call_id) from error
-        with self._session_factory() as db:
-            call = db.get(AgentCall, call_id)
-            if call is None:
-                raise RuntimeError("decomposition Agent call disappeared")
-            call.status, call.response, call.completed_at = "RESULT_READY", breakdown.model_dump(mode="json"), _now()
-            db.commit()
-        try:
-            validate_breakdown(breakdown, snapshot)
+            validate_breakdown(
+                breakdown, snapshot, require_implementation_plan=False
+            )
             with self._session_factory() as db:
                 self._assert_snapshot_current(db, project_id, snapshot)
                 self._assert_new_local_keys(db, project_id, breakdown)
@@ -565,8 +625,56 @@ class DecompositionService:
         except Exception as error:
             self._record_failure(project_id, call_id, error)
             raise
-        reviewer_payload = self._reviewer_payload(project_id, snapshot, breakdown, command_id=command_id, input_hash=input_hash)
-        reviewer_payload.update(pm_agent_call_id=call_id, repair_round=payload["repair_round"])
+        try:
+            plan_call_ids = await self._plan_tasks(
+                project_id,
+                snapshot,
+                breakdown,
+                base_checkpoint_call_id=base_checkpoint_call_id,
+                command_id=command_id,
+                input_hash=input_hash,
+            )
+            validate_breakdown(breakdown, snapshot)
+        except DecompositionPlanningFailure as error:
+            error.agent_call_ids.insert(0, call_id)
+            error.agent_call_id = error.agent_call_ids[-1]
+            raise
+        except BreakdownValidationError as error:
+            self._record_failure(project_id, call_id, error)
+            raise PreparedBreakdownValidationError(error, [call_id]) from error
+        review, reviewer_call_id = await self._run_breakdown_review(
+            project_id,
+            snapshot,
+            breakdown,
+            base_call_id=call_id,
+            plan_call_ids=plan_call_ids,
+            repair_round=int(payload["repair_round"]),
+            command_id=command_id,
+            input_hash=input_hash,
+        )
+        return breakdown, review, call_id, plan_call_ids, reviewer_call_id
+
+    async def _run_breakdown_review(
+        self,
+        project_id: str,
+        snapshot: ApprovedSpecSnapshot,
+        breakdown: WorkBreakdown,
+        *,
+        base_call_id: str,
+        plan_call_ids: list[str],
+        repair_round: int,
+        command_id: str | None,
+        input_hash: str | None,
+    ) -> tuple[SemanticReview, str]:
+        reviewer_payload = self._reviewer_payload(
+            project_id, snapshot, breakdown,
+            command_id=command_id, input_hash=input_hash,
+        )
+        reviewer_payload.update(
+            pm_agent_call_id=base_call_id,
+            plan_agent_call_ids=plan_call_ids,
+            repair_round=repair_round,
+        )
         with self._session_factory() as db:
             reviewer = self._reviewer_session(db, project_id)
             reviewer_call = AgentCall(
@@ -581,7 +689,9 @@ class DecompositionService:
             review = await self._agent.review_breakdown(reviewer_payload)
         except Exception as error:
             self._record_failure(project_id, reviewer_call_id, error)
-            raise BreakdownReviewerFailure(str(error), [call_id, reviewer_call_id]) from error
+            raise BreakdownReviewerFailure(
+                str(error), [base_call_id, *plan_call_ids, reviewer_call_id]
+            ) from error
         with self._session_factory() as db:
             persisted_review_call = db.get(AgentCall, reviewer_call_id)
             if persisted_review_call is None:
@@ -590,7 +700,428 @@ class DecompositionService:
             persisted_review_call.response = review.model_dump(mode="json")
             persisted_review_call.completed_at = _now()
             db.commit()
-        return breakdown, review, call_id, reviewer_call_id
+        return review, reviewer_call_id
+
+    async def _repair_staged_plans(
+        self,
+        project_id: str,
+        snapshot: ApprovedSpecSnapshot,
+        breakdown: WorkBreakdown,
+        review: SemanticReview,
+        *,
+        base_call_id: str,
+        plan_call_ids: list[str],
+        reviewer_call_id: str,
+        completed_round: int,
+        command_id: str | None,
+        input_hash: str | None,
+    ) -> PreparedDecomposition:
+        """Repair only reviewer-implicated plans while retaining the base tree."""
+
+        if len(plan_call_ids) != len(breakdown.agent_specs):
+            raise RuntimeError("staged planning evidence does not match task count")
+        plan_calls_by_key = {
+            task.work_item_key: call_id
+            for task, call_id in zip(
+                breakdown.agent_specs, plan_call_ids, strict=True
+            )
+        }
+        with self._session_factory() as db:
+            base_call = db.get(AgentCall, base_call_id)
+            if base_call is None:
+                raise RuntimeError("base decomposition Agent call disappeared")
+            base_checkpoint_call_id = str(
+                base_call.request.get("checkpoint_source_call_id") or base_call.id
+            )
+
+        for repair_round in range(completed_round + 1, 3):
+            targets = self._plan_repair_targets(breakdown, review)
+            previous_plans = {
+                task.work_item_key: task.implementation_plan
+                for task in targets
+            }
+            for task in targets:
+                task.implementation_plan = None
+            try:
+                repaired_call_ids = await self._plan_tasks(
+                    project_id,
+                    snapshot,
+                    breakdown,
+                    base_checkpoint_call_id=base_checkpoint_call_id,
+                    command_id=command_id,
+                    input_hash=input_hash,
+                    previous_plans=previous_plans,
+                    review_feedback=review,
+                    previous_review_call_id=reviewer_call_id,
+                )
+                target_keys = {task.work_item_key for task in targets}
+                with self._session_factory() as db:
+                    repaired_by_key = {}
+                    for call_id in repaired_call_ids:
+                        call = db.get(AgentCall, call_id)
+                        key = (
+                            call.request.get("task_spec", {}).get("work_item_key")
+                            if call is not None else None
+                        )
+                        if key not in target_keys or key in repaired_by_key:
+                            raise RuntimeError(
+                                "task-plan evidence does not match repair targets"
+                            )
+                        repaired_by_key[key] = call_id
+                if set(repaired_by_key) != target_keys:
+                    raise RuntimeError(
+                        "task-plan evidence does not cover repair targets"
+                    )
+                plan_calls_by_key.update(repaired_by_key)
+                validate_breakdown(breakdown, snapshot)
+            except DecompositionPlanningFailure as error:
+                error.agent_call_ids.insert(0, base_call_id)
+                error.agent_call_id = error.agent_call_ids[-1]
+                raise
+            current_plan_ids = [
+                plan_calls_by_key[task.work_item_key]
+                for task in breakdown.agent_specs
+            ]
+            review, reviewer_call_id = await self._run_breakdown_review(
+                project_id,
+                snapshot,
+                breakdown,
+                base_call_id=base_call_id,
+                plan_call_ids=current_plan_ids,
+                repair_round=repair_round,
+                command_id=command_id,
+                input_hash=input_hash,
+            )
+            if not self._review_blocks(review):
+                return PreparedDecomposition(
+                    project_id,
+                    snapshot,
+                    breakdown,
+                    base_call_id,
+                    tuple(current_plan_ids),
+                    reviewer_call_id,
+                )
+            will_repair = repair_round < 2 and self._can_repair_review(review)
+            with self._session_factory() as db:
+                project = self._project(db, project_id)
+                db.add(AuditEvent(
+                    id=_new_id(), project_id=project_id,
+                    session_id=project.session_id,
+                    event_type="DECOMPOSITION_REVIEW_REJECTED", actor_id=None,
+                    payload={
+                        "spec_version_id": snapshot.id,
+                        "command_id": command_id,
+                        "agent_call_ids": [
+                            base_call_id, *current_plan_ids, reviewer_call_id,
+                        ],
+                        "repair_round": repair_round,
+                        "will_repair": will_repair,
+                        "review": review.model_dump(mode="json"),
+                    },
+                ))
+                db.commit()
+            if not will_repair:
+                error = BreakdownValidationError(
+                    "SEMANTIC_REVIEW_BLOCKED",
+                    self._review_implicated_path(review),
+                    "Reviewer found a blocking semantic conflict",
+                )
+                raise SemanticReviewRejected(
+                    error,
+                    [base_call_id, *current_plan_ids, reviewer_call_id],
+                )
+        raise RuntimeError("semantic plan repair budget exhausted")
+
+    @staticmethod
+    def _plan_repair_targets(
+        breakdown: WorkBreakdown, review: SemanticReview
+    ) -> list[AgentSpecProposal]:
+        by_key = {task.work_item_key: task for task in breakdown.agent_specs}
+        keys: list[str] = []
+        for finding in review.findings:
+            if not (
+                finding.blocks_progress
+                or finding.severity.strip().upper() == "BLOCKER"
+            ):
+                continue
+            path = _trimmed(finding.spec_path)
+            if not path.startswith("agent_specs[") or "]" not in path:
+                return list(breakdown.agent_specs)
+            key = path.partition("[")[2].partition("]")[0]
+            if key not in by_key:
+                return list(breakdown.agent_specs)
+            if key not in keys:
+                keys.append(key)
+        return [by_key[key] for key in keys] or list(breakdown.agent_specs)
+
+    @staticmethod
+    def _review_targets_plans(review: SemanticReview) -> bool:
+        blocking = [
+            finding for finding in review.findings
+            if finding.blocks_progress
+            or finding.severity.strip().upper() == "BLOCKER"
+        ]
+        return bool(blocking) and all(
+            ".implementation_plan" in _trimmed(finding.spec_path)
+            for finding in blocking
+        )
+
+    @staticmethod
+    def _base_checkpoint(
+        db: Session,
+        project_id: str,
+        snapshot: ApprovedSpecSnapshot,
+        payload: Mapping[str, object],
+    ) -> tuple[WorkBreakdown, str] | None:
+        """Return a valid plan-free base result for this exact approved Spec."""
+
+        if payload.get("previous_breakdown") or payload.get("review_feedback"):
+            return None
+        calls = (
+            db.query(AgentCall)
+            .filter_by(project_id=project_id, operation="decompose_spec")
+            .order_by(AgentCall.started_at.desc(), AgentCall.id.desc())
+            .all()
+        )
+        for call in calls:
+            request = call.request
+            if (
+                call.status not in {"RESULT_READY", "SUCCEEDED"}
+                or request.get("decomposition_stage") != "base"
+                or request.get("source_spec_version_id", request.get("spec_version_id")) != snapshot.id
+                or request.get("source_spec_content_hash", request.get("spec_content_hash")) != snapshot.content_hash
+                or request.get("approved_spec") != snapshot.content
+                or tuple(request.get("input_refs", [])) != snapshot.input_refs
+                or request.get("previous_breakdown")
+                or request.get("review_feedback")
+            ):
+                continue
+            try:
+                breakdown = WorkBreakdown.model_validate(call.response)
+                validate_breakdown(
+                    breakdown, snapshot, require_implementation_plan=False
+                )
+            except ValueError:
+                continue
+            source_call_id = str(
+                request.get("checkpoint_source_call_id") or call.id
+            )
+            return breakdown.model_copy(deep=True), source_call_id
+        return None
+
+    async def _plan_tasks(
+        self,
+        project_id: str,
+        snapshot: ApprovedSpecSnapshot,
+        breakdown: WorkBreakdown,
+        *,
+        base_checkpoint_call_id: str,
+        command_id: str | None,
+        input_hash: str | None,
+        previous_plans: Mapping[str, ImplementationPlan | None] | None = None,
+        review_feedback: SemanticReview | None = None,
+        previous_review_call_id: str | None = None,
+    ) -> list[str]:
+        """Fill only missing task plans and settle every started Agent call."""
+
+        targets = [
+            task for task in breakdown.agent_specs if task.implementation_plan is None
+        ]
+        if not targets:
+            return []
+        results = await asyncio.gather(
+            *(
+                self._plan_task(
+                    project_id,
+                    snapshot,
+                    breakdown,
+                    task,
+                    base_checkpoint_call_id=base_checkpoint_call_id,
+                    command_id=command_id,
+                    input_hash=input_hash,
+                    previous_plan=(previous_plans or {}).get(task.work_item_key),
+                    review_feedback=review_feedback,
+                    previous_review_call_id=previous_review_call_id,
+                )
+                for task in targets
+            ),
+            return_exceptions=True,
+        )
+        call_ids: list[str] = []
+        failure: Exception | None = None
+        cancellation: BaseException | None = None
+        for task, result in zip(targets, results, strict=True):
+            if isinstance(result, BaseException):
+                if isinstance(result, DecompositionPlanningFailure):
+                    call_ids.extend(result.agent_call_ids)
+                if failure is None and isinstance(result, Exception):
+                    failure = result
+                elif cancellation is None and not isinstance(result, Exception):
+                    cancellation = result
+                continue
+            plan, call_id = result
+            task.implementation_plan = plan
+            call_ids.append(call_id)
+        if failure is not None:
+            raise DecompositionPlanningFailure(str(failure), call_ids) from failure
+        if cancellation is not None:
+            raise cancellation
+        return call_ids
+
+    async def _plan_task(
+        self,
+        project_id: str,
+        snapshot: ApprovedSpecSnapshot,
+        breakdown: WorkBreakdown,
+        task: AgentSpecProposal,
+        *,
+        base_checkpoint_call_id: str,
+        command_id: str | None,
+        input_hash: str | None,
+        previous_plan: ImplementationPlan | None = None,
+        review_feedback: SemanticReview | None = None,
+        previous_review_call_id: str | None = None,
+    ) -> tuple[ImplementationPlan, str]:
+        async with self._planning_semaphore:
+            payload: dict[str, object] = {
+                "project_id": project_id,
+                "source_spec_version_id": snapshot.id,
+                "source_spec_content_hash": snapshot.content_hash,
+                "input_refs": list(snapshot.input_refs),
+                "decomposition_stage": "task_plan",
+                "base_checkpoint_call_id": base_checkpoint_call_id,
+                "task_spec": task.model_dump(mode="json"),
+                "task_spec_hash": _canonical_hash(
+                    task.model_dump(mode="json")
+                ),
+                "approved_spec": json.loads(json.dumps(dict(snapshot.content))),
+                "related_tasks": [
+                    related.model_dump(mode="json")
+                    for related in breakdown.agent_specs
+                    if related.work_item_key != task.work_item_key
+                ],
+            }
+            if command_id is not None:
+                payload["command_id"] = command_id
+            if input_hash is not None:
+                payload["input_hash"] = input_hash
+            if review_feedback is not None:
+                payload["previous_plan"] = (
+                    previous_plan.model_dump(mode="json")
+                    if previous_plan is not None else None
+                )
+                payload["review_feedback"] = review_feedback.model_dump(
+                    mode="json"
+                )
+                payload["previous_review_call_id"] = previous_review_call_id
+            with self._session_factory() as db:
+                self._assert_snapshot_current(db, project_id, snapshot)
+                session = self._pm_session(db, project_id)
+                call_id = _new_id()
+                checkpoint = self._task_plan_checkpoint(
+                    db, project_id, snapshot, payload, task
+                )
+                if checkpoint is None:
+                    call = AgentCall(
+                        id=call_id, project_id=project_id,
+                        agent_session_id=session.id, operation="plan_task",
+                        request=payload, status="PENDING",
+                    )
+                else:
+                    plan, source_call_id = checkpoint
+                    adopted_request = json.loads(json.dumps(payload))
+                    adopted_request["checkpoint_source_call_id"] = source_call_id
+                    call = AgentCall(
+                        id=call_id, project_id=project_id,
+                        agent_session_id=session.id, operation="plan_task",
+                        request=adopted_request,
+                        response=plan.model_dump(mode="json"),
+                        status="RESULT_READY", completed_at=_now(),
+                    )
+                db.add(call)
+                db.commit()
+            if checkpoint is not None:
+                return plan, call_id
+            response = None
+            try:
+                plan = await self._agent.plan_task(json.loads(json.dumps(payload)))
+                response = plan.model_dump(mode="json")
+                plan = ImplementationPlan.model_validate(response)
+                approved_ids = {
+                    item["requirement_id"]
+                    for section in ("functional_requirements", "non_functional_requirements")
+                    for item in snapshot.content.get(section, [])
+                }
+                validate_implementation_plan(plan, task, approved_ids)
+            except BaseException as error:
+                message = str(error) or type(error).__name__
+                with self._session_factory() as db:
+                    call = db.get(AgentCall, call_id)
+                    if call is not None:
+                        call.status = "FAILED"
+                        call.response = response
+                        call.error = message
+                        call.completed_at = _now()
+                    db.commit()
+                if not isinstance(error, Exception):
+                    raise
+                raise DecompositionPlanningFailure(message, [call_id]) from error
+            with self._session_factory() as db:
+                call = db.get(AgentCall, call_id)
+                if call is None:
+                    raise RuntimeError("task planning Agent call disappeared")
+                call.status = "RESULT_READY"
+                call.response = response
+                call.completed_at = _now()
+                db.commit()
+            return plan, call_id
+
+    @staticmethod
+    def _task_plan_checkpoint(
+        db: Session,
+        project_id: str,
+        snapshot: ApprovedSpecSnapshot,
+        payload: Mapping[str, object],
+        task: AgentSpecProposal,
+    ) -> tuple[ImplementationPlan, str] | None:
+        """Return a validated task plan bound to the base and task hashes."""
+
+        if payload.get("review_feedback") is not None:
+            return None
+        calls = (
+            db.query(AgentCall)
+            .filter_by(project_id=project_id, operation="plan_task")
+            .order_by(AgentCall.started_at.desc(), AgentCall.id.desc())
+            .all()
+        )
+        approved_ids = {
+            str(item["requirement_id"])
+            for section in ("functional_requirements", "non_functional_requirements")
+            for item in snapshot.content.get(section, [])
+        }
+        for call in calls:
+            request = call.request
+            if (
+                call.status not in {"RESULT_READY", "SUCCEEDED"}
+                or request.get("decomposition_stage") != "task_plan"
+                or request.get("source_spec_version_id") != snapshot.id
+                or request.get("source_spec_content_hash") != snapshot.content_hash
+                or tuple(request.get("input_refs", [])) != snapshot.input_refs
+                or request.get("base_checkpoint_call_id") != payload.get("base_checkpoint_call_id")
+                or request.get("task_spec_hash") != payload.get("task_spec_hash")
+                or request.get("task_spec") != payload.get("task_spec")
+            ):
+                continue
+            try:
+                plan = ImplementationPlan.model_validate(call.response)
+                validate_implementation_plan(plan, task, approved_ids)
+            except (ValueError, ImplementationPlanError):
+                continue
+            source_call_id = str(
+                request.get("checkpoint_source_call_id") or call.id
+            )
+            return plan.model_copy(deep=True), source_call_id
+        return None
 
     def _persist_direct(self, prepared: PreparedDecomposition) -> list[AgentSpec]:
         with self._session_factory() as db:
@@ -603,6 +1134,8 @@ class DecompositionService:
                 project.phase = ProjectPhase.AGENT_SPECS_READY.value
                 project.state_version += 1
                 self._mark_call_succeeded(db, prepared.pm_agent_call_id, project.id, "decompose_spec")
+                for call_id in prepared.plan_agent_call_ids:
+                    self._mark_call_succeeded(db, call_id, project.id, "plan_task")
                 self._mark_call_succeeded(db, prepared.reviewer_agent_call_id, project.id, "review_breakdown")
                 db.add(AuditEvent(id=_new_id(), project_id=project.id, session_id=project.session_id, event_type="AGENT_SPECS_CREATED", actor_id=None, payload={"spec_version_id": version.id, "agent_call_ids": prepared.agent_call_ids, "agent_spec_ids": [item.id for item in specs]}))
             return specs
@@ -619,6 +1152,7 @@ class DecompositionService:
             "project_id": project_id,
             "source_spec_version_id": snapshot.id,
             "source_spec_content_hash": snapshot.content_hash,
+            "input_refs": list(snapshot.input_refs),
             "approved_spec_exclusions": list(snapshot.content.get("exclusions", [])),
             "approved_spec": json.loads(json.dumps(
                 dict(snapshot.content), sort_keys=True, separators=(",", ":"), ensure_ascii=False,
@@ -751,10 +1285,12 @@ class DecompositionService:
             spec = AgentSpec(id=_new_id(), project_id=context.project_id, work_item_id=id_by_key[proposal.work_item_key], source_spec_version_id=approved_spec.id, dependency_work_item_ids=dependency_ids, content=content, content_hash=_canonical_hash(content))
             uow.add_agent_spec(spec)
             specs.append(spec)
-        if len(agent_call_ids) != 2:
+        if len(agent_call_ids) < 2:
             raise ValueError("breakdown materialization requires PM and Reviewer Agent call evidence")
         uow.mark_decomposition_call_succeeded(agent_call_ids[0])
-        uow.mark_breakdown_reviewer_call_succeeded(agent_call_ids[1])
+        for call_id in agent_call_ids[1:-1]:
+            uow.mark_task_plan_call_succeeded(call_id)
+        uow.mark_breakdown_reviewer_call_succeeded(agent_call_ids[-1])
         return CommandHandlerResult(phase=ProjectPhase.AGENT_SPECS_READY, created_resource_ids=[item.id for item in specs], audit_payload={"spec_version_id": approved_spec.id, "agent_spec_ids": [item.id for item in specs]})
 
     @staticmethod

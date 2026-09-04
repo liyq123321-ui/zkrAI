@@ -62,12 +62,17 @@ async def test_missing_plan_is_repaired_and_original_requirements_saved(
     legacy = valid_breakdown.model_dump(mode="json")
     for spec in legacy["agent_specs"]:
         spec.pop("implementation_plan", None)
-    gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [json.dumps(legacy), json.dumps(valid), passing_semantic_review])
+    plans = [spec["implementation_plan"] for spec in valid["agent_specs"]]
+    gateway, prompts = gateway_with_outputs(
+        tmp_path, monkeypatch,
+        [json.dumps(legacy), *map(json.dumps, plans), passing_semantic_review],
+    )
 
     specs = await DecompositionService(session_factory, gateway).convert(project.id)
 
-    assert len(prompts) == 3
-    assert "MISSING_IMPLEMENTATION_PLAN" in prompts[1]
+    assert len(prompts) == 4
+    assert "base decomposition stage" in prompts[0]
+    assert "ImplementationPlan" in prompts[1]
     api = next(s for s in specs if len(s.content["requirements"]) == 2)
     assert api.content["requirements"] == [
         {"requirement_id": "FR-001", "statement": "The system creates a workflow session from a brief", "priority": "MUST"},

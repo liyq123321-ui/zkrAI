@@ -18,3 +18,5 @@ Use only defined FR/NFR identifiers and the supplied input_refs. Do not invent
 approval, evidence URLs, completed implementation results, or extra scope.
 If the existing PRD cannot support a decision, retain a blocking open question.
 Return only the requested replacement-record JSON contract.
+When the trusted payload identifies the base decomposition stage, leave every
+replacement Agent Spec implementation_plan null.

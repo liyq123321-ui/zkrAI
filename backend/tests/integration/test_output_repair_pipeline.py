@@ -1,5 +1,7 @@
 """Automatic repairs still obey the version, review, and atomic command gates."""
 
+import json
+
 import pytest
 
 from app.database.models import AgentCall, AgentSpec, ProcessedCommand, Project, SpecVersion, WorkItem
@@ -9,6 +11,7 @@ from app.services.command_service import CommandHandlerFailure, CommandService
 from app.services.decomposition_service import DecompositionService, DecompositionAgentFailure, SemanticReviewRejected
 from app.services.spec_service import SpecService
 from tests.helpers.scripted_codex import gateway_with_outputs
+from tests.helpers.implementation_plans import implementation_plan
 from tests.integration.test_decomposition_service import _approved_project
 from tests.integration.test_spec_service import _add_specification_project
 
@@ -72,7 +75,18 @@ async def test_repaired_breakdown_is_atomic_and_replay_does_not_repeat_agent_wor
     project = _approved_project(db_session, complete_brief, valid_spec)
     bad = valid_breakdown.model_copy(deep=True)
     bad.agent_specs[0].acceptance_criteria[0].requirement_ids = ["deliverable-001"]
-    gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [bad, valid_breakdown, passing_semantic_review])
+    plans = [
+        implementation_plan(sorted({
+            requirement_id
+            for criterion in task.acceptance_criteria
+            for requirement_id in criterion.requirement_ids
+        }))
+        for task in valid_breakdown.agent_specs
+    ]
+    gateway, prompts = gateway_with_outputs(
+        tmp_path, monkeypatch,
+        [bad, valid_breakdown, *map(json.dumps, plans), passing_semantic_review],
+    )
     decomposition = DecompositionService(session_factory, gateway)
     commands = CommandService(session_factory, handlers={CommandAction.CONVERT_TO_WORK_ITEM: decomposition.as_command_handler()})
     request = SessionCommandRequest(command_id="auto-repaired", action=CommandAction.CONVERT_TO_WORK_ITEM,
@@ -83,7 +97,7 @@ async def test_repaired_breakdown_is_atomic_and_replay_does_not_repeat_agent_wor
 
     assert first.state.phase is ProjectPhase.AGENT_SPECS_READY
     assert replay.created_resource_ids == first.created_resource_ids
-    assert len(prompts) == 3
+    assert len(prompts) == 5
     with session_factory() as db:
         assert db.query(AgentSpec).count() == 2
         assert db.query(ProcessedCommand).filter_by(command_id="auto-repaired").count() == 1
@@ -100,8 +114,17 @@ async def test_failed_repair_or_review_keeps_approved_state_and_no_partial_tasks
     project = _approved_project(db_session, complete_brief, valid_spec)
     bad = valid_breakdown.model_copy(deep=True)
     bad.agent_specs[0].acceptance_criteria[0].requirement_ids = ["deliverable-001"]
+    plans = [
+        implementation_plan(sorted({
+            requirement_id
+            for criterion in task.acceptance_criteria
+            for requirement_id in criterion.requirement_ids
+        }))
+        for task in valid_breakdown.agent_specs
+    ]
     outputs = [bad, bad, bad] if failure == "repair_exhausted" else [
-        bad, valid_breakdown, SemanticReview(verdict=ReviewVerdict.REJECT, findings=[]),
+        bad, valid_breakdown, *map(json.dumps, plans),
+        SemanticReview(verdict=ReviewVerdict.REJECT, findings=[]),
     ]
     gateway, _ = gateway_with_outputs(tmp_path, monkeypatch, outputs)
     expected = DecompositionAgentFailure if failure == "repair_exhausted" else SemanticReviewRejected

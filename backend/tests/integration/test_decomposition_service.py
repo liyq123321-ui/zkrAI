@@ -1,12 +1,14 @@
 """Atomic persistence behavior for approved-Spec decomposition."""
 
+import asyncio
 from collections import deque
 
 import pytest
 from sqlalchemy import event
 
 from app.database.models import AgentCall, AgentSpec, AuditEvent, CommandAttempt, ProcessedCommand, Project, SpecVersion, WorkItem, WorkItemDependency
-from app.domain.types import ProjectPhase, ReviewFinding, ReviewVerdict, SemanticReview, SpecStatus
+from app.domain.implementation_plan import ImplementationPlan
+from app.domain.types import AgentSpecProposal, ProjectPhase, ReviewFinding, ReviewVerdict, SemanticReview, SpecStatus
 from app.domain.types import CommandAction
 from app.schemas.workflow import SessionCommandRequest
 from app.agents.codex import build_node_prompt
@@ -14,6 +16,7 @@ from app.services.command_service import ActionScopedUnitOfWork, CommandHandlerF
 from app.services.decomposition_service import BreakdownValidationError, DecompositionService
 from tests.helpers.fake_agent import ScriptedAgentGateway
 from tests.helpers.factories import make_valid_breakdown
+from tests.helpers.implementation_plans import implementation_plan
 
 
 def _approved_project(db, brief, spec):
@@ -42,6 +45,201 @@ def _approved_project(db, brief, spec):
     ])
     db.commit()
     return project
+
+
+def _plan_for(task) -> ImplementationPlan:
+    requirement_ids = sorted({
+        requirement_id
+        for criterion in task.acceptance_criteria
+        for requirement_id in criterion.requirement_ids
+    })
+    return ImplementationPlan.model_validate(implementation_plan(requirement_ids))
+
+
+@pytest.mark.asyncio
+async def test_staged_decomposition_plans_each_base_task_before_review(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown
+):
+    """Removing the per-task stage would make one large breakdown contract fail again."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    plans = deque(_plan_for(task) for task in base.agent_specs)
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=plans,
+    )
+
+    created = await DecompositionService(session_factory, agent).convert(project.id)
+
+    assert len(created) == 2
+    assert [operation for operation, _ in agent.calls] == [
+        "decompose_spec",
+        "plan_task",
+        "plan_task",
+        "review_breakdown",
+    ]
+    assert all(
+        spec.content["implementation_plan"] is not None for spec in created
+    )
+    assert agent.calls[0][1]["decomposition_stage"] == "base"
+    assert {
+        payload["task_spec"]["work_item_key"]
+        for operation, payload in agent.calls
+        if operation == "plan_task"
+    } == {"t-domain", "t-api"}
+
+
+@pytest.mark.asyncio
+async def test_staged_decomposition_retry_reuses_base_and_completed_task_plan(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown
+):
+    """A partial planning failure must retry only the task that has no valid plan."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            _plan_for(base.agent_specs[0]),
+            RuntimeError("planner temporarily unavailable"),
+            _plan_for(base.agent_specs[1]),
+        ]),
+    )
+    service = CommandService(
+        session_factory,
+        handlers={
+            CommandAction.CONVERT_TO_WORK_ITEM:
+                DecompositionService(session_factory, agent).as_command_handler()
+        },
+    )
+
+    with pytest.raises(CommandHandlerFailure, match="planner temporarily unavailable"):
+        await service.execute(project.session_id, SessionCommandRequest(
+            command_id="convert-stage-1",
+            action=CommandAction.CONVERT_TO_WORK_ITEM,
+            expected_state_version=7,
+            actor_id="owner",
+        ))
+    with session_factory() as db:
+        assert db.query(WorkItem).filter_by(project_id=project.id).count() == 0
+        assert db.query(AgentSpec).filter_by(project_id=project.id).count() == 0
+        assert db.query(AgentCall).filter_by(
+            project_id=project.id, operation="plan_task", status="RESULT_READY"
+        ).count() == 1
+        assert db.query(AgentCall).filter_by(
+            project_id=project.id, operation="plan_task", status="FAILED"
+        ).count() == 1
+
+    recovered = await service.execute(project.session_id, SessionCommandRequest(
+        command_id="convert-stage-2",
+        action=CommandAction.CONVERT_TO_WORK_ITEM,
+        expected_state_version=7,
+        actor_id="owner",
+    ))
+
+    assert recovered.state.phase is ProjectPhase.AGENT_SPECS_READY
+    operations = [operation for operation, _ in agent.calls]
+    assert operations.count("decompose_spec") == 1
+    assert operations.count("plan_task") == 3
+    assert operations.count("review_breakdown") == 1
+    with session_factory() as db:
+        checkpoint_adoptions = [
+            call for call in db.query(AgentCall).filter_by(project_id=project.id).all()
+            if call.request.get("checkpoint_source_call_id")
+        ]
+        assert {call.operation for call in checkpoint_adoptions} == {
+            "decompose_spec", "plan_task",
+        }
+        assert all(call.status == "SUCCEEDED" for call in checkpoint_adoptions)
+
+
+@pytest.mark.asyncio
+async def test_staged_checkpoint_is_not_reused_after_approved_spec_changes(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown
+):
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    first_base = valid_breakdown.model_copy(deep=True)
+    second_base = valid_breakdown.model_copy(deep=True)
+    for breakdown in (first_base, second_base):
+        for task in breakdown.agent_specs:
+            task.implementation_plan = None
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([first_base, second_base]),
+        plan_results=deque([
+            _plan_for(first_base.agent_specs[0]),
+            RuntimeError("first snapshot planning failed"),
+            _plan_for(second_base.agent_specs[0]),
+            _plan_for(second_base.agent_specs[1]),
+        ]),
+    )
+    decomposition = DecompositionService(session_factory, agent)
+
+    with pytest.raises(RuntimeError, match="first snapshot planning failed"):
+        await decomposition.convert(project.id)
+
+    replacement = SpecVersion(
+        id="spec-decompose-2", project_id=project.id, revision=2,
+        content=valid_spec.model_dump(mode="json"), markdown="# Revised Spec\n",
+        generation_source="PM_AGENT", input_refs=["artifact:brief-1"],
+        generator_agent_session_id="pm-session-1", generator_call_id="pm-call-2",
+        parent_version_id="spec-decompose-1", change_summary="New approved snapshot",
+        content_hash="e" * 64, status=SpecStatus.APPROVED.value,
+    )
+    current = db_session.get(Project, project.id)
+    current.current_spec_version_id = replacement.id
+    db_session.add(replacement)
+    db_session.commit()
+
+    created = await decomposition.convert(project.id)
+
+    assert len(created) == 2
+    assert [operation for operation, _ in agent.calls].count("decompose_spec") == 2
+
+
+@pytest.mark.asyncio
+async def test_task_planning_concurrency_is_bounded_to_two(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown
+):
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    extra_task = base.tasks[1].model_copy(deep=True)
+    extra_task.local_key = "t-extra"
+    extra_task.title = "Extra API validation"
+    extra_spec = base.agent_specs[1].model_copy(deep=True)
+    extra_spec.work_item_key = "t-extra"
+    base.tasks.append(extra_task)
+    base.agent_specs.append(extra_spec)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+
+    class ConcurrentPlanningGateway(ScriptedAgentGateway):
+        def __init__(self):
+            super().__init__(decompose_results=deque([base]))
+            self.active = 0
+            self.max_active = 0
+
+        async def plan_task(self, payload):
+            self.calls.append(("plan_task", payload))
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.02)
+                return _plan_for(AgentSpecProposal.model_validate(payload["task_spec"]))
+            finally:
+                self.active -= 1
+
+    agent = ConcurrentPlanningGateway()
+
+    created = await DecompositionService(session_factory, agent).convert(project.id)
+
+    assert len(created) == 3
+    assert agent.max_active == 2
+    assert [operation for operation, _ in agent.calls].count("plan_task") == 3
 
 
 @pytest.mark.asyncio

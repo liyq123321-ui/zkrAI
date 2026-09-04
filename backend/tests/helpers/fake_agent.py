@@ -10,6 +10,7 @@ from app.domain.types import (
     SemanticReview,
     WorkBreakdown,
 )
+from app.domain.implementation_plan import ImplementationPlan
 
 
 class ScriptedAgentGateway:
@@ -23,6 +24,7 @@ class ScriptedAgentGateway:
         review_results: deque[SemanticReview | Exception] | None = None,
         review_breakdown_results: deque[SemanticReview | Exception] | None = None,
         decompose_results: deque[WorkBreakdown | Exception] | None = None,
+        plan_results: deque[ImplementationPlan | Exception] | None = None,
         rewrite_results: deque[PrdRewriteOutput | Exception] | None = None,
     ) -> None:
         self._results = {
@@ -31,6 +33,7 @@ class ScriptedAgentGateway:
             "review_spec": review_results or deque(),
             "review_breakdown": review_breakdown_results or deque([SemanticReview(verdict=ReviewVerdict.PASS, findings=[])]),
             "decompose_spec": decompose_results or deque(),
+            "plan_task": plan_results or deque(),
             "rewrite_prd": rewrite_results or deque(),
         }
         self.calls: list[tuple[str, dict[str, object]]] = []
@@ -51,6 +54,9 @@ class ScriptedAgentGateway:
     async def decompose_spec(self, payload: dict[str, object]) -> WorkBreakdown:
         return self._next("decompose_spec", payload)
 
+    async def plan_task(self, payload: dict[str, object]) -> ImplementationPlan:
+        return self._next("plan_task", payload)
+
     async def rewrite_prd(self, payload: dict[str, object]) -> PrdRewriteOutput:
         return self._next("rewrite_prd", payload)
 
@@ -65,4 +71,3 @@ class ScriptedAgentGateway:
         if callable(result):
             return result(payload)
         return result
-
