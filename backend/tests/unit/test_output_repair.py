@@ -138,11 +138,20 @@ async def test_decomposition_repairs_related_structural_gaps(
 
 
 @pytest.mark.asyncio
-async def test_decomposition_canonicalizes_a_unique_adjacent_source_ref_transposition(
-    tmp_path, monkeypatch, valid_spec, valid_breakdown
+@pytest.mark.parametrize(
+    ("mistake", "mistyped"),
+    [
+        ("insertion", "artifact:source-abcdefx"),
+        ("deletion", "artifact:source-abcde"),
+        ("substitution", "artifact:source-abcdxf"),
+        ("transposition", "artifact:source-abcedf"),
+    ],
+)
+async def test_decomposition_repairs_a_unique_single_edit_source_ref(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown, mistake, mistyped
 ):
-    approved = "artifact:a505e774-c9c0-49b4-a71e-604edb8cae9c"
-    mistyped = "artifact:a505e774-c9c0-49b4-a71e-604ed8bcae9c"
+    """The gateway canonicalizes only an unambiguous single edit before validation."""
+    approved = "artifact:source-abcdef"
     broken = valid_breakdown.model_copy(deep=True)
     for agent_spec in broken.agent_specs:
         agent_spec.context_refs = [approved]
@@ -154,7 +163,33 @@ async def test_decomposition_canonicalizes_a_unique_adjacent_source_ref_transpos
         "input_refs": [approved],
     })
 
-    assert result.agent_specs[0].context_refs == [approved]
+    assert result.agent_specs[0].context_refs == [approved], mistake
+    assert len(prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_decomposition_repairs_a_unique_source_ref_in_a_valid_revision(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown
+):
+    approved = valid_spec.source_refs[0]
+    mistyped = "artifact:brier-1"
+    revised = valid_breakdown.agent_specs[1].model_copy(deep=True)
+    revised.context_refs = [mistyped]
+    revision = json.dumps({
+        "milestones": [],
+        "tasks": [],
+        "agent_specs": [revised.model_dump(mode="json")],
+    })
+    gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [revision])
+
+    result = await gateway.decompose_spec({
+        "approved_spec": valid_spec.model_dump(mode="json"),
+        "input_refs": [approved],
+        "previous_breakdown": valid_breakdown.model_dump(mode="json"),
+        "review_feedback": {"verdict": "REJECT", "findings": []},
+    })
+
+    assert result.agent_specs[1].context_refs == [approved]
     assert len(prompts) == 1
 
 

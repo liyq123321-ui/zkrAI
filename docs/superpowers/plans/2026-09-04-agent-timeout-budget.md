@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Raise the backend per-Agent timeout to 2000 seconds and keep frontend request budgets long enough for one- and two-Agent workflows to finish.
+**Goal:** Raise the backend per-Agent timeout to 2000 seconds and keep frontend request budgets long enough for the normal successful paths of one- and two-Agent workflows to finish.
 
-**Architecture:** The backend remains the authoritative per-process timeout through `Settings.codex_timeout_seconds`. The frontend keeps action-based budgets, with 75 seconds of overhead per possible backend Agent call: 2075 seconds for one Agent and 4150 seconds for two Agents. Failed calls without a persisted structured response remain non-resumable and must be retried as new commands.
+**Architecture:** The backend remains the authoritative per-process timeout through `Settings.codex_timeout_seconds`. The frontend keeps action-based budgets, with 75 seconds of overhead per Agent call in the normal successful path: 2075 seconds for one Agent and 4150 seconds for two Agents. These budgets do not cover the theoretical maximum across structured-output retries or decomposition semantic repair rounds; those long paths can return `REQUEST_TIMEOUT` and use the existing state-refresh/retry behavior. Failed calls without a persisted structured response remain non-resumable and must be retried as new commands.
 
 **Tech Stack:** Python 3, FastAPI settings, pytest, TypeScript, React, Vitest
 
@@ -245,4 +245,3 @@ git log --oneline --decorate -6
 ```
 
 Expected: only known runtime SQLite/WAL files remain modified outside the implementation commits. Remind the user that the new commits are ready to save or integrate into `main`.
-

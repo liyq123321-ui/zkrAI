@@ -100,3 +100,10 @@ def test_settings_environment_fallback_uses_2000_second_codex_timeout(monkeypatc
     monkeypatch.delenv("CODEX_TIMEOUT_SECONDS", raising=False)
 
     assert Settings.from_env().codex_timeout_seconds == 2000
+
+
+def test_settings_environment_value_overrides_2000_second_codex_timeout(monkeypatch):
+    monkeypatch.setattr(config_module, "load_dotenv", lambda _path, *, override: None)
+    monkeypatch.setenv("CODEX_TIMEOUT_SECONDS", "321")
+
+    assert Settings.from_env().codex_timeout_seconds == 321

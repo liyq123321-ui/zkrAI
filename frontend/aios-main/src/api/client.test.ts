@@ -73,8 +73,31 @@ describe('ApiClient', () => {
     expect(commandTimeoutMs('revise')).toBe(4_150_000);
     expect(commandTimeoutMs('restore_spec_version')).toBe(4_150_000);
     expect(commandTimeoutMs('convert_to_work_item')).toBe(4_150_000);
+    expect(commandTimeoutMs('publish_review')).toBe(4_150_000);
     expect(commandTimeoutMs('message')).toBe(2_075_000);
     expect(commandTimeoutMs('skip_clarification')).toBe(130_000);
+  });
+
+  it('times out createSession at its single-Agent budget', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', fetchUntilAborted());
+    const pending = createSession('request-1', {
+      motivation: 'm', final_objective: 'o', known_scope: [], exclusions: [],
+      reference_materials: [], expected_deliverables: [], time_constraints: 'none',
+      staffing_constraints: 'none', final_approver: 'owner-1',
+      project_manager_ids: ['owner-1'], root_owner_ids: ['owner-1'],
+    }).catch((reason) => reason);
+    let settled = false;
+    void pending.finally(() => { settled = true; });
+
+    await vi.advanceTimersByTimeAsync(2_074_999);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({
+      code: 'REQUEST_TIMEOUT',
+      retryable: true,
+    });
   });
 
   it('never injects a browser actor into session creation', async () => {
