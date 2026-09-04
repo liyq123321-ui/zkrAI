@@ -138,6 +138,50 @@ async def test_decomposition_repairs_related_structural_gaps(
 
 
 @pytest.mark.asyncio
+async def test_decomposition_canonicalizes_a_unique_adjacent_source_ref_transposition(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown
+):
+    approved = "artifact:a505e774-c9c0-49b4-a71e-604edb8cae9c"
+    mistyped = "artifact:a505e774-c9c0-49b4-a71e-604ed8bcae9c"
+    broken = valid_breakdown.model_copy(deep=True)
+    for agent_spec in broken.agent_specs:
+        agent_spec.context_refs = [approved]
+    broken.agent_specs[0].context_refs = [mistyped]
+    gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [broken])
+
+    result = await gateway.decompose_spec({
+        "approved_spec": valid_spec.model_dump(mode="json"),
+        "input_refs": [approved],
+    })
+
+    assert result.agent_specs[0].context_refs == [approved]
+    assert len(prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_decomposition_does_not_guess_when_source_ref_typo_is_ambiguous(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown
+):
+    allowed = ["artifact:source-abc", "artifact:source-abd"]
+    ambiguous = "artifact:source-abe"
+    broken = valid_breakdown.model_copy(deep=True)
+    for agent_spec in broken.agent_specs:
+        agent_spec.context_refs = [allowed[0]]
+    broken.agent_specs[0].context_refs = [ambiguous]
+    gateway, prompts = gateway_with_outputs(
+        tmp_path, monkeypatch, [broken, broken, broken]
+    )
+
+    with pytest.raises(AgentOutputError, match="INVALID_SOURCE_REF"):
+        await gateway.decompose_spec({
+            "approved_spec": valid_spec.model_dump(mode="json"),
+            "input_refs": allowed,
+        })
+
+    assert len(prompts) == 3
+
+
+@pytest.mark.asyncio
 async def test_schema_and_consistency_repairs_share_bounded_attempt_budget(
     tmp_path, monkeypatch, valid_spec
 ):

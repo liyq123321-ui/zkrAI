@@ -17,6 +17,62 @@ class OutputConsistencyError(ValueError):
         super().__init__("; ".join(f"{item['code']}: {item['message']}" for item in findings))
 
 
+def _one_edit_apart(left: str, right: str) -> bool:
+    """Return whether identifiers differ by one edit or adjacent transposition."""
+
+    if left == right or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) == len(right):
+        differences = [
+            index
+            for index, (a, b) in enumerate(zip(left, right, strict=True))
+            if a != b
+        ]
+        if len(differences) == 1:
+            return True
+        return (
+            len(differences) == 2
+            and differences[1] == differences[0] + 1
+            and left[differences[0]] == right[differences[1]]
+            and left[differences[1]] == right[differences[0]]
+        )
+    shorter, longer = (left, right) if len(left) < len(right) else (right, left)
+    short_index = long_index = differences = 0
+    while short_index < len(shorter) and long_index < len(longer):
+        if shorter[short_index] == longer[long_index]:
+            short_index += 1
+            long_index += 1
+            continue
+        differences += 1
+        if differences > 1:
+            return False
+        long_index += 1
+    return True
+
+
+def _repair_context_refs(
+    result: WorkBreakdown | WorkBreakdownRevision, allowed_refs: set[str]
+) -> None:
+    """Correct only unambiguous one-character mistakes in typed Agent output."""
+
+    for agent_spec in result.agent_specs:
+        repaired: list[str] = []
+        for reference in agent_spec.context_refs:
+            if reference in allowed_refs:
+                repaired.append(reference)
+                continue
+            namespace, separator, _ = reference.partition(":")
+            candidates = [
+                allowed
+                for allowed in allowed_refs
+                if separator
+                and allowed.partition(":")[:2] == (namespace, separator)
+                and _one_edit_apart(reference, allowed)
+            ]
+            repaired.append(candidates[0] if len(candidates) == 1 else reference)
+        agent_spec.context_refs = repaired
+
+
 def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str, object]) -> WorkBreakdown:
     previous = WorkBreakdown.model_validate(payload.get("previous_breakdown"))
     merged = previous.model_dump(mode="json")
@@ -38,6 +94,13 @@ def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str,
 
 def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
     """Repair structural omissions; human decisions remain in the review workflow."""
+    if isinstance(result, (WorkBreakdown, WorkBreakdownRevision)):
+        allowed_refs = {
+            reference
+            for reference in payload.get("input_refs", [])
+            if isinstance(reference, str)
+        }
+        _repair_context_refs(result, allowed_refs)
     if isinstance(result, WorkBreakdownRevision):
         result = merge_breakdown_revision(result, payload)
     if isinstance(result, ImplementationPlan):

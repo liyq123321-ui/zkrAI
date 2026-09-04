@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deterministically correct an Agent-generated `context_refs` identifier when it differs by exactly one character from one uniquely matching approved input reference, while preserving strict rejection for ambiguous or unrelated references.
+**Goal:** Deterministically correct an Agent-generated `context_refs` identifier when it has one small typing error relative to one uniquely matching approved input reference, while preserving strict rejection for ambiguous or unrelated references.
 
 **Architecture:** Add a small normalization boundary to `app.agents.output_validation` before the existing strict breakdown validator runs. The gateway-owned normalization mutates only typed Agent output; persistence-facing `validate_breakdown` remains exact and unchanged, so external or ambiguous invalid references cannot bypass the safety gate.
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Do not relax `validate_breakdown` exact membership checks.
-- Only repair references with the same namespace and a single insertion, deletion, or substitution.
+- Only repair references with the same namespace and a single insertion, deletion, substitution, or adjacent-character transposition.
 - Repair only when exactly one approved reference matches; otherwise retain the invalid value so normal validation rejects it.
 - Do not add third-party dependencies.
 
@@ -29,7 +29,7 @@
 
 - [ ] **Step 1: Write failing tests for unique repair and ambiguous rejection**
 
-Add one test where the only model response contains `artifact:a505e774-c9c0-49b4-a71e-604ed8bcae9c` while the approved value is `artifact:a505e774-c9c0-49b4-a71e-604edb8cae9c`. Assert the gateway succeeds in one attempt and returns the approved value. Add a second test with two one-edit candidates and assert `AgentOutputError` after the bounded attempts.
+Add one test where the only model response contains `artifact:a505e774-c9c0-49b4-a71e-604ed8bcae9c` while the approved value is `artifact:a505e774-c9c0-49b4-a71e-604edb8cae9c`. Assert the gateway succeeds in one attempt and returns the approved value. Add a second test with two equally close candidates and assert `AgentOutputError` after the bounded attempts.
 
 - [ ] **Step 2: Run the focused tests and verify RED**
 
@@ -44,7 +44,7 @@ Expected: the unique-repair test fails with `INVALID_SOURCE_REF`; the ambiguous-
 
 - [ ] **Step 3: Implement one-edit unique matching**
 
-Implement a dependency-free helper that returns true only for a single insertion, deletion, or substitution, filters candidates by the identifier namespace before `:`, and replaces an invalid `context_refs` entry only when the candidate set has length one. Invoke it before merging/validating breakdown output.
+Implement a dependency-free helper that returns true only for a single insertion, deletion, substitution, or adjacent-character transposition, filters candidates by the identifier namespace before `:`, and replaces an invalid `context_refs` entry only when the candidate set has length one. Invoke it before merging/validating breakdown output.
 
 - [ ] **Step 4: Run focused and adjacent validation tests**
 
