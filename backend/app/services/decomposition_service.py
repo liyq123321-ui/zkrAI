@@ -19,7 +19,11 @@ from app.agents.gateway import AgentGateway
 from app.database.models import AgentCall, AgentSession, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem, WorkItemDependency
 from app.domain.implementation_plan import ImplementationPlan
 from app.domain.types import AgentSpecProposal, ProjectPhase, ProjectSpecPayload, ReviewVerdict, SemanticReview, SpecStatus, WorkBreakdown, WorkItemKind
-from app.services.task_plan_graph import dependency_contracts, topological_plan_waves
+from app.services.task_plan_graph import (
+    dependency_contracts,
+    topological_plan_waves,
+    transitive_dependent_keys,
+)
 from app.services.task_specifications import ImplementationPlanError, requirement_snapshots, validate_implementation_plan
 
 
@@ -862,7 +866,13 @@ class DecompositionService:
                 return list(breakdown.agent_specs)
             if key not in keys:
                 keys.append(key)
-        return [by_key[key] for key in keys] or list(breakdown.agent_specs)
+        if not keys:
+            return list(breakdown.agent_specs)
+        target_keys = transitive_dependent_keys(breakdown.agent_specs, set(keys))
+        return [
+            task for task in breakdown.agent_specs
+            if task.work_item_key in target_keys
+        ]
 
     @staticmethod
     def _review_targets_plans(review: SemanticReview) -> bool:

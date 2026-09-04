@@ -8,7 +8,7 @@ import pytest
 from app.database.models import AgentCall, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem
 from app.domain.types import AgentSpecProposal, CommandAction, ReviewFinding, ReviewVerdict, SemanticReview
 from app.schemas.workflow import SessionCommandRequest
-from app.services.command_service import CommandHandlerRejected, CommandService
+from app.services.command_service import CommandHandlerFailure, CommandHandlerRejected, CommandService
 from app.services.decomposition_service import DecompositionService, DecompositionNotAllowed, SemanticReviewRejected
 from tests.helpers.fake_agent import ScriptedAgentGateway
 from tests.helpers.implementation_plans import implementation_plan
@@ -77,6 +77,168 @@ async def test_staged_review_repairs_only_the_implicated_task_plan(
     assert repaired["previous_plan"] is not None
     assert repaired["review_feedback"] == rejected.model_dump(mode="json")
     assert repaired["previous_review_call_id"]
+
+
+@pytest.mark.asyncio
+async def test_upstream_plan_repair_cascades_to_dependents_with_repaired_contract(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+    passing_semantic_review,
+):
+    """Repairing an upstream interface must regenerate every dependent handoff."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    initial_domain = _plan_for(base.agent_specs[0])
+    repaired_domain = initial_domain.model_copy(deep=True)
+    repaired_domain.overview = "Repaired domain handoff contract."
+    rejected = SemanticReview(verdict=ReviewVerdict.REJECT, findings=[
+        ReviewFinding(
+            code="DOMAIN_CONTRACT", severity="BLOCKER",
+            spec_path="agent_specs[t-domain].implementation_plan.interfaces[0]",
+            message="The domain contract needs repair.",
+            suggested_resolution="Regenerate the domain plan.", blocks_progress=True,
+        )
+    ])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            initial_domain,
+            _plan_for(base.agent_specs[1]),
+            repaired_domain,
+            _plan_for(base.agent_specs[1]),
+        ]),
+        review_breakdown_results=deque([rejected, passing_semantic_review]),
+    )
+
+    await DecompositionService(session_factory, agent).convert(project.id)
+
+    planner_payloads = [
+        payload for operation, payload in agent.calls if operation == "plan_task"
+    ]
+    assert [payload["task_spec"]["work_item_key"] for payload in planner_payloads] == [
+        "t-domain", "t-api", "t-domain", "t-api",
+    ]
+    assert planner_payloads[3]["dependency_contracts"][0]["implementation_plan"] == repaired_domain.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_leaf_plan_repair_keeps_upstream_plan_and_uses_its_contract(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+    passing_semantic_review,
+):
+    """Repairing a leaf plan must preserve its unaffected upstream plan."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    domain_plan = _plan_for(base.agent_specs[0])
+    rejected = SemanticReview(verdict=ReviewVerdict.REJECT, findings=[
+        ReviewFinding(
+            code="API_CONTRACT", severity="BLOCKER",
+            spec_path="agent_specs[t-api].implementation_plan.interfaces[0]",
+            message="The API contract needs repair.",
+            suggested_resolution="Regenerate the API plan.", blocks_progress=True,
+        )
+    ])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            domain_plan,
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+        ]),
+        review_breakdown_results=deque([rejected, passing_semantic_review]),
+    )
+
+    await DecompositionService(session_factory, agent).convert(project.id)
+
+    planner_payloads = [
+        payload for operation, payload in agent.calls if operation == "plan_task"
+    ]
+    assert [payload["task_spec"]["work_item_key"] for payload in planner_payloads] == [
+        "t-domain", "t-api", "t-api",
+    ]
+    assert planner_payloads[2]["dependency_contracts"][0]["implementation_plan"] == domain_plan.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_recovery_replans_stale_dependent_contract_and_adopts_independent_task(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+):
+    """A changed upstream checkpoint invalidates only dependent task checkpoints."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    independent_task = base.tasks[0].model_copy(deep=True)
+    independent_task.local_key = "t-independent"
+    independent_task.dependency_keys = []
+    independent_spec = base.agent_specs[0].model_copy(deep=True)
+    independent_spec.work_item_key = "t-independent"
+    independent_spec.dependency_keys = []
+    base.tasks.append(independent_task)
+    base.agent_specs.append(independent_spec)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+
+    initial_domain = _plan_for(base.agent_specs[0])
+    repaired_domain = initial_domain.model_copy(deep=True)
+    repaired_domain.overview = "Recovered domain contract differs from the old one."
+    initial_api = _plan_for(base.agent_specs[1])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            initial_domain,
+            _plan_for(independent_spec),
+            RuntimeError("api planner failed"),
+            initial_api,
+        ]),
+    )
+    commands = command_service(session_factory, agent)
+    first_request = SessionCommandRequest(
+        command_id="checkpoint-contract-1", action=CommandAction.CONVERT_TO_WORK_ITEM,
+        expected_state_version=7, actor_id="owner",
+    )
+    with pytest.raises(CommandHandlerFailure, match="api planner failed"):
+        await commands.execute(project.session_id, first_request)
+
+    with session_factory() as db:
+        domain_call = next(
+            call for call in db.query(AgentCall).filter_by(
+                project_id=project.id, operation="plan_task", status="RESULT_READY",
+            ) if call.request["task_spec"]["work_item_key"] == "t-domain"
+        )
+        stale_api_call = next(
+            call for call in db.query(AgentCall).filter_by(
+                project_id=project.id, operation="plan_task", status="FAILED",
+            ) if call.request["task_spec"]["work_item_key"] == "t-api"
+        )
+        domain_call.response = repaired_domain.model_dump(mode="json")
+        stale_api_call.status = "RESULT_READY"
+        stale_api_call.response = initial_api.model_dump(mode="json")
+        stale_api_call.error = None
+        db.commit()
+
+    await commands.execute(project.session_id, SessionCommandRequest(
+        command_id="checkpoint-contract-2", action=CommandAction.CONVERT_TO_WORK_ITEM,
+        expected_state_version=7, actor_id="owner",
+    ))
+
+    assert [operation for operation, _ in agent.calls].count("plan_task") == 4
+    retry_api_payload = [
+        payload for operation, payload in agent.calls
+        if operation == "plan_task" and payload["task_spec"]["work_item_key"] == "t-api"
+    ][-1]
+    assert retry_api_payload["dependency_contracts"][0]["implementation_plan"] == repaired_domain.model_dump(mode="json")
+    with session_factory() as db:
+        adopted = {
+            call.request["task_spec"]["work_item_key"]
+            for call in db.query(AgentCall).filter_by(project_id=project.id, operation="plan_task")
+            if call.request.get("checkpoint_source_call_id")
+        }
+    assert adopted == {"t-domain", "t-independent"}
 
 
 @pytest.mark.asyncio
@@ -206,7 +368,7 @@ async def test_cancelled_task_planner_settles_every_started_call(
         plan_calls = db.query(AgentCall).filter_by(
             project_id=project.id, operation="plan_task"
         ).all()
-        assert len(plan_calls) == 2
+        assert len(plan_calls) == 1
         assert all(call.status != "PENDING" for call in plan_calls)
 
 
