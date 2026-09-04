@@ -46,7 +46,11 @@ ACTION_TABLE: dict[
     (ProjectPhase.REVIEW, SpecStatus.REJECTED): (
         CommandAction.RESTORE_SPEC_VERSION,
     ),
-    (ProjectPhase.AGENT_SPECS_READY, SpecStatus.APPROVED): (),
+    (ProjectPhase.AGENT_SPECS_READY, SpecStatus.APPROVED): (
+        CommandAction.START_TASK,
+        CommandAction.COMPLETE_TASK,
+        CommandAction.FAIL_TASK,
+    ),
 }
 
 _INTERNAL_ACTIONS: dict[
@@ -67,7 +71,7 @@ NEXT_ACTION_TABLE: dict[tuple[ProjectPhase, SpecStatus | None], str] = {
     (ProjectPhase.REVIEW, SpecStatus.REWORK): "REVISE_SPEC",
     (ProjectPhase.REVIEW, SpecStatus.NEED_CLARIFICATION): "ANSWER_CLARIFICATION",
     (ProjectPhase.REVIEW, SpecStatus.APPROVED): "CONVERT_TO_WORK_ITEM",
-    (ProjectPhase.AGENT_SPECS_READY, SpecStatus.APPROVED): "NONE",
+    (ProjectPhase.AGENT_SPECS_READY, SpecStatus.APPROVED): "EXECUTE_WORK_ITEMS",
 }
 
 

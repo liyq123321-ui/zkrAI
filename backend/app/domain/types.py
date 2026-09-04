@@ -47,6 +47,20 @@ class CommandAction(StrEnum):
     PUBLISH_REVIEW = "publish_review"
     CONVERT_TO_WORK_ITEM = "convert_to_work_item"
     RESTORE_SPEC_VERSION = "restore_spec_version"
+    # Execution across the WorkItem dependency DAG. These advance WorkItem run
+    # state only: they never change ProjectPhase or SpecStatus.
+    START_TASK = "start_task"
+    COMPLETE_TASK = "complete_task"
+    FAIL_TASK = "fail_task"
+
+
+class WorkItemRunStatus(StrEnum):
+    """Append-only ledger statuses. Current state is the latest run."""
+
+    STARTED = "STARTED"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    BLOCKED = "BLOCKED"
 
 
 class ReviewKind(StrEnum):

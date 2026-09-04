@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -66,6 +66,16 @@ const actionLabels: Record<CommandAction, string> = {
   publish_review: '发布审核',
   convert_to_work_item: '拆解 WorkItem',
   restore_spec_version: '基于历史版本创建新版',
+  start_task: '开始任务',
+  complete_task: '标记完成',
+  fail_task: '标记失败',
+};
+
+/** Compact labels for the per-item buttons on work item cards. */
+const workItemActionLabels: Partial<Record<CommandAction, string>> = {
+  start_task: '开始',
+  complete_task: '完成',
+  fail_task: '失败',
 };
 
 type ResourceBundle = {
@@ -194,6 +204,57 @@ export function ApiWorkspace() {
   const [kindFilter, setKindFilter] = useState<'ALL' | NonNullable<WorkItemDto['kind']>>('ALL');
   const [agentFilter, setAgentFilter] = useState('ALL');
   const pendingCommandIds = useRef(new Map<string, string>());
+
+  // --- Flow view: measured dependency edges ---------------------------------
+  // The backend ships the dependency graph; the UI only renders it (never
+  // derives workflow rules). Edges are drawn as an SVG overlay positioned over
+  // the flow graph, with coordinates measured from the live DOM so they stay
+  // correct under any layout/lane arrangement.
+  const flowGraphRef = useRef<HTMLDivElement | null>(null);
+  const flowNodeRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const [flowEdges, setFlowEdges] = useState<Array<{ key: string; x1: number; y1: number; x2: number; y2: number }>>([]);
+
+  const measureFlowEdges = useCallback(() => {
+    const graph = flowGraphRef.current;
+    if (!graph) {
+      setFlowEdges([]);
+      return;
+    }
+    const gRect = graph.getBoundingClientRect();
+    const edges: Array<{ key: string; x1: number; y1: number; x2: number; y2: number }> = [];
+    for (const item of resources.workItems) {
+      const toEl = flowNodeRefs.current.get(item.id);
+      if (!toEl) continue;
+      const toRect = toEl.getBoundingClientRect();
+      const x2 = toRect.left + toRect.width / 2 - gRect.left;
+      const y2 = toRect.top - gRect.top;
+      for (const dep of item.dependency_work_item_ids) {
+        const fromEl = flowNodeRefs.current.get(dep);
+        if (!fromEl) continue;
+        const fromRect = fromEl.getBoundingClientRect();
+        const x1 = fromRect.left + fromRect.width / 2 - gRect.left;
+        const y1 = fromRect.top + fromRect.height - gRect.top;
+        edges.push({ key: `${dep}->${item.id}`, x1, y1, x2, y2 });
+      }
+    }
+    setFlowEdges(edges);
+  }, [resources.workItems]);
+
+  // Recompute when the flow tab becomes visible or its node set changes.
+  useLayoutEffect(() => {
+    if (activeTab !== 'flow') {
+      setFlowEdges([]);
+      return;
+    }
+    measureFlowEdges();
+  }, [activeTab, measureFlowEdges]);
+
+  useEffect(() => {
+    if (activeTab !== 'flow') return;
+    const onResize = () => measureFlowEdges();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [activeTab, measureFlowEdges]);
 
   const refreshResources = useCallback(async (sessionId: string, signal?: AbortSignal) => {
     const [nextState, specs, workItems, agentSpecs, events] = await Promise.all([
@@ -445,6 +506,30 @@ export function ApiWorkspace() {
       }
     } finally {
       setWorkflowProgress(null);
+      setBusy(false);
+    }
+  }
+
+  async function runWorkItemAction(item: WorkItemDto, action: CommandAction) {
+    if (!state || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // The backend already decided which actions this item may take and
+      // shipped them as item.available_actions. This only forwards that
+      // decision back as a command; the UI never derives workflow rules.
+      await submitCommand(state, action, undefined, { work_item_id: item.id });
+      await refreshResources(state.session_id);
+    } catch (reason) {
+      const normalized = normalizeNetworkError(reason);
+      if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
+        pendingCommandIds.current.clear();
+        await refreshResources(state.session_id).catch(() => undefined);
+        setError('状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。');
+      } else {
+        setError(errorText(reason));
+      }
+    } finally {
       setBusy(false);
     }
   }
@@ -834,7 +919,21 @@ export function ApiWorkspace() {
                       const disabled = presentation.detailKind === 'prd' && !currentSpec;
                       const progress = state ? workItemProgress(item, state, hasAgentSpec) : 0;
                       return (
-                        <button key={item.id} disabled={disabled} onClick={() => setSelectedWorkItemId(item.id)} className={'ff-work-card ' + (selectedWorkItemId === item.id ? 'is-selected' : '')}>
+                        <div
+                          key={item.id}
+                          className={'ff-work-card ' + (selectedWorkItemId === item.id ? 'is-selected' : '') + (disabled ? ' is-disabled' : '')}
+                          role="button"
+                          tabIndex={disabled ? -1 : 0}
+                          aria-disabled={disabled}
+                          onClick={() => { if (!disabled) setSelectedWorkItemId(item.id); }}
+                          onKeyDown={(event) => {
+                            if (disabled) return;
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              setSelectedWorkItemId(item.id);
+                            }
+                          }}
+                        >
                           <div className="ff-card-tags">
                             <span className="ff-item-id">#{item.id}</span>
                             <span className="ff-priority">{item.kind === 'ROOT' ? 'P0' : item.kind === 'MILESTONE' ? 'P1' : 'P2'}</span>
@@ -849,8 +948,23 @@ export function ApiWorkspace() {
                             <span className="ff-progress-label">{progress}%</span>
                           </div>
                           <div className="ff-progress-track"><span style={{ width: progress + '%' }} /></div>
+                          {(item.available_actions ?? []).length > 0 && (
+                            <div className="ff-card-exec" onClick={(event) => event.stopPropagation()}>
+                              {(item.available_actions ?? []).map((action) => (
+                                <button
+                                  key={action}
+                                  type="button"
+                                  disabled={busy}
+                                  className={`ff-exec-btn is-${action}`}
+                                  onClick={() => runWorkItemAction(item, action as CommandAction)}
+                                >
+                                  {workItemActionLabels[action as CommandAction] ?? action}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                           <span className="ff-card-action">{disabled ? 'PRD 生成后可打开' : presentation.cardLabel}</span>
-                        </button>
+                        </div>
                       );
                     })}
                     {items.length === 0 && <div className="ff-empty-column">当前阶段尚无卡片</div>}
@@ -867,19 +981,44 @@ export function ApiWorkspace() {
             <span>{resources.workItems.length} NODES</span>
           </div>
           <div className="ff-flow-canvas">
-            {hierarchyColumns.map((column, columnIndex) => (
-              <div key={column.kind} className="ff-flow-lane">
-                <header><span>{columnIndex + 1}</span>{column.title}</header>
-                {resources.workItems.filter((item) => item.kind === column.kind).map((item) => (
-                  <button key={item.id} onClick={() => setSelectedWorkItemId(item.id)} className="ff-flow-node">
-                    <span className="ff-flow-node-icon">{item.kind === 'ROOT' ? <ShieldCheck aria-hidden="true" /> : <GitFork aria-hidden="true" />}</span>
-                    <span><strong>{item.title || item.id}</strong><small>#{item.id} · {assigneeLabel(item)}</small></span>
-                    {item.dependency_work_item_ids.length > 0 && <em>依赖 {item.dependency_work_item_ids.length}</em>}
-                  </button>
-                ))}
-                {resources.workItems.every((item) => item.kind !== column.kind) && <div className="ff-flow-empty">等待后端生成</div>}
-              </div>
-            ))}
+            <div className="ff-flow-graph" ref={flowGraphRef}>
+              {activeTab === 'flow' && flowEdges.length > 0 && (
+                <svg className="ff-flow-edges" aria-hidden="true">
+                  {flowEdges.map((edge) => {
+                    const midY = (edge.y1 + edge.y2) / 2;
+                    return (
+                      <path
+                        key={edge.key}
+                        className="ff-flow-edge"
+                        d={`M ${edge.x1} ${edge.y1} C ${edge.x1} ${midY}, ${edge.x2} ${midY}, ${edge.x2} ${edge.y2}`}
+                      />
+                    );
+                  })}
+                </svg>
+              )}
+              {hierarchyColumns.map((column, columnIndex) => (
+                <div key={column.kind} className="ff-flow-lane">
+                  <header><span>{columnIndex + 1}</span>{column.title}</header>
+                  {resources.workItems.filter((item) => item.kind === column.kind).map((item) => (
+                    <button
+                      key={item.id}
+                      ref={(el) => {
+                        if (el) flowNodeRefs.current.set(item.id, el);
+                        else flowNodeRefs.current.delete(item.id);
+                      }}
+                      data-wi-id={item.id}
+                      onClick={() => setSelectedWorkItemId(item.id)}
+                      className="ff-flow-node"
+                    >
+                      <span className="ff-flow-node-icon">{item.kind === 'ROOT' ? <ShieldCheck aria-hidden="true" /> : <GitFork aria-hidden="true" />}</span>
+                      <span><strong>{item.title || item.id}</strong><small>#{item.id} · {assigneeLabel(item)}</small></span>
+                      {item.dependency_work_item_ids.length > 0 && <em>依赖 {item.dependency_work_item_ids.length}</em>}
+                    </button>
+                  ))}
+                  {resources.workItems.every((item) => item.kind !== column.kind) && <div className="ff-flow-empty">等待后端生成</div>}
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 

@@ -1323,15 +1323,45 @@ button:disabled {
 }
 
 .ff-flow-canvas {
-  display: flex;
   min-height: 0;
   flex: 1;
-  align-items: stretch;
-  gap: 42px;
   overflow: auto;
   padding: 34px;
   background-image: radial-gradient(#cfd8e2 0.8px, transparent 0.8px);
   background-size: 16px 16px;
+}
+
+.ff-flow-graph {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 42px;
+}
+
+.ff-flow-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ff-flow-edge {
+  fill: none;
+  stroke: #8ca6c0;
+  stroke-width: 2;
+}
+
+.ff-flow-node {
+  position: relative;
+  z-index: 1;
+}
+
+.ff-flow-lane {
+  z-index: 1;
 }
 
 .ff-flow-lane {

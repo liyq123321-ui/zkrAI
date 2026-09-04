@@ -17,8 +17,15 @@ from app.database.models import (
     SpecVersion,
     WorkItem,
     WorkItemDependency,
+    WorkItemRun,
 )
 from app.schemas.workflow import SessionState
+from app.services.execution_graph import (
+    available_actions,
+    collapse_runs,
+    graph_depths,
+    startable_work_item_ids,
+)
 from app.services.state_projection import project_state
 
 
@@ -84,6 +91,8 @@ class WorkItemRead(BaseModel):
     responsible_role: str | None
     suggested_assignee: str | None
     dependency_work_item_ids: list[str] = Field(default_factory=list)
+    available_actions: list[str] = Field(default_factory=list)
+    graph_depth: int = 0
 
 
 class AgentSpecRead(BaseModel):
@@ -159,8 +168,24 @@ class QueryService:
                     item.id,
                 )
             )
-            dependencies = self._dependencies(db, project.id)
-            return [self._work_item_read(item, dependencies.get(item.id, [])) for item in items]
+            dependencies, status_by_item, ready_ids, depths = self._execution_view(
+                db, project.id, items
+            )
+            return [
+                self._work_item_read(
+                    item,
+                    dependencies.get(item.id, []),
+                    status=status_by_item.get(item.id, item.status or "todo"),
+                    actions=available_actions(
+                        item.id,
+                        bool(item.executable),
+                        status_by_item.get(item.id, "todo"),
+                        ready_ids,
+                    ),
+                    depth=depths.get(item.id, 0),
+                )
+                for item in items
+            ]
 
     def work_item(self, session_id: str, work_item_id: str) -> WorkItemRead:
         with self._session_factory() as db:
@@ -168,8 +193,19 @@ class QueryService:
             item = db.get(WorkItem, work_item_id)
             if item is None or item.project_id != project.id:
                 raise KeyError(f"WorkItem not found: {work_item_id}")
-            dependencies = self._dependencies(db, project.id)
-            return self._work_item_read(item, dependencies.get(item.id, []))
+            dependencies, status_by_item, ready_ids, depths = self._execution_view(
+                db, project.id, [item]
+            )
+            status = status_by_item.get(item.id, item.status or "todo")
+            return self._work_item_read(
+                item,
+                dependencies.get(item.id, []),
+                status=status,
+                actions=available_actions(
+                    item.id, bool(item.executable), status, ready_ids
+                ),
+                depth=depths.get(item.id, 0),
+            )
 
     def agent_specs(self, session_id: str) -> list[AgentSpecRead]:
         with self._session_factory() as db:
@@ -379,8 +415,46 @@ class QueryService:
             result.setdefault(edge.from_work_item_id, []).append(edge.to_work_item_id)
         return result
 
+    @classmethod
+    def _execution_view(
+        cls, db: Session, project_id: str, items: list[WorkItem]
+    ) -> tuple[dict[str, list[str]], dict[str, str], set[str], dict[str, int]]:
+        """Derive run status, ready set and lane depth for the dependency DAG.
+
+        Returns ``(dependencies, status_by_item, ready_ids, depths)``. Both the
+        projection and the command handlers must read status through here so
+        the UI can never offer an action the engine would reject.
+        """
+
+        runs = (
+            db.query(WorkItemRun)
+            .filter_by(project_id=project_id)
+            .order_by(
+                WorkItemRun.work_item_id,
+                WorkItemRun.created_at,
+                WorkItemRun.id,
+            )
+            .all()
+        )
+        status_by_item = collapse_runs(runs)
+        dependencies = cls._dependencies(db, project_id)
+        known_ids = {item.id for item in items if item.id is not None}
+        executable_ids = {item.id for item in items if item.executable and item.id}
+        ready_ids = set(
+            startable_work_item_ids(executable_ids, dependencies, status_by_item)
+        )
+        depths = graph_depths(known_ids, dependencies)
+        return dependencies, status_by_item, ready_ids, depths
+
     @staticmethod
-    def _work_item_read(item: WorkItem, dependencies: list[str]) -> WorkItemRead:
+    def _work_item_read(
+        item: WorkItem,
+        dependencies: list[str],
+        *,
+        status: str | None = None,
+        actions: list[str] | None = None,
+        depth: int = 0,
+    ) -> WorkItemRead:
         return WorkItemRead(
             id=item.id,
             session_id=item.session_id,
@@ -395,7 +469,7 @@ class QueryService:
             description=item.description,
             spec=item.spec,
             objective=item.objective,
-            status=item.status,
+            status=status if status is not None else item.status,
             scope=list(item.scope) if item.scope is not None else None,
             exclusions=list(item.exclusions) if item.exclusions is not None else None,
             inputs=list(item.inputs) if item.inputs is not None else None,
@@ -411,6 +485,8 @@ class QueryService:
             responsible_role=item.responsible_role,
             suggested_assignee=item.suggested_assignee,
             dependency_work_item_ids=list(dependencies),
+            available_actions=list(actions or []),
+            graph_depth=depth,
         )
 
     @staticmethod

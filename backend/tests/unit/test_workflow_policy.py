@@ -47,7 +47,15 @@ from app.domain.workflow import (
                 CommandAction.RESTORE_SPEC_VERSION,
             ),
         ),
-        (ProjectPhase.AGENT_SPECS_READY, SpecStatus.APPROVED, ()),
+        (
+            ProjectPhase.AGENT_SPECS_READY,
+            SpecStatus.APPROVED,
+            (
+                CommandAction.START_TASK,
+                CommandAction.COMPLETE_TASK,
+                CommandAction.FAIL_TASK,
+            ),
+        ),
     ],
 )
 def test_legal_actions_are_derived(phase, spec_status, expected):
@@ -118,7 +126,7 @@ def test_publish_review_is_internal_but_still_accepted_for_coordinator():
         (ProjectPhase.REVIEW, SpecStatus.REWORK, "REVISE_SPEC"),
         (ProjectPhase.REVIEW, SpecStatus.NEED_CLARIFICATION, "ANSWER_CLARIFICATION"),
         (ProjectPhase.REVIEW, SpecStatus.APPROVED, "CONVERT_TO_WORK_ITEM"),
-        (ProjectPhase.AGENT_SPECS_READY, SpecStatus.APPROVED, "NONE"),
+        (ProjectPhase.AGENT_SPECS_READY, SpecStatus.APPROVED, "EXECUTE_WORK_ITEMS"),
     ],
 )
 def test_next_action_is_stable(phase, spec_status, expected):

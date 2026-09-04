@@ -409,3 +409,28 @@ class WorkflowState(Base):
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
+
+class WorkItemRun(Base):
+    """Append-only execution ledger for the WorkItem dependency DAG.
+
+    Current execution state is derived from the latest run per work item
+    rather than stored on ``WorkItem`` itself, which keeps execution history
+    auditable and lets the command guard admit new rows without opening a
+    mutation exemption for existing ones.
+    """
+
+    __tablename__ = "work_item_runs"
+    __table_args__ = (
+        UniqueConstraint("work_item_id", "command_id", name="uq_work_item_run_command"),
+    )
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, nullable=False, index=True)
+    work_item_id = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False)
+    actor_id = Column(String, nullable=True)
+    command_id = Column(String, nullable=False, index=True)
+    agent_call_id = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+

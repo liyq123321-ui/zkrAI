@@ -8,7 +8,10 @@ export type CommandAction =
   | 'rework'
   | 'publish_review'
   | 'convert_to_work_item'
-  | 'restore_spec_version';
+  | 'restore_spec_version'
+  | 'start_task'
+  | 'complete_task'
+  | 'fail_task';
 
 export interface ClarificationQuestionDto {
   question_id: string;
@@ -87,6 +90,10 @@ export interface WorkItemDto {
   responsible_role: string | null;
   suggested_assignee: string | null;
   dependency_work_item_ids: string[];
+  /** Backend-computed per-item actions. The UI renders these and never derives them. */
+  available_actions?: string[];
+  /** Longest-path depth in the dependency DAG, for lane layout. */
+  graph_depth?: number;
 }
 
 export interface AgentSpecDto {

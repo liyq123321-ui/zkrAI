@@ -15,12 +15,20 @@ from sqlalchemy.orm import Session
 from app.database.models import (
     AgentCall, AgentSpec, AuditEvent, ClarificationRequest, ClarificationResponse, CommandAttempt,
     ProcessedCommand, Project, ReviewTask, SpecReview, SpecVersion, WorkItem,
-    WorkItemDependency,
+    WorkItemDependency, WorkItemRun,
 )
 from app.domain.types import CommandAction, ProjectBriefUpdates, ProjectPhase, ReviewKind, ReviewVerdict, SpecStatus
 from app.domain.workflow import IllegalAction, WorkflowSnapshot, assert_action_allowed
 from app.schemas.workflow import CommandResult, SessionCommandRequest, SessionState
+from app.services.execution_graph import collapse_runs, startable_work_item_ids
 from app.services.state_projection import active_clarification_request, project_state
+
+
+_EXECUTION_ACTIONS = frozenset({
+    CommandAction.START_TASK,
+    CommandAction.COMPLETE_TASK,
+    CommandAction.FAIL_TASK,
+})
 
 
 class CommandConflict(Exception): code = "COMMAND_CONFLICT"
@@ -149,6 +157,71 @@ class ActionScopedUnitOfWork:
         if self.__action is not CommandAction.CONVERT_TO_WORK_ITEM or spec.project_id != self.__project_id:
             raise ValueError("AgentSpec is outside this action scope")
         self.__session.add(spec)
+
+    def add_work_item_run(self, run: WorkItemRun) -> None:
+        """Append an execution ledger entry.
+
+        Execution state is append-only on purpose: ``WorkItem`` rows stay
+        immutable after decomposition, which lets the command guard admit new
+        rows without opening a mutation exemption for existing ones.
+        """
+
+        if self.__action not in _EXECUTION_ACTIONS:
+            raise ValueError("this action cannot record a work item run")
+        if run.project_id != self.__project_id:
+            raise ValueError("WorkItem run belongs to another project")
+        self.__session.add(run)
+
+    def work_item_execution_snapshot(
+        self, work_item_id: str
+    ) -> tuple[bool, str, dict[str, list[str]], set[str]]:
+        """Read-only execution facts for one work item, inside the transaction.
+
+        Returns ``(executable, status, dependencies, startable_ids)`` so the
+        materialize step can re-validate against the same data the projection
+        used, closing the gap between what the UI was offered and what the
+        engine accepts.
+        """
+
+        if self.__action not in _EXECUTION_ACTIONS:
+            raise ValueError("this action cannot inspect execution state")
+        item = self.__session.get(WorkItem, work_item_id)
+        if item is None or item.project_id != self.__project_id:
+            raise ValueError("WorkItem is outside this action scope")
+        items = (
+            self.__session.query(WorkItem)
+            .filter(WorkItem.project_id == self.__project_id)
+            .all()
+        )
+        runs = (
+            self.__session.query(WorkItemRun)
+            .filter(WorkItemRun.project_id == self.__project_id)
+            .order_by(
+                WorkItemRun.work_item_id,
+                WorkItemRun.created_at,
+                WorkItemRun.id,
+            )
+            .all()
+        )
+        status_by_item = collapse_runs(runs)
+        dependencies = {
+            edge.from_work_item_id: edge.to_work_item_id
+            for edge in self.__session.query(WorkItemDependency)
+            .filter(WorkItemDependency.project_id == self.__project_id)
+            .all()
+        }
+        edges: dict[str, list[str]] = {}
+        for from_id, to_id in dependencies.items():
+            edges.setdefault(from_id, []).append(to_id)
+        executable_ids = {
+            row.id for row in items if row.executable and row.id is not None
+        }
+        return (
+            bool(item.executable),
+            status_by_item.get(work_item_id, "todo"),
+            edges,
+            set(startable_work_item_ids(executable_ids, edges, status_by_item)),
+        )
 
     def existing_work_item_keys(self, local_keys: set[str]) -> set[str]:
         if self.__action is not CommandAction.CONVERT_TO_WORK_ITEM:
@@ -852,7 +925,7 @@ class CommandService:
         if project.state_version != reserved: raise ValueError("handler must not change Project.state_version")
         if (project.phase,project.current_spec_version_id,project.final_approver,tuple(project.project_manager_ids or []),tuple(project.root_owner_ids or [])) != project_guard: raise ValueError("handler must not directly mutate protected Project fields")
         if (version.status if version else None) != spec_status: raise ValueError("handler must not mutate an existing Spec")
-        allowed=(SpecVersion,SpecReview,ClarificationRequest,ClarificationResponse,WorkItem,WorkItemDependency,AgentSpec)
+        allowed=(SpecVersion,SpecReview,ClarificationRequest,ClarificationResponse,WorkItem,WorkItemDependency,AgentSpec,WorkItemRun)
         added=set(db.new)-old_new
         if any(not isinstance(item,allowed) for item in added): raise ValueError("handler created an unauthorized row")
         if any(getattr(item, "project_id", project.id) != project.id for item in added):
@@ -909,7 +982,11 @@ class CommandService:
                  (CommandAction.RESTORE_SPEC_VERSION,ProjectPhase.REVIEW,SpecStatus.NEED_CLARIFICATION):review,
                  (CommandAction.RESTORE_SPEC_VERSION,ProjectPhase.REVIEW,SpecStatus.APPROVED):review,
                  (CommandAction.RESTORE_SPEC_VERSION,ProjectPhase.REVIEW,SpecStatus.REJECTED):review,
-                 (CommandAction.CONVERT_TO_WORK_ITEM,ProjectPhase.REVIEW,SpecStatus.APPROVED):{(ProjectPhase.AGENT_SPECS_READY,SpecStatus.APPROVED)} }.get((action,before.phase,before.spec_status),set())
+                 (CommandAction.CONVERT_TO_WORK_ITEM,ProjectPhase.REVIEW,SpecStatus.APPROVED):{(ProjectPhase.AGENT_SPECS_READY,SpecStatus.APPROVED)},
+                 # Execution advances WorkItem run state only, so every execution
+                 # action is a self-loop on the terminal workflow snapshot.
+                 **{(action,ProjectPhase.AGENT_SPECS_READY,SpecStatus.APPROVED):{(ProjectPhase.AGENT_SPECS_READY,SpecStatus.APPROVED)} for action in _EXECUTION_ACTIONS},
+                 }.get((action,before.phase,before.spec_status),set())
 
     def _apply(self, db: Session, project: Project, result: CommandHandlerResult) -> None:
         if result.current_spec_version_id:project.current_spec_version_id=result.current_spec_version_id

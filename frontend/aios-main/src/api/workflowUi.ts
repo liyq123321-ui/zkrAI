@@ -92,12 +92,17 @@ export function workItemPresentation(
   return { cardLabel: '查看规划详情', detailKind: 'work-item' };
 }
 
-export type WorkItemLane = 'todo' | 'in_progress' | 'done';
+export type WorkItemLane = 'todo' | 'in_progress' | 'done' | 'failed';
 
 export function workItemLane(status: string | null | undefined): WorkItemLane {
   const normalized = (status ?? 'todo').trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (['done', 'completed', 'complete', 'success', 'succeeded', 'closed'].includes(normalized)) {
     return 'done';
+  }
+  // 'failed' must be matched before the fallthrough, otherwise a failed task
+  // is silently rendered as if it had never started.
+  if (['failed', 'failure', 'error', 'rejected'].includes(normalized)) {
+    return 'failed';
   }
   if (['in_progress', 'active', 'running', 'processing', 'in_review', 'review', 'blocked'].includes(normalized)) {
     return 'in_progress';
@@ -120,6 +125,10 @@ export function workItemStatusLabel(status: string | null | undefined): string {
     in_review: '评审中',
     review: '评审中',
     blocked: '受阻',
+    failed: '已失败',
+    failure: '已失败',
+    error: '已失败',
+    rejected: '已失败',
     done: '已完成',
     completed: '已完成',
     complete: '已完成',

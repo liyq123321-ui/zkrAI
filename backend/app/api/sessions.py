@@ -12,6 +12,7 @@ from app.identity import ActorResolver
 from app.schemas.workflow import CommandResult, SessionCommandRequest, SessionCreateRequest, SessionState
 from app.services.command_service import CommandService
 from app.services.error_classification import classify_workflow_error
+from app.services.execution_service import ExecutionService
 from app.services.project_service import ProjectService
 from app.services.query_service import (
     AgentSpecRead,
@@ -34,6 +35,7 @@ def build_router(
     from app.services.decomposition_service import DecompositionService
 
     decomposition = DecompositionService(session_factory, agent_gateway)
+    execution = ExecutionService(session_factory)
     commands = CommandService(
         session_factory,
         handlers={
@@ -42,6 +44,9 @@ def build_router(
             CommandAction.REVISE: specs.as_command_handler(),
             CommandAction.RESTORE_SPEC_VERSION: specs.as_command_handler(),
             CommandAction.CONVERT_TO_WORK_ITEM: decomposition.as_command_handler(),
+            CommandAction.START_TASK: execution,
+            CommandAction.COMPLETE_TASK: execution,
+            CommandAction.FAIL_TASK: execution,
         },
     )
     queries = QueryService(session_factory)
