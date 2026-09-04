@@ -12,7 +12,7 @@ class Settings:
     codex_home: Path
     codex_cwd: Path
     codex_model: str | None = None
-    codex_timeout_seconds: int = 900
+    codex_timeout_seconds: int = 2000
     codex_skip_git_repo_check: bool = False
     codex_ignore_user_config: bool = False
     gitea_url: str | None = None
@@ -45,7 +45,7 @@ class Settings:
             codex_home=Path(os.getenv("CODEX_RUNTIME_HOME", str(Path.home() / ".codex"))).resolve(),
             codex_cwd=Path(os.getenv("CODEX_WORKING_DIRECTORY", str(root))).resolve(),
             codex_model=os.getenv("CODEX_MODEL") or None,
-            codex_timeout_seconds=int(os.getenv("CODEX_TIMEOUT_SECONDS", "900")),
+            codex_timeout_seconds=int(os.getenv("CODEX_TIMEOUT_SECONDS", "2000")),
             codex_skip_git_repo_check=os.getenv(
                 "CODEX_SKIP_GIT_REPO_CHECK", "false"
             ).strip().lower()

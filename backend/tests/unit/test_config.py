@@ -82,3 +82,21 @@ def test_settings_load_identity_and_cors_configuration(monkeypatch):
         "http://127.0.0.1:3000",
         "https://firstflight.example",
     )
+
+
+def test_settings_default_codex_timeout_is_2000_seconds(tmp_path: Path):
+    settings = Settings(
+        database_url=f"sqlite:///{tmp_path / 'gateway.db'}",
+        codex_binary="codex",
+        codex_home=tmp_path / "codex-home",
+        codex_cwd=tmp_path,
+    )
+
+    assert settings.codex_timeout_seconds == 2000
+
+
+def test_settings_environment_fallback_uses_2000_second_codex_timeout(monkeypatch):
+    monkeypatch.setattr(config_module, "load_dotenv", lambda _path, *, override: None)
+    monkeypatch.delenv("CODEX_TIMEOUT_SECONDS", raising=False)
+
+    assert Settings.from_env().codex_timeout_seconds == 2000
