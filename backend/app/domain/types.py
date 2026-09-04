@@ -3,6 +3,7 @@
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from app.domain.implementation_plan import ImplementationPlan
 
 
 def normalize_plain_text(value: str, *, max_length: int, field_name: str) -> str:
@@ -303,6 +304,8 @@ class AgentSpecProposal(BaseModel):
     test_obligations: list[str] = Field(min_length=1)
     risks: list[str]
     open_questions: list[OpenQuestion]
+    # Older durable proposals can still be read; current generation gates require a plan.
+    implementation_plan: ImplementationPlan | None = None
 
 
 class WorkBreakdown(BaseModel):

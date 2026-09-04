@@ -1,5 +1,6 @@
 """Agent gateway contract."""
 from typing import Protocol
+from app.domain.implementation_plan import ImplementationPlan
 
 from app.domain.types import (
     ClarificationAnalysis,
@@ -26,6 +27,8 @@ class AgentGateway(Protocol):
     async def decompose_spec(self, payload: dict[str, object]) -> WorkBreakdown:
         """Convert an approved Project Spec into a typed work breakdown."""
 
+    async def plan_task(self, payload: dict[str, object]) -> ImplementationPlan:
+        """Detail an existing task without changing its approved boundaries."""
+
     async def rewrite_prd(self, payload: dict[str, object]) -> PrdRewriteOutput:
         """Rewrite a PRD from a frozen Gitea review-comment snapshot."""
-

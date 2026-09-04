@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.agents.gateway import AgentGateway
 from app.database.models import AgentCall, AgentSession, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem, WorkItemDependency
 from app.domain.types import AgentSpecProposal, ProjectPhase, ProjectSpecPayload, ReviewVerdict, SemanticReview, SpecStatus, WorkBreakdown, WorkItemKind
+from app.services.task_specifications import ImplementationPlanError, requirement_snapshots, validate_implementation_plan
 
 
 class BreakdownValidationError(ValueError):
@@ -224,6 +225,7 @@ def _cycle_participant_iterative(edges: Mapping[str, set[str]], candidates: set[
 def validate_breakdown(
     breakdown: WorkBreakdown,
     approved_spec: SpecVersion | ProjectSpecPayload | ApprovedSpecSnapshot | Mapping[str, object],
+    *, require_implementation_plan: bool = True,
 ) -> None:
     """Reject unsafe model output before a database transaction is opened."""
     proposals = [*breakdown.milestones, *breakdown.tasks]
@@ -349,12 +351,20 @@ def validate_breakdown(
         _error("MISSING_ACCEPTANCE_COVERAGE", "agent_specs",
                f"requirements without task acceptance coverage: {', '.join(sorted(uncovered))}")
 
+    for proposal in breakdown.agent_specs:
+        if not require_implementation_plan and proposal.implementation_plan is None:
+            continue
+        try:
+            validate_implementation_plan(proposal.implementation_plan, proposal, allowed_requirement_ids)
+        except ImplementationPlanError as error:
+            _error(error.code, proposal.work_item_key, str(error))
+
 
 def _normalize_text(value: str) -> str:
     return " ".join(value.strip().split())
 
 
-def _normalized_agent_spec_content(proposal: AgentSpecProposal, *, work_item_id: str, dependency_ids: list[str], spec_id: str) -> dict[str, object]:
+def _normalized_agent_spec_content(proposal: AgentSpecProposal, *, work_item_id: str, dependency_ids: list[str], spec_id: str, approved_spec: Mapping[str, object]) -> dict[str, object]:
     """Canonicalize human-readable fields but retain identifiers as exact validated values."""
     content = proposal.model_dump(mode="json")
     content.pop("work_item_key", None)
@@ -376,6 +386,7 @@ def _normalized_agent_spec_content(proposal: AgentSpecProposal, *, work_item_id:
     content["work_item_id"] = work_item_id
     content["dependency_work_item_ids"] = dependency_ids
     content["source_spec_version_id"] = spec_id
+    content["requirements"] = requirement_snapshots(proposal, dict(approved_spec))
     return json.loads(json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
 
 
@@ -495,7 +506,7 @@ class DecompositionService:
             try:
                 review = SemanticReview.model_validate(call.response)
                 breakdown = WorkBreakdown.model_validate(request.get("canonical_breakdown"))
-                validate_breakdown(breakdown, snapshot)
+                validate_breakdown(breakdown, snapshot, require_implementation_plan=False)
             except ValueError:
                 return None
             if not self._review_blocks(review) or not self._can_repair_review(review):
@@ -671,7 +682,7 @@ class DecompositionService:
         specs: list[AgentSpec] = []
         for proposal in breakdown.agent_specs:
             dependencies = [id_by_key[key] for key in proposal.dependency_keys]
-            content = _normalized_agent_spec_content(proposal, work_item_id=id_by_key[proposal.work_item_key], dependency_ids=dependencies, spec_id=approved_spec.id)
+            content = _normalized_agent_spec_content(proposal, work_item_id=id_by_key[proposal.work_item_key], dependency_ids=dependencies, spec_id=approved_spec.id, approved_spec=approved_spec.content)
             spec = AgentSpec(id=_new_id(), project_id=project.id, work_item_id=id_by_key[proposal.work_item_key], source_spec_version_id=approved_spec.id, dependency_work_item_ids=dependencies, content=content, content_hash=_canonical_hash(content))
             add(spec)
             specs.append(spec)
@@ -736,7 +747,7 @@ class DecompositionService:
         specs = []
         for proposal in breakdown.agent_specs:
             dependency_ids = [id_by_key[key] for key in proposal.dependency_keys]
-            content = _normalized_agent_spec_content(proposal, work_item_id=id_by_key[proposal.work_item_key], dependency_ids=dependency_ids, spec_id=approved_spec.id)
+            content = _normalized_agent_spec_content(proposal, work_item_id=id_by_key[proposal.work_item_key], dependency_ids=dependency_ids, spec_id=approved_spec.id, approved_spec=approved_spec.content)
             spec = AgentSpec(id=_new_id(), project_id=context.project_id, work_item_id=id_by_key[proposal.work_item_key], source_spec_version_id=approved_spec.id, dependency_work_item_ids=dependency_ids, content=content, content_hash=_canonical_hash(content))
             uow.add_agent_spec(spec)
             specs.append(spec)

@@ -23,6 +23,7 @@ let failComments = false;
 let failDocument = false;
 let failDiff = false;
 let missingSavedSession = false;
+let resourceOverrides: Record<string, unknown> = {};
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -30,6 +31,7 @@ beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; };
   failLines = false; failComments = false; failDocument = false; failDiff = false; missingSavedSession = false;
+  resourceOverrides = {};
   localStorage.clear();
   fetchSpy = vi.fn(async (input: string | URL | Request) => {
     const path = new URL(String(input)).pathname;
@@ -56,6 +58,7 @@ beforeEach(() => {
       '/prd/root-1/versions':[doc],
       '/prd/root-1/comments':[],
       '/prd/root-1/commentable-lines':{wi:'root-1',version:1,filename:doc.filename,commit_sha:'abc123',lines:[{line:1,kind:'addition',text:'# 需求说明'},{line:2,kind:'addition',text:'这是已保存的 PRD 正文。'}]},
+      ...resourceOverrides,
     };
     if (!(path in payloads)) throw new Error(`Unexpected test request: ${path}`);
     return new Response(JSON.stringify(payloads[path]), {status:200});
@@ -69,6 +72,64 @@ function renderPanel(onConfirmAndDecompose: (reviewNote: string) => Promise<void
 }
 
 describe('workspace regression', () => {
+  it.each([
+    {event_type:'AGENT_TRACE',payload:{phase:'plan_task',status:'done'},label:'细化任务实现方案'},
+    {event_type:'AGENT_SPEC_DETAILS_ENRICHED',payload:{},label:'任务实现方案已补齐'},
+  ])('shows a readable audit title for $label', async ({event_type,payload,label}) => {
+    resourceOverrides = {
+      '/sessions/session-1/events':[{id:'enrichment-event',event_type,payload,actor_id:null,created_at:'2026-09-03T02:45:00Z'}],
+    };
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+    const title = await screen.findByText(label,{selector:'summary'});
+    expect(title.closest('summary')).toBeTruthy();
+  });
+
+  it.each(['planned', 'historical', 'missing-source'])('opens a real child card with %s task details bound to its original PRD', async (variant) => {
+    const original = {...spec, id:'spec-original', revision:1, content:{
+      functional_requirements:[{requirement_id:'FR-001',statement:'原批准要求：回答必须列出来源。',priority:'MUST'}],
+      non_functional_requirements:[{requirement_id:'NFR-001',statement:'原批准要求：两秒内返回引用。',priority:'SHOULD'}],
+    }};
+    resourceOverrides = {
+      '/sessions/session-1/specs':[
+        {...spec, revision:2, content:{functional_requirements:[{requirement_id:'FR-001',statement:'新版要求：允许不列来源。',priority:'MUST'}]}},
+        ...(variant === 'missing-source' ? [] : [original]),
+      ],
+      '/sessions/session-1/work-items':[{id:'child-1',parent_id:'root-1',kind:'TASK',title:'实现回答引用',description:null,objective:'提供可核查的回答',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:null,responsible_role:'前端工程师',suggested_assignee:null,dependency_work_item_ids:[]}],
+      '/sessions/session-1/agent-specs':[{id:'agent-1',work_item_id:'child-1',source_spec_version_id:'spec-original',dependency_work_item_ids:[],created_at:spec.created_at,content:{
+        objective:'提供可核查的回答',
+        acceptance_criteria:[{requirement_ids:['FR-001','NFR-001'],criterion:'引用可打开',verification_method:'点击测试',expected_result:'显示原文'}],
+        ...(variant === 'planned' ? {
+          requirements:[{requirement_id:'FR-001',statement:'原批准要求：回答必须列出来源。',priority:'MUST'}],
+          implementation_plan:{overview:'为回答挂接原文入口。',steps:[{step_id:'S1',title:'添加引用列表',requirement_ids:['FR-001'],implementation_method:'从回答引用字段读取文档编号并渲染链接。',expected_output:'可点击的回答引用列表。',verification_method:'点击引用并核对文档编号。'}]},
+        } : {}),
+      }}],
+    };
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button',{name:/实现回答引用.*查看任务 Spec/}));
+    const details = within(await screen.findByRole('dialog',{name:'任务详情'}));
+    const requirements = within(details.getByRole('region',{name:'对应需求原文'}));
+    expect(details.queryByText('新版要求：允许不列来源。')).toBeNull();
+    if (variant === 'missing-source') {
+      expect(requirements.getByText(/未找到绑定的来源 PRD/)).toBeTruthy();
+      expect(details.queryByText('原批准要求：回答必须列出来源。')).toBeNull();
+    } else {
+      expect(requirements.getByText('原批准要求：回答必须列出来源。')).toBeTruthy();
+    }
+    if (variant === 'planned') {
+      const plan = within(details.getByRole('region',{name:'实施方案'}));
+      expect(plan.getByText('从回答引用字段读取文档编号并渲染链接。')).toBeTruthy();
+      expect(plan.getByText('可点击的回答引用列表。')).toBeTruthy();
+      expect(plan.getByText('点击引用并核对文档编号。')).toBeTruthy();
+    } else {
+      expect(details.getByText(/尚未生成实现方案/)).toBeTruthy();
+      if (variant === 'historical') expect(requirements.getByText('原批准要求：两秒内返回引用。')).toBeTruthy();
+    }
+    fireEvent.click(details.getByRole('button',{name:'关闭详情'}));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it.each(['lines','comments','document','diff'])('keeps saved PRD readable and offers explicit fallback confirmation when %s cannot load', async (resource) => {
     failLines = resource === 'lines'; failComments = resource === 'comments'; failDocument = resource === 'document'; failDiff = resource === 'diff';
     const confirm = vi.fn(async () => undefined);

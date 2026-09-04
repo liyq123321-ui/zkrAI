@@ -276,6 +276,7 @@ class QueryService:
             "generate_spec": "Generating a project specification",
             "review_spec": "Reviewing specification quality",
             "decompose_spec": "Decomposing the approved specification",
+            "plan_task": "Defining task implementation steps and interfaces",
             "review_breakdown": "Reviewing work-item decomposition",
             "rewrite_prd": "Applying authoritative PRD review comments",
             "restore_spec": "Restoring historical specification content",

@@ -445,6 +445,24 @@ WorkItem 的依赖以 ID 明确表达；根和里程碑没有 Agent Spec，只�
 
 Agent Spec 是供后续调度器消费的结构化任务包，不是执行记录。
 
+每份新生成的 Spec 还包含 `requirements`（从批准 PRD 复制的 requirement_id、statement、priority）和 `implementation_plan`。后者包括实现概述、接口适用说明、接口定义与输入输出字段类型/必填项/校验和异常行为、数据结构与验证规则、已确认或建议的设计选择，以及顺序实施步骤。步骤必须关联该任务的全部验收需求，明确具体方法、产出和验证方式；程序检查覆盖和标识，Reviewer 检查可执行程度与跨任务接口一致性。
+
+历史 Spec 保持可读，缺少实现方案时页面明确提示。项目负责人可通过本机命令补齐已有任务（所有计划生成并通过复审后原子保存，保留原 ID、依赖、范围和批准 PRD）：
+
+```sh
+backend/.venv/bin/python backend/scripts/enrich_agent_specs.py --session-id '<session-id>' --actor-id '<project-owner-id>'
+```
+
+若自动修订后仍存在跨任务契约冲突，可整理完整的 `task_key -> ImplementationPlan` JSON 校正稿，再由系统独立审核后保存：
+
+```sh
+backend/.venv/bin/python backend/scripts/enrich_agent_specs.py --session-id '<session-id>' --actor-id '<project-owner-id>' --revised-plans '/absolute/path/plans.json' --source-review-call-id '<rejected-review-call-id>'
+```
+
+来源审核必须绑定当前未变化的 PRD、任务和权限快照，且不能包含待人工决定的问题。此入口只替换实施方案，不改任务范围或依赖，不重置自动修订轮次；完整候选及来源审核记录会一起提交给 Reviewer，只有审核通过才能原子保存。
+
+接口和实现选择超出 PRD 已明确的技术细节时，作为 `PROPOSED` 建议记录；标为 `FIXED` 的决定必须有批准 PRD 依据。详细实现规格本身不代表代码已运行、方案已被额外批准或对应 Skill 已安装。
+
 ```json
 {
   "id": "agent-spec-id",

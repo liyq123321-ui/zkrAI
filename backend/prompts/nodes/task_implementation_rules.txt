@@ -1,0 +1,56 @@
+Every task Spec must include a detailed, actionable implementation_plan, not null.
+Its overview explains how this task will achieve its assigned requirements within
+its existing scope. Do not merely repeat the objective or say "implement/test it".
+
+List ordered concrete steps with unique step_id, a specific title, exact assigned
+FR/NFR identifiers, implementation_method, expected_output and verification_method.
+Cover every requirement in this task's acceptance criteria through these steps.
+Methods should describe components, processing/data flow, algorithms or decision
+rules, integration/dependency handoffs and error handling as applicable. Include
+normal, boundary and failure verification with observable expected outcomes.
+Write enough detail that an engineer can implement and test the task without
+having to invent its missing behavior. Break substantive tasks into design/contract,
+implementation, integration and verification steps as appropriate. State the
+actual decision rules and edge-case behavior, not generic activity labels.
+
+Define interfaces in enough detail to implement: kind (HTTP, function, event, CLI,
+data/document contract as appropriate), name, precise endpoint/signature/schema,
+input and output field names, data types, required flags, descriptions including
+validation constraints, and failure conditions with error codes or behaviors.
+Describe authentication, pagination, idempotency and timeouts when relevant.
+Define data_structures with fields/types or example schemas and validation rules.
+Include concrete request/response or invocation/result examples in definition;
+state success and error outcomes, optional/null handling and units/ranges where
+applicable. Specify how producer outputs become consumer inputs at dependency
+handoffs. Verification must describe inputs/setup, the action, and expected outputs
+or failure behavior. Cite proposed file/module locations only within the task's
+allowed boundaries and label them as proposed rather than existing repository facts.
+Keep shared contracts consistent across dependent tasks. Do not create unnecessary
+HTTP endpoints for a documentation, policy or offline test task: interfaces and
+data_structures may be empty only when genuinely inapplicable; explain applicability
+or the absence of an interface in interface_notes.
+
+For each handoff, distinguish the owner of a schema/template from the task that
+produces its actual runtime records. Documentation and test-material tasks must
+not require observed answers, timings or passing results as their own outputs.
+Define how missing safety checks and unobserved execution values are represented
+(nullable fields or explicit sentinels), with consistent fail-closed behavior.
+Separate ambiguous supported requests from genuinely out-of-scope requests; name
+the clarification result and its consumer mapping. Express acceptance thresholds
+as exact comparisons with boundary examples. Authentication requirements must
+follow the selected provider; do not require API keys for every possible service.
+
+Record design_decisions with a reason and status FIXED or PROPOSED. FIXED must be
+grounded in the approved PRD; label recommended technology, endpoints, paths,
+schemas and numerical defaults as PROPOSED if the PRD does not settle them. A
+specific proposal is useful without pretending it has already been approved.
+Where the PRD requires an owner's decision, preserve the decision task and the
+dependency on it. Never invent credentials, approval, source URLs, existing files
+or completed results. Stay within the task's assigned requirements and scope.
+Keep the existing work-item dependency graph. Distinguish development order from
+runtime call order: describe interface stubs and final integration when a later
+task implements a runtime precheck, and fail closed until that precheck exists.
+Do not create new delivery dependencies just to mirror runtime calls.
+
+Use the project's language for descriptive text. Required skills are capability
+descriptions; do not claim a Skill package was invoked or installed without evidence.
