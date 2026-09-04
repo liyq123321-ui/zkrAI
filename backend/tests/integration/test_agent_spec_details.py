@@ -82,7 +82,11 @@ async def test_enrichment_preserves_scope_ids_prd_and_copies_requirements_atomic
     before = state(session_factory)
     tasks = sorted(before["WorkItem"].values(), key=lambda item: item["local_key"])
     specs = {row["work_item_id"]: row for row in before["AgentSpec"].values()}
-    outputs = [good_plan({"task_spec": specs[t["id"]]["content"]}) for t in tasks if t["kind"] == "TASK"]
+    ordered_tasks = sorted(
+        (task for task in tasks if task["kind"] == "TASK"),
+        key=lambda task: (task["local_key"] == "t-api", task["local_key"]),
+    )
+    outputs = [good_plan({"task_spec": specs[task["id"]]["content"]}) for task in ordered_tasks]
     gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [*outputs, passing_semantic_review])
 
     result = await service(session_factory, gateway).enrich(legacy_project, "approver-1")
@@ -146,6 +150,41 @@ async def test_calls_are_durable_before_external_work_and_concurrency_is_bounded
 
     await service(session_factory, SimpleNamespace(plan_task=plan, review_breakdown=review)).enrich(legacy_project, "pm-1")
     assert peak == 2 and active == 0
+
+
+@pytest.mark.asyncio
+async def test_enrichment_plans_dependency_order_in_waves_with_durable_contracts(legacy_project, session_factory):
+    active = peak = 0
+    completed = set()
+
+    async def plan(payload):
+        nonlocal active, peak
+        key = payload["task_spec"]["work_item_key"]
+        if key == "t-api":
+            assert "t-domain" in completed
+            assert [contract["work_item_key"] for contract in payload["dependency_contracts"]] == ["t-domain"]
+            assert payload["dependency_contracts"][0]["implementation_plan"]
+            assert payload["dependency_contract_hashes"] == {
+                "t-domain": payload["dependency_contracts"][0]["contract_hash"],
+            }
+            with session_factory() as db:
+                call = next(
+                    call for call in db.query(AgentCall).filter_by(operation="plan_task", status="PENDING")
+                    if call.request["task_spec"]["work_item_key"] == key
+                )
+                assert call.request["dependency_contracts"] == payload["dependency_contracts"]
+                assert call.request["dependency_contract_hashes"] == payload["dependency_contract_hashes"]
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        completed.add(key)
+        active -= 1
+        return good_plan(payload)
+
+    await service(session_factory, SimpleNamespace(plan_task=plan, review_breakdown=pass_review)).enrich(
+        legacy_project, "approver-1")
+
+    assert peak == 2
 
 
 @pytest.mark.asyncio
@@ -256,6 +295,41 @@ async def test_review_repairs_only_targeted_plans_at_most_twice(legacy_project, 
         calls = db.query(AgentCall).filter_by(operation="plan_task").all()
         assert len(calls) == 6
         assert sum(c.status == "SUCCEEDED" for c in calls) == (4 if passes else 0)
+
+
+@pytest.mark.asyncio
+async def test_rejecting_producer_repairs_transitive_consumers_in_dependency_order(legacy_project, session_factory):
+    planned = []
+    rounds = 0
+
+    async def plan(payload):
+        key = payload["task_spec"]["work_item_key"]
+        planned.append(key)
+        result = good_plan(payload)
+        result.overview = f"{key} plan {planned.count(key)}"
+        return result
+
+    async def review(payload):
+        nonlocal rounds
+        rounds += 1
+        return reject(path="agent_specs[t-domain].implementation_plan") if rounds == 1 else await pass_review(payload)
+
+    result = await service(session_factory, SimpleNamespace(plan_task=plan, review_breakdown=review)).enrich(
+        legacy_project, "approver-1")
+
+    assert planned[4:] == ["t-domain", "t-api"]
+    with session_factory() as db:
+        keys_by_id = {item.id: item.local_key for item in db.query(WorkItem).all()}
+    plans = {
+        keys_by_id[spec.work_item_id]: spec.content["implementation_plan"]["overview"]
+        for spec in result
+    }
+    assert plans == {
+        "extra-1": "extra-1 plan 1",
+        "extra-2": "extra-2 plan 1",
+        "t-domain": "t-domain plan 2",
+        "t-api": "t-api plan 2",
+    }
 
 
 @pytest.mark.asyncio

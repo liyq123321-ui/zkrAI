@@ -15,6 +15,7 @@ from app.domain.implementation_plan import ImplementationPlan
 from app.domain.types import AgentSpecProposal, ReviewVerdict, SemanticReview, WorkBreakdown, WorkItemProposal
 from app.services.command_service import assert_reviewer
 from app.services.decomposition_service import ApprovedSpecSnapshot, DecompositionService, _canonical_hash, _new_id, _now, validate_breakdown
+from app.services.task_plan_graph import dependency_contracts, topological_plan_waves, transitive_dependent_keys
 from app.services.task_specifications import requirement_snapshots, validate_implementation_plan
 
 
@@ -135,15 +136,17 @@ class AgentSpecDetailService:
             previous_review, previous_review_id = None, None
             for repair_round in range(3):
                 # Settle every in-flight call before returning a failure; no orphaned PENDING calls.
-                results = await asyncio.gather(*(self._plan(snapshot, task, actor_id, call_ids, repair_round,
-                                                         previous_review, previous_review_id)
-                                                 for task in targets), return_exceptions=True)
-                for result in results:
-                    if isinstance(result, BaseException):
-                        raise result
-                for task, (plan, call_id) in zip(targets, results):
-                    task.implementation_plan = plan
-                    adopted[task.work_item_key] = call_id
+                target_keys = {task.work_item_key for task in targets}
+                for wave in topological_plan_waves(snapshot.breakdown.agent_specs, target_keys):
+                    results = await asyncio.gather(*(self._plan(snapshot, task, actor_id, call_ids, repair_round,
+                                                             previous_review, previous_review_id)
+                                                     for task in wave), return_exceptions=True)
+                    for result in results:
+                        if isinstance(result, BaseException):
+                            raise result
+                    for task, (plan, call_id) in zip(wave, results, strict=True):
+                        task.implementation_plan = plan
+                        adopted[task.work_item_key] = call_id
                 validate_breakdown(snapshot.breakdown, snapshot.approved, require_implementation_plan=True)
                 payload = self._decomposition._reviewer_payload(project_id, snapshot.approved, snapshot.breakdown,
                                                                command_id=None, input_hash=None)
@@ -267,6 +270,14 @@ class AgentSpecDetailService:
             if review is not None:
                 payload.update(previous_plan=task.implementation_plan.model_dump(mode="json"),
                                review_feedback=review, previous_review_call_id=review_id)
+            contracts = dependency_contracts(
+                task, {other.work_item_key: other for other in snapshot.breakdown.agent_specs},
+            )
+            payload["dependency_contracts"] = contracts
+            payload["dependency_contract_hashes"] = {
+                str(contract["work_item_key"]): str(contract["contract_hash"])
+                for contract in contracts
+            }
             approved_ids = {r["requirement_id"] for section in ("functional_requirements", "non_functional_requirements")
                             for r in snapshot.approved.content.get(section, [])}
             plan, call_id = await self._call(snapshot.rows["project"]["id"], "plan_task", payload, call_ids, ImplementationPlan,
@@ -315,6 +326,7 @@ class AgentSpecDetailService:
             if match is None or match[1] not in keys:
                 return breakdown.agent_specs
             targets.add(match[1])
+        targets = transitive_dependent_keys(breakdown.agent_specs, targets)
         return [task for task in breakdown.agent_specs if task.work_item_key in targets]
 
     def _persist(self, snapshot, actor_id, call_ids, adopted_ids):
