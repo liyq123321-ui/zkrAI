@@ -536,6 +536,7 @@ class DecompositionService:
             if (request.get("project_id") != project_id
                     or request.get("source_spec_version_id") != snapshot.id
                     or request.get("source_spec_content_hash") != snapshot.content_hash
+                    or tuple(request.get("input_refs", [])) != snapshot.input_refs
                     or request.get("approved_spec") != snapshot.content):
                 continue
             if call.status != "RESULT_READY":
@@ -753,10 +754,25 @@ class DecompositionService:
                     review_feedback=review,
                     previous_review_call_id=reviewer_call_id,
                 )
-                for task, call_id in zip(
-                    targets, repaired_call_ids, strict=True
-                ):
-                    plan_calls_by_key[task.work_item_key] = call_id
+                target_keys = {task.work_item_key for task in targets}
+                with self._session_factory() as db:
+                    repaired_by_key = {}
+                    for call_id in repaired_call_ids:
+                        call = db.get(AgentCall, call_id)
+                        key = (
+                            call.request.get("task_spec", {}).get("work_item_key")
+                            if call is not None else None
+                        )
+                        if key not in target_keys or key in repaired_by_key:
+                            raise RuntimeError(
+                                "task-plan evidence does not match repair targets"
+                            )
+                        repaired_by_key[key] = call_id
+                if set(repaired_by_key) != target_keys:
+                    raise RuntimeError(
+                        "task-plan evidence does not cover repair targets"
+                    )
+                plan_calls_by_key.update(repaired_by_key)
                 validate_breakdown(breakdown, snapshot)
             except DecompositionPlanningFailure as error:
                 error.agent_call_ids.insert(0, base_call_id)
@@ -933,18 +949,23 @@ class DecompositionService:
         )
         call_ids: list[str] = []
         failure: Exception | None = None
+        cancellation: BaseException | None = None
         for task, result in zip(targets, results, strict=True):
             if isinstance(result, BaseException):
                 if isinstance(result, DecompositionPlanningFailure):
                     call_ids.extend(result.agent_call_ids)
                 if failure is None and isinstance(result, Exception):
                     failure = result
+                elif cancellation is None and not isinstance(result, Exception):
+                    cancellation = result
                 continue
             plan, call_id = result
             task.implementation_plan = plan
             call_ids.append(call_id)
         if failure is not None:
             raise DecompositionPlanningFailure(str(failure), call_ids) from failure
+        if cancellation is not None:
+            raise cancellation
         return call_ids
 
     async def _plan_task(
@@ -1032,16 +1053,19 @@ class DecompositionService:
                     for item in snapshot.content.get(section, [])
                 }
                 validate_implementation_plan(plan, task, approved_ids)
-            except Exception as error:
+            except BaseException as error:
+                message = str(error) or type(error).__name__
                 with self._session_factory() as db:
                     call = db.get(AgentCall, call_id)
                     if call is not None:
                         call.status = "FAILED"
                         call.response = response
-                        call.error = str(error)
+                        call.error = message
                         call.completed_at = _now()
                     db.commit()
-                raise DecompositionPlanningFailure(str(error), [call_id]) from error
+                if not isinstance(error, Exception):
+                    raise
+                raise DecompositionPlanningFailure(message, [call_id]) from error
             with self._session_factory() as db:
                 call = db.get(AgentCall, call_id)
                 if call is None:
@@ -1128,6 +1152,7 @@ class DecompositionService:
             "project_id": project_id,
             "source_spec_version_id": snapshot.id,
             "source_spec_content_hash": snapshot.content_hash,
+            "input_refs": list(snapshot.input_refs),
             "approved_spec_exclusions": list(snapshot.content.get("exclusions", [])),
             "approved_spec": json.loads(json.dumps(
                 dict(snapshot.content), sort_keys=True, separators=(",", ":"), ensure_ascii=False,
