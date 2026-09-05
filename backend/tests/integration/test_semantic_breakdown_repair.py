@@ -474,11 +474,11 @@ async def test_repair_exhaustion_preserves_all_reviews_without_partial_work(
 
 
 @pytest.mark.asyncio
-async def test_existing_rejection_is_revised_without_generating_a_new_breakdown(
+async def test_legacy_rejection_is_not_reused_after_contract_upgrade(
     session_factory, db_session, complete_brief, valid_spec, valid_breakdown, passing_semantic_review
 ):
     project = _approved_project(db_session, complete_brief, valid_spec)
-    # A durable pre-upgrade rejection: no repair_round or parent-call metadata.
+    # A durable pre-upgrade rejection has no decomposition contract version.
     old_request = {
         "project_id": project.id, "source_spec_version_id": project.current_spec_version_id,
         "source_spec_content_hash": "d" * 64, "approved_spec": valid_spec.model_dump(mode="json"),
@@ -495,8 +495,8 @@ async def test_existing_rejection_is_revised_without_generating_a_new_breakdown(
     await DecompositionService(session_factory, agent).convert(project.id)
 
     assert len(agent.calls) == 2
-    assert agent.calls[0][1]["previous_breakdown"] == valid_breakdown.model_dump(mode="json")
-    assert agent.calls[0][1]["previous_review_call_id"] == "old-review"
+    assert "previous_breakdown" not in agent.calls[0][1]
+    assert agent.calls[0][1]["decomposition_contract_version"] == 2
 
 
 @pytest.mark.asyncio
@@ -633,6 +633,7 @@ async def test_resuming_same_command_retains_exhausted_semantic_budget(
             "input_refs": ["artifact:brief-1"],
             "canonical_breakdown": valid_breakdown.model_dump(mode="json"),
             "command_id": "same-command", "input_hash": "same-input", "repair_round": 2,
+            "decomposition_contract_version": 2,
         }, response=source_review().model_dump(mode="json")))
     db_session.commit()
     agent = ScriptedAgentGateway(decompose_results=deque([valid_breakdown]),

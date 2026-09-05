@@ -230,6 +230,54 @@ async def test_dependency_task_planner_receives_validated_upstream_contract(
 
 
 @pytest.mark.asyncio
+async def test_staged_decomposition_does_not_reuse_legacy_contract_checkpoint(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown
+):
+    """A schema upgrade must not adopt results produced by the old contract."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    legacy_base = valid_breakdown.model_copy(deep=True)
+    fresh_base = valid_breakdown.model_copy(deep=True)
+    for breakdown in (legacy_base, fresh_base):
+        for task in breakdown.agent_specs:
+            task.implementation_plan = None
+    db_session.add(
+        AgentCall(
+            id="legacy-base-checkpoint",
+            project_id=project.id,
+            agent_session_id="pm-session-1",
+            operation="decompose_spec",
+            request={
+                "project_id": project.id,
+                "spec_version_id": "spec-decompose-1",
+                "spec_content_hash": "d" * 64,
+                "source_spec_version_id": "spec-decompose-1",
+                "source_spec_content_hash": "d" * 64,
+                "approved_spec": valid_spec.model_dump(mode="json"),
+                "input_refs": ["artifact:brief-1"],
+                "repair_round": 0,
+                "decomposition_stage": "base",
+            },
+            response=legacy_base.model_dump(mode="json"),
+            status="RESULT_READY",
+        )
+    )
+    db_session.commit()
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([fresh_base]),
+        plan_results=deque(_plan_for(task) for task in fresh_base.agent_specs),
+    )
+
+    await DecompositionService(session_factory, agent).convert(project.id)
+
+    assert [operation for operation, _ in agent.calls].count("decompose_spec") == 1
+    base_payload = next(
+        payload for operation, payload in agent.calls if operation == "decompose_spec"
+    )
+    assert base_payload["decomposition_contract_version"] == 2
+
+
+@pytest.mark.asyncio
 async def test_staged_decomposition_retry_reuses_base_and_completed_task_plan(
     session_factory, db_session, complete_brief, valid_spec, valid_breakdown
 ):

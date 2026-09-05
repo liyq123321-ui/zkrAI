@@ -28,6 +28,9 @@ from app.services.task_plan_graph import (
 from app.services.task_specifications import ImplementationPlanError, requirement_snapshots, validate_implementation_plan
 
 
+_DECOMPOSITION_CONTRACT_VERSION = 2
+
+
 class BreakdownValidationError(ValueError):
     """A stable, model-attributable work-breakdown validation failure."""
 
@@ -478,6 +481,7 @@ class DecompositionService:
                 "input_refs": list(snapshot.input_refs),
                 "repair_round": repair_round,
                 "decomposition_stage": "base",
+                "decomposition_contract_version": _DECOMPOSITION_CONTRACT_VERSION,
             }
             if command_id is not None:
                 payload["command_id"] = command_id
@@ -574,6 +578,7 @@ class DecompositionService:
         for call in calls:
             request = call.request
             if (request.get("project_id") != project_id
+                    or request.get("decomposition_contract_version") != _DECOMPOSITION_CONTRACT_VERSION
                     or request.get("source_spec_version_id") != snapshot.id
                     or request.get("source_spec_content_hash") != snapshot.content_hash
                     or tuple(request.get("input_refs", [])) != snapshot.input_refs
@@ -953,6 +958,7 @@ class DecompositionService:
             if (
                 call.status not in {"RESULT_READY", "SUCCEEDED"}
                 or request.get("decomposition_stage") != "base"
+                or request.get("decomposition_contract_version") != _DECOMPOSITION_CONTRACT_VERSION
                 or request.get("source_spec_version_id", request.get("spec_version_id")) != snapshot.id
                 or request.get("source_spec_content_hash", request.get("spec_content_hash")) != snapshot.content_hash
                 or request.get("approved_spec") != snapshot.content
@@ -1069,6 +1075,7 @@ class DecompositionService:
                 "source_spec_content_hash": snapshot.content_hash,
                 "input_refs": list(snapshot.input_refs),
                 "decomposition_stage": "task_plan",
+                "decomposition_contract_version": _DECOMPOSITION_CONTRACT_VERSION,
                 "base_checkpoint_call_id": base_checkpoint_call_id,
                 "task_spec": task.model_dump(mode="json"),
                 "task_spec_hash": _canonical_hash(
@@ -1195,6 +1202,7 @@ class DecompositionService:
             if (
                 call.status not in {"RESULT_READY", "SUCCEEDED"}
                 or request.get("decomposition_stage") != "task_plan"
+                or request.get("decomposition_contract_version") != _DECOMPOSITION_CONTRACT_VERSION
                 or request.get("source_spec_version_id") != snapshot.id
                 or request.get("source_spec_content_hash") != snapshot.content_hash
                 or tuple(request.get("input_refs", [])) != snapshot.input_refs
@@ -1243,6 +1251,7 @@ class DecompositionService:
         ))
         payload: dict[str, object] = {
             "project_id": project_id,
+            "decomposition_contract_version": _DECOMPOSITION_CONTRACT_VERSION,
             "source_spec_version_id": snapshot.id,
             "source_spec_content_hash": snapshot.content_hash,
             "input_refs": list(snapshot.input_refs),
