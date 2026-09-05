@@ -55,4 +55,4 @@ does not cancel the backend job.
 
 ## Commit
 
-Pending commit.
+`170b5be feat: run task decomposition in background`
