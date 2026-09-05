@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 import pytest
+from pydantic import ValidationError
+from sqlalchemy import event
 
 from app.agents.codex import AgentExecutionError, AgentOutputError
 from app.database.models import (
@@ -18,7 +20,7 @@ from app.database.models import (
 )
 from app.domain.types import ClarificationAnalysis, ReviewVerdict, SemanticReview
 from app.services.decomposition_service import BreakdownValidationError, DecompositionService
-from app.services.query_service import QueryService
+from app.services.query_service import AgentRuntimeRead, QueryService
 from main import create_app
 from tests.helpers.factories import (
     make_complete_brief,
@@ -326,6 +328,153 @@ def test_agent_runtime_returns_latest_safe_status_per_started_agent(session_fact
     assert "private traceback" not in serialized
     assert "agent-unused" not in serialized
     assert "agent-other" not in serialized
+
+
+def test_agent_runtime_selects_latest_call_by_id_when_start_times_match(session_factory):
+    started = datetime(2026, 9, 6, 2, 0, tzinfo=timezone.utc)
+    with session_factory() as db:
+        db.add_all([
+            Project(
+                id="runtime-tie-project",
+                session_id="runtime-tie-session",
+                creation_request_id="runtime-tie-request",
+                brief={"final_objective": "Runtime tie-break"},
+                final_approver="owner-1",
+                project_manager_ids=["owner-1"],
+                root_owner_ids=["owner-1"],
+            ),
+            AgentSession(
+                id="agent-tied",
+                project_id="runtime-tie-project",
+                role="PM",
+                created_at=started,
+            ),
+            AgentCall(
+                id="call-a",
+                project_id="runtime-tie-project",
+                agent_session_id="agent-tied",
+                operation="analyze_brief",
+                request={},
+                status="SUCCEEDED",
+                started_at=started,
+                completed_at=started,
+            ),
+            AgentCall(
+                id="call-z",
+                project_id="runtime-tie-project",
+                agent_session_id="agent-tied",
+                operation="decompose_spec",
+                request={},
+                status="PENDING",
+                started_at=started,
+            ),
+        ])
+        db.commit()
+
+    runtime = QueryService(session_factory).agent_runtime("runtime-tie-session")
+
+    assert len(runtime) == 1
+    assert runtime[0].current_call_id == "call-z"
+    assert runtime[0].current_operation == "decompose_spec"
+    assert runtime[0].status == "running"
+    assert runtime[0].call_count == 2
+
+
+def test_agent_runtime_query_loads_only_latest_safe_scalar_call_columns(
+    session_factory, engine
+):
+    started = datetime(2026, 9, 6, 2, 0, tzinfo=timezone.utc)
+    with session_factory() as db:
+        db.add_all([
+            Project(
+                id="runtime-query-project",
+                session_id="runtime-query-session",
+                creation_request_id="runtime-query-request",
+                brief={"final_objective": "Runtime query shape"},
+                final_approver="owner-1",
+                project_manager_ids=["owner-1"],
+                root_owner_ids=["owner-1"],
+            ),
+            AgentSession(
+                id="agent-query",
+                project_id="runtime-query-project",
+                role="Reviewer",
+                created_at=started,
+            ),
+            AgentCall(
+                id="query-old",
+                project_id="runtime-query-project",
+                agent_session_id="agent-query",
+                operation="review_spec",
+                request={"secret": "request-payload"},
+                response={"secret": "response-payload"},
+                error="private-error",
+                status="FAILED",
+                started_at=started,
+                completed_at=started,
+            ),
+            AgentCall(
+                id="query-new",
+                project_id="runtime-query-project",
+                agent_session_id="agent-query",
+                operation="plan_task",
+                request={"large": "x" * 100_000},
+                response={"large": "y" * 100_000},
+                error="z" * 100_000,
+                status="PENDING",
+                started_at=started + timedelta(seconds=1),
+            ),
+        ])
+        db.commit()
+
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _many):
+        normalized = statement.lower()
+        if normalized.lstrip().startswith("select") and "agent_calls" in normalized:
+            statements.append(normalized)
+
+    event.listen(engine, "before_cursor_execute", capture_select)
+    try:
+        runtime = QueryService(session_factory).agent_runtime("runtime-query-session")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_select)
+
+    assert runtime[0].current_call_id == "query-new"
+    assert runtime[0].call_count == 2
+    assert len(statements) == 1
+    query = statements[0]
+    assert "count(" in query
+    assert "row_number()" in query
+    assert "agent_calls.request" not in query
+    assert "agent_calls.response" not in query
+    assert "agent_calls.error" not in query
+
+
+def test_agent_runtime_status_contract_is_closed_to_public_values():
+    schema = AgentRuntimeRead.model_json_schema()
+
+    assert schema["properties"]["status"]["enum"] == [
+        "running",
+        "completed",
+        "error",
+    ]
+    with pytest.raises(ValidationError):
+        AgentRuntimeRead.model_validate({
+            "agent_session_id": "agent-1",
+            "project_id": "project-1",
+            "role": "PM",
+            "provider": None,
+            "model": None,
+            "purpose": None,
+            "status": "unknown",
+            "current_operation": "analyze_brief",
+            "current_summary": "Analyzing project brief completeness",
+            "current_call_id": "call-1",
+            "started_at": "2026-09-06T02:00:00Z",
+            "completed_at": None,
+            "call_count": 1,
+        })
 
 
 @pytest.mark.parametrize(

@@ -59,6 +59,37 @@ describe('AgentRuntimePanel', () => {
     expect(await screen.findByText('暂无已启动 Agent')).toBeTruthy();
   });
 
+  it('distinguishes never-loaded failures and suppresses the true-empty state', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(response({ detail:{ code:'TEMPORARILY_UNAVAILABLE', message:'retry' } }, 503));
+    render(<AgentRuntimePanel projects={[
+      { sessionId:'session-loaded-empty', title:'空项目' },
+      { sessionId:'session-unknown', title:'未知项目' },
+    ]} />);
+
+    const warning = await screen.findByRole('status');
+    expect(warning.textContent).toContain('未知项目：尚未取得运行快照');
+    expect(warning.textContent).not.toContain('未知项目：暂时无法刷新，显示最近一次成功快照');
+    expect(screen.queryByText('暂无已启动 Agent')).toBeNull();
+  });
+
+  it('labels start and duration for running Agents and start and completion for terminal Agents', async () => {
+    render(<AgentRuntimePanel projects={[{ sessionId:'session-1', title:'知识问答' }]} />);
+
+    const panel = await screen.findByRole('region', { name:'Agent 实时运行状态' });
+    const running = within(panel).getByText('PM Agent').closest('li')!;
+    expect(within(running).getByText(/^开始时间：/)).toBeTruthy();
+    expect(within(running).getByText(/^持续时间：/)).toBeTruthy();
+    const completed = within(panel).getByText('Writer Agent').closest('li')!;
+    expect(within(completed).getByText(/^开始时间：/)).toBeTruthy();
+    expect(within(completed).getByText(/^完成时间：/)).toBeTruthy();
+    const errored = within(panel).getByText('Reviewer Agent').closest('li')!;
+    expect(within(errored).getByText(/^开始时间：/)).toBeTruthy();
+    expect(within(errored).getByText(/^完成时间：/)).toBeTruthy();
+  });
+
   it('polls after two seconds and stops after unmount', async () => {
     vi.useFakeTimers();
     const view = render(<AgentRuntimePanel projects={[{ sessionId:'session-1', title:'知识问答' }]} />);
@@ -88,6 +119,39 @@ describe('AgentRuntimePanel', () => {
     view.unmount();
     expect(signals[0].aborted).toBe(true);
     resolveResponse?.(new Response(JSON.stringify(runtime), { status:200 }));
+  });
+
+  it('aborts project-prop requests and rejects their stale responses', async () => {
+    const requests: Array<{
+      resolve: (value: Response) => void;
+      signal: AbortSignal;
+    }> = [];
+    vi.mocked(fetch).mockImplementation((_input, init) =>
+      new Promise<Response>((resolve) => {
+        requests.push({ resolve, signal:init!.signal as AbortSignal });
+      }));
+    const view = render(
+      <AgentRuntimePanel projects={[{ sessionId:'session-1', title:'旧标题' }]} />,
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+
+    view.rerender(
+      <AgentRuntimePanel projects={[{ sessionId:'session-1', title:'新标题' }]} />,
+    );
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[0].signal.aborted).toBe(true);
+
+    requests[1].resolve(response([
+      { ...runtime[0], agent_session_id:'agent-new', role:'New Agent' },
+    ]));
+    expect(await screen.findByText('New Agent')).toBeTruthy();
+
+    requests[0].resolve(response([
+      { ...runtime[0], agent_session_id:'agent-old', role:'Old Agent' },
+    ]));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByText('Old Agent')).toBeNull();
+    expect(screen.getByText('New Agent')).toBeTruthy();
   });
 
   it('keeps the previous project snapshot when only that project refresh fails', async () => {

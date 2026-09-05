@@ -33,11 +33,6 @@ function elapsedTime(startedAt: string): string {
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
 }
 
-function agentTime(agent: AgentRuntimeDto): string {
-  if (agent.status === 'running') return `已运行 ${elapsedTime(agent.started_at)}`;
-  return displayTime(agent.completed_at ?? agent.started_at);
-}
-
 export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) {
   const [snapshots, setSnapshots] = useState<Record<string, AgentRuntimeDto[]>>({});
   const [failedIds, setFailedIds] = useState<string[]>([]);
@@ -92,6 +87,9 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) 
   const completedCount = agents.filter((agent) => agent.status === 'completed').length;
   const errorCount = agents.filter((agent) => agent.status === 'error').length;
   const failedProjects = projects.filter((project) => failedIds.includes(project.sessionId));
+  const hasSnapshot = (sessionId: string) =>
+    Object.prototype.hasOwnProperty.call(snapshots, sessionId);
+  const hasUnknownProject = projects.some((project) => !hasSnapshot(project.sessionId));
 
   return (
     <section className="ff-agent-runtime" aria-label="Agent 实时运行状态">
@@ -119,11 +117,13 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) 
       </dl>
       {failedProjects.length > 0 && (
         <div role="status" className="ff-agent-runtime-warning">
-          {failedProjects.map((project) => `${project.title}：暂时无法刷新，显示最近一次成功快照`).join('；')}
+          {failedProjects.map((project) => hasSnapshot(project.sessionId)
+            ? `${project.title}：暂时无法刷新，显示最近一次成功快照`
+            : `${project.title}：尚未取得运行快照`).join('；')}
         </div>
       )}
       <div className="ff-agent-runtime-projects">
-        {!loading && startedCount === 0 && <p>暂无已启动 Agent</p>}
+        {!loading && !hasUnknownProject && startedCount === 0 && <p>暂无已启动 Agent</p>}
         {visibleProjects.map(({ project, agents }) => (
           agents && agents.length > 0 && (
             <section className="ff-agent-runtime-project" key={project.sessionId} aria-label={`${project.title} Agent 运行状态`}>
@@ -137,7 +137,12 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) 
                     </div>
                     <p>{operationLabels[agent.current_operation] ?? agent.current_operation}</p>
                     {agent.current_summary && <p>{agent.current_summary}</p>}
-                    <p>{agentTime(agent)}</p>
+                    <p>开始时间：{displayTime(agent.started_at)}</p>
+                    <p>
+                      {agent.status === 'running'
+                        ? `持续时间：${elapsedTime(agent.started_at)}`
+                        : `完成时间：${agent.completed_at ? displayTime(agent.completed_at) : '—'}`}
+                    </p>
                     <p>{agent.call_count} 次调用</p>
                   </li>
                 ))}

@@ -4,8 +4,10 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 import hashlib
 import json
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.database.models import (
@@ -151,7 +153,7 @@ class AgentRuntimeRead(BaseModel):
     provider: str | None
     model: str | None
     purpose: str | None
-    status: str
+    status: Literal["running", "completed", "error"]
     current_operation: str
     current_summary: str
     current_call_id: str
@@ -319,47 +321,79 @@ class QueryService:
     def agent_runtime(self, session_id: str) -> list[AgentRuntimeRead]:
         with self._session_factory() as db:
             project = self._project(db, session_id)
-            sessions = (
-                db.query(AgentSession)
-                .filter_by(project_id=project.id)
+            ranked_calls = (
+                db.query(
+                    AgentCall.id.label("current_call_id"),
+                    AgentCall.project_id.label("project_id"),
+                    AgentCall.agent_session_id.label("agent_session_id"),
+                    AgentCall.operation.label("current_operation"),
+                    AgentCall.status.label("stored_status"),
+                    AgentCall.started_at.label("started_at"),
+                    AgentCall.completed_at.label("completed_at"),
+                    func.count(AgentCall.id).over(
+                        partition_by=AgentCall.agent_session_id
+                    ).label("call_count"),
+                    func.row_number().over(
+                        partition_by=AgentCall.agent_session_id,
+                        order_by=(AgentCall.started_at.desc(), AgentCall.id.desc()),
+                    ).label("latest_rank"),
+                )
+                .filter(AgentCall.project_id == project.id)
+                .subquery()
+            )
+            rows = (
+                db.query(
+                    AgentSession.id.label("agent_session_id"),
+                    AgentSession.project_id.label("project_id"),
+                    AgentSession.role.label("role"),
+                    AgentSession.provider.label("provider"),
+                    AgentSession.model.label("model"),
+                    AgentSession.purpose.label("purpose"),
+                    ranked_calls.c.stored_status,
+                    ranked_calls.c.current_operation,
+                    ranked_calls.c.current_call_id,
+                    ranked_calls.c.started_at,
+                    ranked_calls.c.completed_at,
+                    ranked_calls.c.call_count,
+                )
+                .join(
+                    ranked_calls,
+                    and_(
+                        ranked_calls.c.agent_session_id == AgentSession.id,
+                        ranked_calls.c.project_id == AgentSession.project_id,
+                    ),
+                )
+                .filter(
+                    AgentSession.project_id == project.id,
+                    ranked_calls.c.latest_rank == 1,
+                )
                 .order_by(AgentSession.created_at, AgentSession.id)
                 .all()
             )
-            calls = (
-                db.query(AgentCall)
-                .filter_by(project_id=project.id)
-                .order_by(AgentCall.started_at, AgentCall.id)
-                .all()
-            )
-            calls_by_session: dict[str, list[AgentCall]] = {}
-            for call in calls:
-                calls_by_session.setdefault(call.agent_session_id, []).append(call)
-            result: list[AgentRuntimeRead] = []
-            for agent in sessions:
-                agent_calls = calls_by_session.get(agent.id, [])
-                if not agent_calls:
-                    continue
-                latest = agent_calls[-1]
-                result.append(AgentRuntimeRead(
-                    agent_session_id=agent.id,
-                    project_id=project.id,
-                    role=agent.role,
-                    provider=agent.provider,
-                    model=agent.model,
-                    purpose=agent.purpose,
-                    status=self._agent_runtime_status(latest.status),
-                    current_operation=latest.operation,
-                    current_summary=self._agent_operation_summary(latest.operation),
-                    current_call_id=latest.id,
-                    started_at=self._as_utc(latest.started_at),
+            return [
+                AgentRuntimeRead(
+                    agent_session_id=row.agent_session_id,
+                    project_id=row.project_id,
+                    role=row.role,
+                    provider=row.provider,
+                    model=row.model,
+                    purpose=row.purpose,
+                    status=self._agent_runtime_status(row.stored_status),
+                    current_operation=row.current_operation,
+                    current_summary=self._agent_operation_summary(
+                        row.current_operation
+                    ),
+                    current_call_id=row.current_call_id,
+                    started_at=self._as_utc(row.started_at),
                     completed_at=(
-                        self._as_utc(latest.completed_at)
-                        if latest.completed_at is not None
+                        self._as_utc(row.completed_at)
+                        if row.completed_at is not None
                         else None
                     ),
-                    call_count=len(agent_calls),
-                ))
-            return result
+                    call_count=row.call_count,
+                )
+                for row in rows
+            ]
 
     @staticmethod
     def _safe_hash(value: object) -> str:
@@ -416,7 +450,9 @@ class QueryService:
         )
 
     @staticmethod
-    def _agent_runtime_status(status: str) -> str:
+    def _agent_runtime_status(
+        status: str,
+    ) -> Literal["running", "completed", "error"]:
         if status in {"FAILED", "AMBIGUOUS"}:
             return "error"
         if status in {"RESULT_READY", "SUCCEEDED", "COMPLETED", "NO_CHANGE"}:
