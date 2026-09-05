@@ -16,6 +16,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.agents.gateway import AgentGateway
+from app.agents.progress import report_agent_progress
 from app.database.models import AgentCall, AgentSession, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem, WorkItemDependency
 from app.domain.implementation_plan import ImplementationPlan
 from app.domain.types import AgentSpecProposal, ProjectPhase, ProjectSpecPayload, ReviewVerdict, SemanticReview, SpecStatus, WorkBreakdown, WorkItemKind
@@ -457,6 +458,16 @@ class DecompositionService:
         # Initial proposal plus at most two semantic revisions. A persisted rejection
         # already supplies the initial proposal, so retry revises it directly.
         for repair_round in range(first_round, 3):
+            if repair_round == 0 and previous is None:
+                report_agent_progress(
+                    "base_decomposition",
+                    "正在根据已批准 PRD 生成任务边界和 Agent Spec。",
+                )
+            else:
+                report_agent_progress(
+                    "repairing",
+                    f"正在修复第 {repair_round} 轮拆分审核问题。",
+                )
             payload = {
                 "project_id": project_id,
                 "spec_version_id": snapshot.id,
@@ -478,6 +489,10 @@ class DecompositionService:
                 project_id, snapshot, payload, command_id=command_id, input_hash=input_hash,
             )
             if not self._review_blocks(review):
+                report_agent_progress(
+                    "ready_to_materialize",
+                    "拆分结果已通过校验，正在写入 WorkItem 和 Agent Spec。",
+                )
                 return PreparedDecomposition(
                     project_id,
                     snapshot,
@@ -509,7 +524,7 @@ class DecompositionService:
                     error, [call_id, *plan_call_ids, reviewer_call_id]
                 )
             if plan_call_ids and self._review_targets_plans(review):
-                return await self._repair_staged_plans(
+                prepared = await self._repair_staged_plans(
                     project_id,
                     snapshot,
                     breakdown,
@@ -521,6 +536,11 @@ class DecompositionService:
                     command_id=command_id,
                     input_hash=input_hash,
                 )
+                report_agent_progress(
+                    "ready_to_materialize",
+                    "修复后的拆分结果已通过校验，正在写入。",
+                )
+                return prepared
             previous = {
                 "previous_breakdown": breakdown.model_dump(mode="json"),
                 "review_feedback": review.model_dump(mode="json"),
@@ -657,6 +677,10 @@ class DecompositionService:
             self._record_failure(project_id, call_id, error)
             raise
         try:
+            report_agent_progress(
+                "task_planning",
+                f"任务边界已生成，正在规划 {len(breakdown.agent_specs)} 个子任务。",
+            )
             plan_call_ids = await self._plan_tasks(
                 project_id,
                 snapshot,
@@ -673,6 +697,10 @@ class DecompositionService:
         except BreakdownValidationError as error:
             self._record_failure(project_id, call_id, error)
             raise PreparedBreakdownValidationError(error, [call_id]) from error
+        report_agent_progress(
+            "semantic_review",
+            "子任务计划已生成，正在进行一致性审核。",
+        )
         review, reviewer_call_id = await self._run_breakdown_review(
             project_id,
             snapshot,

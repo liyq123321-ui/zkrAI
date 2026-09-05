@@ -97,6 +97,44 @@ async def test_staged_decomposition_plans_each_base_task_before_review(
 
 
 @pytest.mark.asyncio
+async def test_staged_decomposition_reports_durable_logical_progress(
+    session_factory,
+    db_session,
+    complete_brief,
+    valid_spec,
+    valid_breakdown,
+    monkeypatch,
+):
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque(_plan_for(task) for task in base.agent_specs),
+    )
+    progress: list[tuple[str, str]] = []
+    import app.services.decomposition_service as decomposition_module
+
+    monkeypatch.setattr(
+        decomposition_module,
+        "report_agent_progress",
+        lambda stage, message: progress.append((stage, message)),
+        raising=False,
+    )
+
+    await DecompositionService(session_factory, agent).convert(project.id)
+
+    assert [stage for stage, _ in progress] == [
+        "base_decomposition",
+        "task_planning",
+        "semantic_review",
+        "ready_to_materialize",
+    ]
+    assert all(message.strip() for _, message in progress)
+
+
+@pytest.mark.asyncio
 async def test_dependency_task_planning_waits_for_its_upstream_plan(
     session_factory, db_session, complete_brief, valid_spec, valid_breakdown
 ):
