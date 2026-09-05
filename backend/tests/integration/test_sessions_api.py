@@ -93,6 +93,35 @@ def _breakdown_with_input_refs(payload):
     )
 
 
+def test_command_job_openapi_contract_distinguishes_sync_and_async_responses(
+    session_factory,
+):
+    schema = create_app(session_factory=session_factory).openapi()
+
+    command_responses = schema["paths"]["/sessions/{session_id}/commands"]["post"]["responses"]
+    assert command_responses["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CommandResult"
+    }
+    assert command_responses["202"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CommandJobAccepted"
+    }
+
+    status_response = schema["paths"][
+        "/sessions/{session_id}/commands/{command_id}"
+    ]["get"]["responses"]["200"]
+    assert status_response["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CommandJobRead"
+    }
+
+    events = schema["paths"][
+        "/sessions/{session_id}/commands/{command_id}/events"
+    ]["get"]
+    assert events["responses"]["200"]["content"] == {
+        "text/event-stream": {"schema": {"type": "string"}}
+    }
+    assert any(parameter["name"] == "Last-Event-ID" for parameter in events["parameters"])
+
+
 def test_decomposition_returns_accepted_job_and_status_is_pollable(session_factory):
     agent = ScriptedAgentGateway(
         analyze_results=deque([ClarificationAnalysis(
@@ -115,6 +144,7 @@ def test_decomposition_returns_accepted_job_and_status_is_pollable(session_facto
             },
         )
         assert response.status_code == 202
+        assert response.headers["content-type"].startswith("application/json")
         accepted = response.json()
         assert accepted == {
             "command_id": "decompose-accepted",
@@ -146,6 +176,7 @@ def test_non_decomposition_command_still_returns_completed_200(session_factory):
             "payload": {},
         })
         assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/json")
         assert "state" in response.json()
         assert "status_url" not in response.json()
 

@@ -343,6 +343,10 @@ curl -N http://127.0.0.1:8088/sessions/SESSION_ID/commands/COMMAND_ID/events
 
 `GET .../commands/COMMAND_ID` 返回持久状态快照（`pending`、`processing`、`succeeded` 或 `failed`）。SSE 是实时通知通道，客户端不能只依赖它；随附前端同时每 5,000 ms 轮询该状态端点，使 SSE 断连或遗漏帧时仍能取得终态。重启进程会使原有的内存 runner 丢失，启动恢复会把未完成的 job 标记为 `PROCESS_INTERRUPTED`；此后可使用完全相同的 command ID 重新提交，服务会重新调度该持久 job。
 
+SSE 成功响应的 `Content-Type` 是 `text/event-stream`。每个状态帧都采用 `event: command.status`，其 `id` 是该 job 单调递增的 `status_version`，`data` 是完整的 JSON 状态快照，结构与状态查询响应相同。浏览器重连时应把最后收到的 `id` 放进 `Last-Event-ID`；服务将它视为游标，只在当前快照版本更高时发出该快照。该端点不保存逐版本事件历史，因此客户端始终应以最新快照为准，而不是假定可以补回每个中间状态。
+
+任务尚未终结而暂时没有新状态时，流约每 15 秒发送 `: keep-alive` 注释心跳；心跳没有事件 ID 或数据，不能替代状态读取。`succeeded` 或 `failed` 的最终快照发出后，流会关闭。短间隔轮询和 SSE 应并行使用：轮询提供断线期间与重连后的持久状态保证，SSE 只用于降低可见状态变化的延迟。
+
 基础拆解和每个已通过验证的任务计划都会作为可恢复检查点保留。显式重试时，服务只复用与同一项目 UUID、已批准 Spec UUID/内容哈希、输入引用、基础调用 UUID 和任务内容哈希完全匹配的结果，并为当前命令创建新的采用证据；不会按项目名、任务名或裸 `FR-*` 标识查找。某个任务规划失败不会写入半成品业务行，重试只补缺失任务。最终审核若仅指出 `implementation_plan` 路径，会只重做对应任务计划；任务边界问题仍回到基础拆解修订。Spec 发生变化时，旧检查点自动失效。
 
 ```json

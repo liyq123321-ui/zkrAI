@@ -65,3 +65,68 @@ Task 6 did not alter those tests or their implementation.
 
 Documentation commit: `75f82c9967a47a7ced9e18caffe6dd7b7bf93b7e`
 (`docs: explain asynchronous decomposition commands`).
+
+## Fix Round 1 — OpenAPI and SSE Contract
+
+### Contract changes
+
+There was no repository export script, Make target, or task runner for the
+OpenAPI snapshot. The snapshot is therefore regenerated from the canonical
+runtime source, `create_app().openapi()`, serialized with the existing stable
+sorted-key JSON layout; it was not hand-edited.
+
+The command route now documents and implements its conditional responses
+without a misleading 200 union: synchronous commands are validated and
+documented as `200 application/json` `CommandResult`; the asynchronous
+decomposition path returns an explicit `202 application/json`
+`CommandJobAccepted`. The schema now includes the command-job status route and
+its `CommandJobRead`/accepted/error schemas, plus the SSE route with
+`text/event-stream` and the `Last-Event-ID` header parameter.
+
+The README now specifies the wire-level SSE contract: `command.status` frames,
+monotonic `status_version` IDs, JSON job snapshots, cursor-style resume that
+does not promise historical replay, 15-second comment heartbeats, and close
+after a terminal frame. It also distinguishes the five-second durable poll
+from the low-latency SSE path.
+
+### RED and GREEN evidence
+
+Added the route-contract assertion
+`test_command_job_openapi_contract_distinguishes_sync_and_async_responses`.
+Before the metadata change it failed because the 200 schema was the old
+`CommandResult | CommandJobAccepted` union and no 202 response existed.
+
+After the minimal route metadata/response change:
+
+```text
+cd backend && .venv/bin/python -c '<load docs/openapi.json and compare it to create_app().openapi()>'
+```
+
+Result: the generated snapshot exactly matched runtime OpenAPI; the command
+route's 200 and 202 `application/json` schemas were `CommandResult` and
+`CommandJobAccepted`, respectively; the event route's successful content type
+was `text/event-stream`.
+
+```text
+cd backend && .venv/bin/pytest -q tests/integration/test_command_jobs.py tests/integration/test_sessions_api.py -k 'command_job or decomposition_returns_accepted_job or non_decomposition_command_still_returns_completed_200'
+```
+
+Result: 16 passed, 24 deselected, 2 existing TestClient deprecation warnings.
+This includes the OpenAPI contract test, both runtime JSON content-type checks,
+SSE terminal-frame and `Last-Event-ID` tests, and command-job heartbeat tests.
+
+```text
+cd backend && .venv/bin/pytest -q
+```
+
+Result: 614 passed, 2 failed, 2 warnings. The failures remain exactly the two
+known clarification-projection baseline tests named in the original Task 6
+report; no new failure was introduced. The passing count increases by one only
+because this round added the OpenAPI contract test.
+
+```text
+cd frontend/aios-main && npm test && npm run lint && npm run build
+```
+
+Result: 8 Vitest files / 73 tests passed; `tsc --noEmit` passed; Vite 6.4.3
+production build passed after transforming 1,947 modules.

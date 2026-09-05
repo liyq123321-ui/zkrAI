@@ -3,8 +3,8 @@
 from collections.abc import Callable
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.agents.gateway import AgentGateway
@@ -12,8 +12,9 @@ from app.agents.codex import AgentExecutionError
 from app.domain.types import CommandAction, ProjectPhase
 from app.identity import ActorResolver
 from app.schemas.workflow import (
+    CommandJobAccepted,
     CommandJobRead,
-    CommandSubmission,
+    CommandResult,
     SessionCommandRequest,
     SessionCreateRequest,
     SessionState,
@@ -95,14 +96,22 @@ def build_router(
         except Exception as error:
             raise http_error(error) from error
 
-    @router.post("/{session_id}/commands", response_model=CommandSubmission)
+    @router.post(
+        "/{session_id}/commands",
+        response_model=CommandResult,
+        responses={
+            status.HTTP_202_ACCEPTED: {
+                "model": CommandJobAccepted,
+                "description": "Durable asynchronous decomposition command accepted.",
+            }
+        },
+    )
     async def execute_command(
         session_id: str,
         request_body: SessionCommandRequest,
         request: Request,
-        response: Response,
         background_tasks: BackgroundTasks,
-    ) -> CommandSubmission:
+    ) -> CommandResult | JSONResponse:
         actor_id = actor_resolver.resolve(request, request_body.actor_id)
         request_body = request_body.model_copy(update={"actor_id": actor_id})
         try:
@@ -115,8 +124,10 @@ def build_router(
                         command_jobs.run,
                         command_jobs.job_id(session_id, request_body.command_id),
                     )
-                response.status_code = status.HTTP_202_ACCEPTED
-                return accepted
+                return JSONResponse(
+                    status_code=status.HTTP_202_ACCEPTED,
+                    content=accepted.model_dump(mode="json"),
+                )
             result = await commands.execute(session_id, request_body)
             if (
                 prd_review_service is not None
@@ -152,7 +163,16 @@ def build_router(
         except Exception as error:
             raise http_error(error) from error
 
-    @router.get("/{session_id}/commands/{command_id}/events")
+    @router.get(
+        "/{session_id}/commands/{command_id}/events",
+        response_class=StreamingResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "description": "Live command-job status events.",
+                "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            }
+        },
+    )
     async def command_job_events(
         session_id: str,
         command_id: str,

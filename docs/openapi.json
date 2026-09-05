@@ -222,6 +222,141 @@
         "title": "CommandAction",
         "type": "string"
       },
+      "CommandJobAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "events_url": {
+            "title": "Events Url",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "processing",
+              "succeeded",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_url": {
+            "title": "Status Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "status",
+          "status_url",
+          "events_url"
+        ],
+        "title": "CommandJobAccepted",
+        "type": "object"
+      },
+      "CommandJobError": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "CommandJobError",
+        "type": "object"
+      },
+      "CommandJobRead": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommandJobError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommandResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "processing",
+              "succeeded",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_version": {
+            "minimum": 1.0,
+            "title": "Status Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command_id",
+          "status",
+          "status_version",
+          "created_at"
+        ],
+        "title": "CommandJobRead",
+        "type": "object"
+      },
       "CommandResult": {
         "additionalProperties": false,
         "properties": {
@@ -533,7 +668,7 @@
       },
       "PrdDiffRead": {
         "additionalProperties": false,
-        "description": "Full target-file PR patch, including deletion lines that cannot be annotated.",
+        "description": "Current PRD patch against its immediately preceding version.",
         "properties": {
           "commit_sha": {
             "maxLength": 128,
@@ -745,7 +880,7 @@
             "type": "integer"
           },
           "comment_count": {
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Comment Count",
             "type": "integer"
           },
@@ -779,6 +914,11 @@
               }
             ],
             "title": "Actor Id"
+          },
+          "auto_resolve_findings": {
+            "default": false,
+            "title": "Auto Resolve Findings",
+            "type": "boolean"
           }
         },
         "title": "PublishReviewRequest",
@@ -2391,6 +2531,16 @@
             },
             "description": "Successful Response"
           },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandJobAccepted"
+                }
+              }
+            },
+            "description": "Durable asynchronous decomposition command accepted."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2403,6 +2553,124 @@
           }
         },
         "summary": "Execute Command",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/commands/{command_id}": {
+      "get": {
+        "operationId": "get_command_job_sessions__session_id__commands__command_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "title": "Command Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandJobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Command Job",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/commands/{command_id}/events": {
+      "get": {
+        "operationId": "command_job_events_sessions__session_id__commands__command_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "title": "Command Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Live command-job status events."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Command Job Events",
         "tags": [
           "sessions"
         ]
