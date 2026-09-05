@@ -149,11 +149,7 @@ class CodexStructuredRunner:
                     if self.settings.codex_model
                     else []
                 ),
-                *(
-                    ["--ignore-user-config"]
-                    if self.settings.codex_ignore_user_config
-                    else []
-                ),
+                "--ignore-user-config",
                 "--skip-git-repo-check",
                 "--json",
                 "--ephemeral",

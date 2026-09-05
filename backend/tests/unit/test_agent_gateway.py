@@ -499,6 +499,7 @@ def test_structured_runner_uses_instruction_neutral_workspace(
     assert neutral_cwd != str(tmp_path)
     assert kwargs["cwd"] == neutral_cwd
     assert "--skip-git-repo-check" in command
+    assert "--ignore-user-config" in command
 
 
 def test_structured_runner_reaps_timed_out_process(

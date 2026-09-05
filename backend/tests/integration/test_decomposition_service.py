@@ -274,7 +274,7 @@ async def test_staged_decomposition_does_not_reuse_legacy_contract_checkpoint(
     base_payload = next(
         payload for operation, payload in agent.calls if operation == "decompose_spec"
     )
-    assert base_payload["decomposition_contract_version"] == 3
+    assert base_payload["decomposition_contract_version"] == 4
 
 
 @pytest.mark.asyncio
