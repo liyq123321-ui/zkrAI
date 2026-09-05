@@ -200,6 +200,9 @@ export function ApiWorkspace() {
   const pendingCommandIds = useRef(new Map<string, string>());
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const reconciledDecompositionJobs = useRef(new Set<string>());
+  const reconcilingDecompositionJobs = useRef(new Set<string>());
+  const latestProjects = useRef(projects);
+  latestProjects.current = projects;
 
   const decompositionJobKey = (sessionId: string) =>
     `firstflight.decomposition-job.${sessionId}`;
@@ -392,16 +395,22 @@ export function ApiWorkspace() {
     const storageKey = decompositionJobKey(result.state.session_id);
     const reconciliationKey = `${storageKey}:${result.command_id}`;
     if (reconciledDecompositionJobs.current.has(reconciliationKey)) return result.state;
-    reconciledDecompositionJobs.current.add(reconciliationKey);
-    const currentState = projects[result.state.session_id]?.state;
-    if (!currentState || result.state.state_version >= currentState.state_version) {
-      updateSessionState(result.state);
+    if (reconcilingDecompositionJobs.current.has(reconciliationKey)) return result.state;
+    reconcilingDecompositionJobs.current.add(reconciliationKey);
+    try {
+      const currentState = latestProjects.current[result.state.session_id]?.state;
+      if (!currentState || result.state.state_version >= currentState.state_version) {
+        updateSessionState(result.state);
+      }
+      const refreshed = await refreshResources(result.state.session_id);
+      const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
+      if (firstTask) setSelectedWorkItemId(firstTask.id);
+      localStorage.removeItem(storageKey);
+      reconciledDecompositionJobs.current.add(reconciliationKey);
+      return result.state;
+    } finally {
+      reconcilingDecompositionJobs.current.delete(reconciliationKey);
     }
-    const refreshed = await refreshResources(result.state.session_id);
-    const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
-    if (firstTask) setSelectedWorkItemId(firstTask.id);
-    localStorage.removeItem(storageKey);
-    return result.state;
   }
 
   async function observeDecomposition(

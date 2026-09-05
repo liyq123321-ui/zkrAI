@@ -87,3 +87,14 @@ cd frontend/aios-main && npm test && npm run lint
 
 Result: 8 test files / 71 tests passed; `tsc --noEmit` passed, and
 `git diff --check` was clean.
+
+## Fix Round 2
+
+Reconciliation now uses a render-independent latest-project ref for the
+state-version comparison. A per-job in-progress set prevents duplicate terminal
+reconciliation, while the completed set and local-storage cleanup occur only
+after `refreshResources` succeeds; a failed refresh therefore remains
+recoverable on a later observation attempt.
+
+Focused verification: `npm test -- src/api/workspace.test.tsx src/api/commandJobs.test.ts`
+(44 tests passed) and `npm run lint` (`tsc --noEmit` passed).
