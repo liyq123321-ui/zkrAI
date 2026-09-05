@@ -79,6 +79,10 @@ function isErrorDetail(value: unknown): value is { code: string; message: string
     && typeof value.message === 'string';
 }
 
+function isOptionalNullableString(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
 function isCommandJobSnapshot(
   value: unknown,
   commandId: string,
@@ -92,6 +96,9 @@ function isCommandJobSnapshot(
     || !Number.isInteger(value.status_version)
     || value.status_version < 1
     || typeof value.created_at !== 'string'
+    || !isOptionalNullableString(value.progress_stage)
+    || !isOptionalNullableString(value.progress_message)
+    || !isOptionalNullableString(value.last_activity_at)
     || (value.started_at !== null && typeof value.started_at !== 'string')
     || (value.completed_at !== null && typeof value.completed_at !== 'string')) {
     return false;

@@ -141,6 +141,9 @@ export interface CommandJobReadDto {
   status_version: number;
   result: CommandResultDto | null;
   error: { code: string; message: string } | null;
+  progress_stage?: string | null;
+  progress_message?: string | null;
+  last_activity_at?: string | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;

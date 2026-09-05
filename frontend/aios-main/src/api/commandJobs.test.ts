@@ -223,6 +223,11 @@ describe('observeCommandJob', () => {
       status_version: 11,
       error: { code: 4, message: 'not a string' },
     });
+    source.emit('command.status', {
+      ...processing,
+      status_version: 12,
+      progress_message: 4,
+    });
     source.emit('command.status', processing);
 
     expect(onStatus).toHaveBeenCalledTimes(1);

@@ -441,8 +441,12 @@ export function ApiWorkspace() {
     decompositionLifecycles.current.add(lifecycle);
     const observer = observeCommandJob(sessionId, accepted, {
       pollImmediately,
-      onStatus: () => {
-        if (!lifecycle.signal.aborted) setError(null);
+      onStatus: (snapshot) => {
+        if (!lifecycle.signal.aborted) {
+          setError(null);
+          const message = snapshot.progress_message?.trim();
+          if (message) setWorkflowProgress(message);
+        }
       },
       onTransportError: (reason) => {
         if (!lifecycle.signal.aborted) setError(errorText(reason));

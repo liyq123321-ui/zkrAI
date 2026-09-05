@@ -733,6 +733,28 @@ describe('workspace regression', () => {
     )).toBe(false);
   });
 
+  it('renders the durable decomposition stage reported by the backend', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    localStorage.setItem('firstflight.decomposition-job.session-1', 'saved-job');
+    resourceOverrides['/sessions/session-1/commands/saved-job'] = {
+      command_id: 'saved-job',
+      status: 'processing',
+      status_version: 7,
+      result: null,
+      error: null,
+      progress_stage: 'task_planning',
+      progress_message: '任务边界已生成，正在规划 6 个子任务。',
+      last_activity_at: '2026-09-05T00:00:05Z',
+      created_at: '2026-09-05T00:00:00Z',
+      started_at: '2026-09-05T00:00:01Z',
+      completed_at: null,
+    };
+
+    render(<ApiWorkspace />);
+
+    expect(await screen.findByText('任务边界已生成，正在规划 6 个子任务。')).toBeTruthy();
+  });
+
   it('recovers a stale decomposition after a concurrent client advances state and retries with a new command ID', async () => {
     localStorage.setItem('firstflight.active-session-id', 'session-1');
     const firstState = {
