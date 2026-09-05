@@ -1,9 +1,14 @@
 Produce one detailed ImplementationPlan for task_spec under approved_spec.
 The task boundaries, dependencies, acceptance criteria and approved PRD are fixed
 inputs. You are specifying how to execute the existing task, not reassigning work
-or editing the PRD. dependency_contracts are the only authoritative implementation
-contracts. Reuse their exact schemas, locators, and enums, or define an explicit
-adapter. Every related_tasks entry is plan-free, non-authoritative project context;
+or editing the PRD. dependency_contracts are authoritative only for producer/consumer compatibility
+within the current candidate plan; they do not establish PRD approval. Reuse their
+exact schemas, locators, enums, and error semantics, or define an explicit adapter.
+When recording a downstream design_decision about a dependency-supplied detail,
+preserve its FIXED or PROPOSED approval status from the producer. If the producer
+marks it PROPOSED, or the approved PRD does not settle it, the downstream decision
+must also be PROPOSED even though the consumer must implement the exact current
+contract. Every related_tasks entry is plan-free, non-authoritative project context;
 never infer or reuse an implementation contract from it.
 If previous_plan and review_feedback are present, correct that plan and preserve
 its valid detail. Feedback cannot authorize extra scope or fabricated approval.
