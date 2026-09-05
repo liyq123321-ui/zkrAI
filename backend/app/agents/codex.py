@@ -13,6 +13,7 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
+from app.agents.progress import report_agent_progress
 from app.domain.implementation_plan import ImplementationPlan
 from app.agents.output_validation import OutputConsistencyError, merge_breakdown_revision, validate_node_output
 from app.domain.types import (
@@ -181,20 +182,72 @@ class CodexStructuredRunner:
             except OSError as error:
                 raise AgentExecutionError(f"Codex could not start: {error}") from error
 
+            stdout = bytearray()
+            stderr = bytearray()
+            events: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+            async def read_stdout() -> None:
+                assert process.stdout is not None
+                while line := await process.stdout.readline():
+                    self._append_diagnostic(stdout, line)
+                    events.put_nowait(line)
+                events.put_nowait(None)
+
+            async def read_stderr() -> None:
+                assert process.stderr is not None
+                while chunk := await process.stderr.read(4096):
+                    self._append_diagnostic(stderr, chunk)
+
+            stdout_task = asyncio.create_task(read_stdout())
+            stderr_task = asyncio.create_task(read_stderr())
+            assert process.stdin is not None
+            process.stdin.write(prompt.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
+
+            loop = asyncio.get_running_loop()
+            hard_deadline = loop.time() + self.settings.codex_timeout_seconds
+            inactivity = self.settings.codex_inactivity_timeout_seconds
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(prompt.encode("utf-8")),
-                    timeout=self.settings.codex_timeout_seconds,
-                )
-            except TimeoutError as error:
+                while True:
+                    hard_remaining = hard_deadline - loop.time()
+                    if hard_remaining <= 0:
+                        raise AgentExecutionError(
+                            f"Codex timed out after {self.settings.codex_timeout_seconds} seconds"
+                        )
+                    wait_seconds = min(inactivity, hard_remaining)
+                    try:
+                        line = await asyncio.wait_for(events.get(), timeout=wait_seconds)
+                    except TimeoutError as error:
+                        if loop.time() >= hard_deadline:
+                            raise AgentExecutionError(
+                                f"Codex timed out after {self.settings.codex_timeout_seconds} seconds"
+                            ) from error
+                        raise AgentExecutionError(
+                            f"Codex made no progress for {inactivity:g} seconds"
+                        ) from error
+                    if line is None:
+                        break
+                    self._report_jsonl_progress(line)
+                hard_remaining = hard_deadline - loop.time()
+                if hard_remaining <= 0:
+                    raise AgentExecutionError(
+                        f"Codex timed out after {self.settings.codex_timeout_seconds} seconds"
+                    )
+                await asyncio.wait_for(process.wait(), timeout=hard_remaining)
+            except (AgentExecutionError, TimeoutError) as error:
                 await self._terminate_and_reap(process)
+                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+                if isinstance(error, AgentExecutionError):
+                    raise
                 raise AgentExecutionError(
                     f"Codex timed out after {self.settings.codex_timeout_seconds} seconds"
                 ) from error
+            await asyncio.gather(stdout_task, stderr_task)
 
             if process.returncode:
-                stdout_details = stdout.decode("utf-8", errors="replace").strip()
-                stderr_details = stderr.decode("utf-8", errors="replace").strip()
+                stdout_details = bytes(stdout).decode("utf-8", errors="replace").strip()
+                stderr_details = bytes(stderr).decode("utf-8", errors="replace").strip()
                 details = "\n".join(
                     section
                     for section in (
@@ -207,12 +260,39 @@ class CodexStructuredRunner:
                     f"Codex exited with exit code {process.returncode}: {details}"
                 )
             if not output_path.exists():
-                jsonl = stdout.decode("utf-8", errors="replace").strip()
+                jsonl = bytes(stdout).decode("utf-8", errors="replace").strip()
                 raise AgentOutputError(
                     "Codex did not write its final structured output; JSONL output: "
                     f"{jsonl}"
                 )
             return output_path.read_text(encoding="utf-8")
+
+    @staticmethod
+    def _append_diagnostic(buffer: bytearray, chunk: bytes) -> None:
+        """Retain only the diagnostic tail used by private error reporting."""
+
+        buffer.extend(chunk)
+        if len(buffer) > 12000:
+            del buffer[:-12000]
+
+    @staticmethod
+    def _report_jsonl_progress(line: bytes) -> None:
+        """Map Codex events to fixed public-safe messages."""
+
+        try:
+            event = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        event_type = event.get("type") if isinstance(event, dict) else None
+        progress = {
+            "thread.started": ("model_started", "模型任务已连接。"),
+            "turn.started": ("model_reasoning", "模型正在生成结构化结果。"),
+            "item.started": ("model_working", "模型正在处理任务上下文。"),
+            "item.completed": ("model_working", "模型完成一个处理步骤。"),
+            "turn.completed": ("model_completed", "模型结果已生成，正在校验。"),
+        }.get(event_type)
+        if progress is not None:
+            report_agent_progress(*progress)
 
     @staticmethod
     async def _terminate_and_reap(process: asyncio.subprocess.Process) -> None:

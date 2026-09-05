@@ -3,6 +3,7 @@ from collections import deque
 import json
 import os
 from pathlib import Path
+from time import monotonic
 
 import pytest
 
@@ -39,7 +40,7 @@ def _write_fake_codex(path: Path) -> Path:
         "if input_log:\n"
         "    Path(input_log).write_text(stdin_text, encoding='utf-8')\n"
         "if os.environ.get('FAKE_CODEX_STDOUT'):\n"
-        "    print(os.environ['FAKE_CODEX_STDOUT'])\n"
+        "    print(os.environ['FAKE_CODEX_STDOUT'], flush=True)\n"
         "if os.environ.get('FAKE_CODEX_STDERR'):\n"
         "    print(os.environ['FAKE_CODEX_STDERR'], file=sys.stderr)\n"
         "if os.environ.get('FAKE_CODEX_EXIT'):\n"
@@ -388,6 +389,56 @@ def test_structured_runner_preserves_stdout_error_when_stderr_has_warnings(
 
     assert "structured failure" in str(caught.value)
     assert "non-fatal warning" in str(caught.value)
+
+
+def test_structured_runner_reports_sanitized_jsonl_lifecycle_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    monkeypatch.setenv(
+        "FAKE_CODEX_STDOUT",
+        '{"type":"thread.started","thread_id":"private"}\n'
+        '{"type":"turn.started"}',
+    )
+    monkeypatch.setenv(
+        "FAKE_CODEX_OUTPUT",
+        '{"ready_for_spec":true,"questions":[],"assumptions":[]}',
+    )
+    progress: list[tuple[str, str]] = []
+    import app.agents.codex as codex_module
+
+    monkeypatch.setattr(
+        codex_module,
+        "report_agent_progress",
+        lambda stage, message: progress.append((stage, message)),
+        raising=False,
+    )
+
+    runner = CodexStructuredRunner(_settings(tmp_path, executable))
+    asyncio.run(runner.run("Analyze this brief.", ClarificationAnalysis, tmp_path))
+
+    assert progress == [
+        ("model_started", "模型任务已连接。"),
+        ("model_reasoning", "模型正在生成结构化结果。"),
+    ]
+    assert "private" not in repr(progress)
+
+
+def test_structured_runner_stops_a_silent_process_at_inactivity_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    monkeypatch.setenv("FAKE_CODEX_STDOUT", '{"type":"turn.started"}')
+    monkeypatch.setenv("FAKE_CODEX_SLEEP_SECONDS", "10")
+    settings = _settings(tmp_path, executable, timeout_seconds=2)
+    object.__setattr__(settings, "codex_inactivity_timeout_seconds", 0.2)
+    runner = CodexStructuredRunner(settings)
+
+    started = monotonic()
+    with pytest.raises(AgentExecutionError, match="made no progress"):
+        asyncio.run(runner.run("Analyze this brief.", ClarificationAnalysis, tmp_path))
+
+    assert monotonic() - started < 1.5
 
 
 def test_structured_runner_reaps_timed_out_process(
