@@ -8,6 +8,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
+from difflib import unified_diff
 from typing import Callable
 
 from sqlalchemy import asc
@@ -85,6 +86,34 @@ def _valid_spec_content_hash(spec: SpecVersion) -> bool:
     }
 
 
+def _version_patch(
+    previous: str,
+    current: str,
+    *,
+    wi: str,
+    previous_version: int | None,
+    current_version: int,
+) -> str:
+    """Build the review patch against the immediately preceding PRD version."""
+
+    previous_label = (
+        f"docs/prd/{wi}/v{previous_version}.md"
+        if previous_version is not None
+        else "/dev/null"
+    )
+    current_label = f"docs/prd/{wi}/v{current_version}.md"
+    lines = list(
+        unified_diff(
+            _normalized_markdown(previous).splitlines(),
+            _normalized_markdown(current).splitlines(),
+            fromfile=previous_label,
+            tofile=current_label,
+            lineterm="",
+        )
+    )
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 @dataclass(frozen=True, slots=True)
 class _WriteGuard:
     project_id: str
@@ -142,9 +171,8 @@ class PrdReviewService:
         threads = await self._gitea.list_comment_threads(binding.pr_number)
         agent_reply_ids = self._verified_agent_reply_ids(wi, threads)
         with self._session_factory() as db:
-            allowed_paths = self._allowed_paths(db, wi, binding.pr_number)
             accepted = [
-                thread for thread in threads if thread.comment.path in allowed_paths
+                thread for thread in threads if thread.comment.path == binding.filename
             ]
             result = [
                 self._comment_read(thread, agent_reply_ids) for thread in accepted
@@ -199,12 +227,32 @@ class PrdReviewService:
 
     async def diff(self, wi: str) -> PrdDiffRead:
         binding = await self._ensure_current_binding(wi)
-        await self._preflight_binding(binding)
+        current_document = await self._preflight_binding(binding)
+        previous_document: PrdDocumentRead | None = None
+        if binding.version > 1:
+            with self._session_factory() as db:
+                previous_binding = db.get(PrdVersion, (wi, binding.version - 1))
+            if (
+                previous_binding is None
+                or previous_binding.pr_number != binding.pr_number
+            ):
+                raise PrdContentConflict(
+                    "Previous PRD version is unavailable for comparison"
+                )
+            previous_document = await self._preflight_binding(previous_binding)
         refs = await self._gitea.read_pr_refs(binding.pr_number)
         current_file = await self._gitea.get_file(binding.filename, refs[1])
         if current_file.path != binding.filename or _markdown_hash(current_file.content) != binding.content_hash:
             raise PrdContentConflict("PR head content differs from the bound PRD")
-        patch = await self._gitea.file_diff(binding.pr_number, binding.filename)
+        patch = _version_patch(
+            previous_document.content if previous_document is not None else "",
+            current_document.content,
+            wi=wi,
+            previous_version=(
+                previous_document.version if previous_document is not None else None
+            ),
+            current_version=binding.version,
+        )
         if await self._gitea.read_pr_refs(binding.pr_number) != refs:
             raise PrdContentConflict("PR base or head changed while reading its diff")
         return PrdDiffRead(
@@ -243,6 +291,20 @@ class PrdReviewService:
         binding = await self._ensure_current_binding(wi)
         await self._preflight_binding(binding)
         return binding
+
+    async def ensure_project_binding(self, project_id: str) -> PrdVersion:
+        """Create the current PRD review branch/PR for a project's root item."""
+
+        with self._session_factory() as db:
+            root = (
+                db.query(WorkItem)
+                .filter_by(project_id=project_id, kind="ROOT")
+                .one_or_none()
+            )
+            if root is None:
+                raise PrdNotFound("project root WorkItem was not found")
+            wi = root.id
+        return await self.ensure_current_binding(wi)
 
     async def publication_threads(
         self,
@@ -456,12 +518,10 @@ class PrdReviewService:
         self, wi: str, binding: PrdVersion, comment_id: int
     ) -> GiteaThread:
         threads = await self._gitea.list_comment_threads(binding.pr_number)
-        with self._session_factory() as db:
-            allowed_paths = self._allowed_paths(db, wi, binding.pr_number)
         for thread in threads:
             if (
                 thread.comment.id == comment_id
-                and thread.comment.path in allowed_paths
+                and thread.comment.path == binding.filename
             ):
                 return thread
         raise PrdNotFound("PRD comment not found")

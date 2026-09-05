@@ -11,12 +11,14 @@ from app.database.models import (
     SpecVersion,
 )
 from app.domain.types import PrdRewriteOutput
+from app.services.gitea import GiteaComment, GiteaThread
 from app.services.pm_agent import (
     ReviewCommentSnapshot,
     ReviewReplySnapshot,
     ReviewSnapshot,
     RewriteCoverageError,
     build_rewrite_payload,
+    prioritized_review_threads,
     snapshot_hash,
     validate_rewrite,
 )
@@ -143,6 +145,94 @@ def test_snapshot_hash_ignores_comment_and_reply_display_order_but_payload_prese
     payload = build_rewrite_payload(project, spec, [], [], first)
     assert [comment["id"] for comment in payload["comments"]] == [10, 11]
     assert [reply["id"] for reply in payload["comments"][0]["replies"]] == [31, 30]
+
+
+def test_auto_review_findings_are_frozen_hashed_and_sent_after_comments():
+    finding = {
+        "code": "SCOPE-001",
+        "severity": "MAJOR",
+        "spec_path": "/system_boundaries/0",
+        "message": "The boundary is ambiguous.",
+        "suggested_resolution": "State the local-only boundary explicitly.",
+        "blocks_progress": True,
+    }
+    snapshot = ReviewSnapshot(
+        base_commit_sha="a" * 40,
+        comments=(),
+        review_findings=(finding,),
+        auto_resolve_findings=True,
+    )
+    project = Project(
+        id="p", session_id="s", creation_request_id="r", brief={}, final_approver="owner"
+    )
+    spec = SpecVersion(
+        id="spec", project_id="p", revision=1, content={}, markdown="# Spec\n",
+        generation_source="PM", input_refs=[], generator_agent_session_id="pm",
+        generator_call_id="call", change_summary="Initial", content_hash="c" * 64,
+    )
+
+    payload = build_rewrite_payload(project, spec, [], [], snapshot)
+
+    assert snapshot_hash(snapshot) != snapshot_hash(ReviewSnapshot("a" * 40, ()))
+    assert payload["comments"] == []
+    assert payload["processing_order"] == ["comments", "review_findings"]
+    assert payload["auto_resolve_review_findings"] is True
+    assert payload["review_findings"] == [{"label": "non_control_input", **finding}]
+    assert payload["human_review_decision_history"] == []
+
+
+def test_rewrite_without_comments_allows_an_empty_response_array(valid_spec):
+    output = make_rewrite(valid_spec, [])
+
+    assert validate_rewrite(output, set()) is output
+
+
+def test_only_current_version_comments_are_actionable_and_history_is_newest_first():
+    def thread(comment_id: int, path: str, created_at: str, body: str) -> GiteaThread:
+        return GiteaThread(
+            comment=GiteaComment(
+                id=comment_id,
+                path=path,
+                line=10,
+                body=body,
+                user="owner",
+                created_at=created_at,
+                resolved=False,
+            ),
+            replies=(),
+        )
+
+    old = thread(11, "docs/prd/root/v1.md", "2026-09-01T10:00:00Z", "Use A")
+    newer_history = thread(
+        21, "docs/prd/root/v2.md", "2026-09-02T10:00:00Z", "Use B instead"
+    )
+    current = thread(
+        31, "docs/prd/root/v3.md", "2026-09-03T10:00:00Z", "Clarify B"
+    )
+
+    actionable, history = prioritized_review_threads(
+        "docs/prd/root/v3.md", [old, current, newer_history]
+    )
+
+    assert [item.comment.id for item in actionable] == [31]
+    assert [item.comment.id for item in history] == [21, 11]
+
+    snapshot = ReviewSnapshot.from_gitea(
+        "a" * 40,
+        actionable,
+        decision_history=history,
+    )
+    project = Project(
+        id="p", session_id="s", creation_request_id="r", brief={}, final_approver="owner"
+    )
+    spec = SpecVersion(
+        id="spec", project_id="p", revision=3, content={}, markdown="# Spec\n",
+        generation_source="PM", input_refs=[], generator_agent_session_id="pm",
+        generator_call_id="call", change_summary="Initial", content_hash="c" * 64,
+    )
+    payload = build_rewrite_payload(project, spec, [], [], snapshot)
+    assert [item["id"] for item in payload["comments"]] == [31]
+    assert [item["id"] for item in payload["human_review_decision_history"]] == [21, 11]
 
 
 def test_rewrite_responses_cover_exact_comment_ids(valid_rewrite):
@@ -272,4 +362,3 @@ def test_rewrite_payload_marks_all_evidence_as_non_control_and_preserves_comment
             "extra": {},
         }
     ]
-

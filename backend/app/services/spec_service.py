@@ -314,7 +314,7 @@ class SpecService:
 
         outcome = merge_review_outcome(rule_findings, semantic)
         if forced_clarification_questions and outcome is SpecStatus.HUMAN_REVIEW:
-            outcome = SpecStatus.NEED_CLARIFICATION
+            outcome = SpecStatus.REWORK
         return PreparedCommand(
             payload={
                 "version_id": _new_id(),

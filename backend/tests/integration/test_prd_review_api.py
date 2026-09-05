@@ -449,8 +449,8 @@ def test_publish_returns_accepted_contract_and_background_task_is_pollable(
     }
     assert [operation for operation, _ in gitea.agent.calls].count("rewrite_prd") == 1
     assert [call[2] for call in gitea.calls if call[0] == "reply_comment"] == [
-        20,
         21,
+        20,
     ]
 
 
@@ -640,21 +640,71 @@ def test_lifespan_closes_owned_gitea_when_database_startup_fails(
     assert owned_clients[0]._client.is_closed is True
 
 
-def test_prd_diff_returns_deletions_and_context_separately_from_commentable_lines(prd_api_client):
+def test_initial_prd_diff_is_rendered_as_a_new_document(prd_api_client):
     client, root, gitea = prd_api_client
 
-    async def file_diff(pr_number, path):
-        assert pr_number == 17
-        assert path == f'docs/prd/{root.id}/v1.md'
-        return '@@ -1,2 +1,2 @@\n keep\n-old requirement\n+new requirement\n'
-
-    gitea.file_diff = file_diff
     response = client.get(f'/prd/{root.id}/diff')
     assert response.status_code == 200
     assert response.json() == {
         'wi':root.id,'version':1,'filename':f'docs/prd/{root.id}/v1.md',
-        'commit_sha':'created-commit','patch':'@@ -1,2 +1,2 @@\n keep\n-old requirement\n+new requirement\n',
+        'commit_sha':'created-commit',
+        'patch':(
+            f'--- /dev/null\n+++ docs/prd/{root.id}/v1.md\n'
+            '@@ -0,0 +1,3 @@\n+# PRD\n+\n+A first version.\n'
+        ),
     }
+
+
+def test_revised_prd_diff_compares_only_with_the_immediately_previous_version(
+    prd_api_client, session_factory
+):
+    client, root, gitea = prd_api_client
+    client.get(f'/prd/{root.id}').raise_for_status()
+    revised_markdown = '# PRD\n\nA revised version.\nNew constraint.\n'
+    with session_factory() as db:
+        project = db.get(Project, 'project-prd-api')
+        prior = db.get(SpecVersion, 'spec-prd-api-1')
+        db.add(
+            SpecVersion(
+                id='spec-prd-api-2',
+                project_id=project.id,
+                revision=2,
+                content={'background_and_goals':['A revised version.']},
+                markdown=revised_markdown,
+                generation_source='PM_AGENT',
+                input_refs=['spec-prd-api-1'],
+                generator_agent_session_id='pm-session',
+                generator_call_id='pm-call-2',
+                parent_version_id=prior.id,
+                change_summary='Revised the requirement.',
+                content_hash=hashlib.sha256(revised_markdown.encode()).hexdigest(),
+                status=SpecStatus.HUMAN_REVIEW.value,
+            )
+        )
+        project.current_spec_version_id = 'spec-prd-api-2'
+        project.state_version += 1
+        db.commit()
+
+    client.get(f'/prd/{root.id}').raise_for_status()
+
+    async def raw_pr_diff_must_not_be_used(*_args):
+        raise AssertionError('The cumulative PR diff is not a version comparison')
+
+    gitea.file_diff = raw_pr_diff_must_not_be_used
+    response = client.get(f'/prd/{root.id}/diff')
+
+    assert response.status_code == 200
+    assert response.json()['version'] == 2
+    assert response.json()['patch'] == (
+        f'--- docs/prd/{root.id}/v1.md\n'
+        f'+++ docs/prd/{root.id}/v2.md\n'
+        '@@ -1,3 +1,4 @@\n'
+        ' # PRD\n'
+        ' \n'
+        '-A first version.\n'
+        '+A revised version.\n'
+        '+New constraint.\n'
+    )
 
 
 def test_prd_diff_rejects_live_target_content_different_from_bound_document(prd_api_client):

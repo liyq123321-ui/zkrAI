@@ -253,7 +253,7 @@ class PrdRewriteOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     spec: ProjectSpecPayload
-    responses: list[CommentResponse] = Field(min_length=1)
+    responses: list[CommentResponse]
     change_summary: str = Field(min_length=1, max_length=8000)
 
     @field_validator("change_summary")

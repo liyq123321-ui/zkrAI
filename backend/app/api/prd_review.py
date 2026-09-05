@@ -16,7 +16,11 @@ from app.schemas.prd_review import (
 )
 from app.identity import ActorResolver
 from app.services.gitea import CommentLineNotInDiff, GiteaError
-from app.services.pm_agent import NoUnresolvedComments, ReviewPublishCoordinator
+from app.services.pm_agent import (
+    NoReviewFindings,
+    NoUnresolvedComments,
+    ReviewPublishCoordinator,
+)
 from app.services.prd_review import (
     PrdContentConflict,
     PrdForbidden,
@@ -34,7 +38,7 @@ class PublishReviewAccepted(BaseModel):
 
     task_id: str = Field(min_length=1, max_length=255)
     base_version: int = Field(gt=0)
-    comment_count: int = Field(gt=0)
+    comment_count: int = Field(ge=0)
 
 
 def _http_error(error: Exception) -> HTTPException:
@@ -68,6 +72,12 @@ def _http_error(error: Exception) -> HTTPException:
         code, message, code_status = (
             error.code,
             "The PRD review has no unresolved comments to publish.",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    elif isinstance(error, NoReviewFindings):
+        code, message, code_status = (
+            error.code,
+            "The current PRD has no review findings for the Agent to resolve.",
             status.HTTP_400_BAD_REQUEST,
         )
     elif isinstance(error, CommentLineNotInDiff):
@@ -225,7 +235,11 @@ def build_router(
     ) -> PublishReviewAccepted:
         actor_id = actor_resolver.resolve(request, request_body.actor_id)
         try:
-            task = await coordinator.create_or_resume(wi, actor_id)
+            task = await coordinator.create_or_resume(
+                wi,
+                actor_id,
+                auto_resolve_findings=request_body.auto_resolve_findings,
+            )
             background_tasks.add_task(coordinator.run, task.id)
             return PublishReviewAccepted(
                 task_id=task.id,

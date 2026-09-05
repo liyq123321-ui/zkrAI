@@ -53,7 +53,7 @@ class CommentResolveRequest(_ActorRequest):
 
 
 class PublishReviewRequest(_ActorRequest):
-    pass
+    auto_resolve_findings: bool = False
 
 
 class PrdDocumentRead(BaseModel):
@@ -125,7 +125,7 @@ class PrdCommentableLinesRead(BaseModel):
 
 
 class PrdDiffRead(BaseModel):
-    """Full target-file PR patch, including deletion lines that cannot be annotated."""
+    """Current PRD patch against its immediately preceding version."""
     model_config = ConfigDict(extra="forbid")
 
     wi: str = Field(min_length=1, max_length=255)

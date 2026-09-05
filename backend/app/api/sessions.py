@@ -1,6 +1,7 @@
 """HTTP routes for the project specification workflow."""
 
 from collections.abc import Callable
+import logging
 
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -23,12 +24,17 @@ from app.services.query_service import (
     WorkItemRead,
 )
 from app.services.spec_service import SpecService
+from app.services.prd_review import PrdReviewService
+
+
+logger = logging.getLogger(__name__)
 
 
 def build_router(
     session_factory: Callable[[], Session],
     agent_gateway: AgentGateway,
     actor_resolver: ActorResolver,
+    prd_review_service: PrdReviewService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/sessions", tags=["sessions"])
     projects = ProjectService(session_factory, agent_gateway)
@@ -91,7 +97,27 @@ def build_router(
         actor_id = actor_resolver.resolve(request, request_body.actor_id)
         request_body = request_body.model_copy(update={"actor_id": actor_id})
         try:
-            return await commands.execute(session_id, request_body)
+            result = await commands.execute(session_id, request_body)
+            if (
+                prd_review_service is not None
+                and request_body.action in {CommandAction.CREATE_SPEC, CommandAction.REVISE}
+                and result.state.current_spec_status
+                in {"HUMAN_REVIEW", "REWORK"}
+            ):
+                try:
+                    await prd_review_service.ensure_project_binding(
+                        result.state.project_id
+                    )
+                except Exception:
+                    # The Spec command is already committed. Keep the generated
+                    # draft readable and let the PRD endpoint expose the precise
+                    # Gitea error/retry path instead of making command replay
+                    # appear to have failed.
+                    logger.exception(
+                        "Could not eagerly create Gitea PRD review binding",
+                        extra={"project_id": result.state.project_id},
+                    )
+            return result
         except Exception as error:
             raise http_error(error) from error
 

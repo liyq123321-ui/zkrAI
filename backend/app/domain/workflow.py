@@ -30,13 +30,11 @@ ACTION_TABLE: dict[
     ),
     (ProjectPhase.REVIEW, SpecStatus.AUTO_REVIEW): (CommandAction.CREATE_SPEC,),
     (ProjectPhase.REVIEW, SpecStatus.REWORK): (
-        CommandAction.APPROVE,
         CommandAction.REVISE,
         CommandAction.RESTORE_SPEC_VERSION,
     ),
     (ProjectPhase.REVIEW, SpecStatus.NEED_CLARIFICATION): (
         CommandAction.MESSAGE,
-        CommandAction.SKIP_CLARIFICATION,
         CommandAction.RESTORE_SPEC_VERSION,
     ),
     (ProjectPhase.REVIEW, SpecStatus.APPROVED): (

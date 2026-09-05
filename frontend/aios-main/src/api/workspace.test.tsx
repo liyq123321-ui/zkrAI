@@ -79,11 +79,77 @@ beforeEach(() => {
 });
 afterEach(() => {cleanup();localStorage.clear();vi.unstubAllGlobals();});
 
-function renderPanel(onConfirmAndDecompose: (reviewNote: string) => Promise<void> = async () => undefined) {
-  return render(<PrdReviewPanel wi="root-1" sessionState={state} fallbackSpec={spec} onConfirmAndDecompose={onConfirmAndDecompose} />);
+function renderPanel(
+  onConfirmAndDecompose: (reviewNote: string) => Promise<void> = async () => undefined,
+  sessionState: SessionStateDto = state,
+) {
+  return render(<PrdReviewPanel wi="root-1" sessionState={sessionState} fallbackSpec={spec} onConfirmAndDecompose={onConfirmAndDecompose} />);
 }
 
 describe('workspace regression', () => {
+  it('shows separate PRD revision and decomposition controls and blocks decomposition on Agent findings', async () => {
+    const enterDecomposition = vi.fn(async () => undefined);
+    renderPanel(enterDecomposition);
+
+    const revise = await screen.findByRole('button', {name: '确认批注并生成新版 PRD'});
+    const decompose = screen.getByRole('button', {name: '确认当前 PRD，进入任务拆分'});
+    const autoResolve = screen.getByRole('checkbox', {name: 'agent自动处理待审核项'});
+    expect((revise as HTMLButtonElement).disabled).toBe(true);
+    expect((decompose as HTMLButtonElement).disabled).toBe(true);
+    expect((autoResolve as HTMLInputElement).disabled).toBe(false);
+    expect(screen.getByText('Agent 自动审核仍有阻断项，请先通过批注生成修订版。')).toBeTruthy();
+
+    fireEvent.click(decompose);
+    expect(enterDecomposition).not.toHaveBeenCalled();
+  });
+
+  it('publishes Agent findings without comments only after explicit opt-in', async () => {
+    const enterDecomposition = vi.fn(async () => undefined);
+    resourceOverrides = {
+      '/prd/root-1/reviews/publish':{task_id:'review-task-findings',base_version:1,comment_count:0},
+      '/tasks/review-task-findings':{task_id:'review-task-findings',wi:'root-1',status:'processing',base_version:1,new_version:null,new_commit_sha:null,error:null},
+    };
+    renderPanel(enterDecomposition);
+
+    const revise = await screen.findByRole('button', {name: '确认批注并生成新版 PRD'});
+    const autoResolve = screen.getByRole('checkbox', {name: 'agent自动处理待审核项'});
+    expect((revise as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(autoResolve);
+    expect((revise as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(revise);
+
+    await waitFor(() => {
+      const request = fetchSpy.mock.calls.find(([input, options]) =>
+        options?.method === 'POST' && String(input).endsWith('/prd/root-1/reviews/publish'));
+      expect(request).toBeTruthy();
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({auto_resolve_findings:true});
+    });
+    expect(enterDecomposition).not.toHaveBeenCalled();
+  });
+
+  it('publishes comments as a new PRD review cycle without entering decomposition', async () => {
+    const enterDecomposition = vi.fn(async () => undefined);
+    const reviewed = {...state,current_spec_status:'HUMAN_REVIEW' as const,legal_actions:['approve','reject','rework','restore_spec_version'] as SessionStateDto['legal_actions'],review_findings:[]};
+    resourceOverrides = {
+      '/prd/root-1/comments':[{id:41,path:doc.filename,line:2,author_type:'human',body:'补充失败场景',resolved:false,replies:[]}],
+      '/prd/root-1/reviews/publish':{task_id:'review-task-1',base_version:1,comment_count:1},
+      '/tasks/review-task-1':{task_id:'review-task-1',wi:'root-1',status:'processing',base_version:1,new_version:null,new_commit_sha:null,error:null},
+    };
+    renderPanel(enterDecomposition, reviewed);
+
+    const revise = await screen.findByRole('button', {name: '确认批注并生成新版 PRD'});
+    const decompose = screen.getByRole('button', {name: '确认当前 PRD，进入任务拆分'});
+    expect((screen.getByRole('checkbox', {name: 'agent自动处理待审核项'}) as HTMLInputElement).disabled).toBe(true);
+    expect((revise as HTMLButtonElement).disabled).toBe(false);
+    expect((decompose as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(revise);
+
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([input, options]) =>
+      options?.method === 'POST' && String(input).endsWith('/prd/root-1/reviews/publish'))).toBe(true));
+    expect(enterDecomposition).not.toHaveBeenCalled();
+  });
+
   it('opens a dependency detail even when its card is filtered out and preserves the source draft', async () => {
     localStorage.setItem('firstflight.active-session-id','session-1');
     render(<ApiWorkspace />);
@@ -227,6 +293,7 @@ describe('workspace regression', () => {
     localStorage.setItem('firstflight.active-session-id','session-2');
     sessionCatalog.push({session_id:'session-2',project_id:'project-2',root_work_item_id:'root-2',title:'另一个项目'});
     resourceOverrides = {
+      '/sessions/session-1/state':{...state,current_spec_status:'HUMAN_REVIEW',legal_actions:['approve','reject','rework','restore_spec_version'],review_findings:[]},
       '/sessions/session-2/state':{...state,session_id:'session-2',project_id:'project-2',current_spec_version_id:null,legal_actions:[],phase:'NEED_CLARIFICATION'},
       '/sessions/session-2/specs':[],
       '/sessions/session-2/work-items':[{id:'root-2',kind:'ROOT',title:'另一个项目',parent_id:null,dependency_work_item_ids:[]}],
@@ -238,8 +305,7 @@ describe('workspace regression', () => {
     await screen.findByRole('button',{name:/另一个项目.*PRD 生成后可打开/});
     fireEvent.click(await screen.findByRole('button',{name:/知识问答.*打开 PRD 审核/}));
     const dialog = within(await screen.findByRole('dialog',{name:'PRD 审核'}));
-    fireEvent.change(dialog.getByPlaceholderText('说明为什么接受当前审核发现'),{target:{value:'已确认范围'}});
-    const confirm = dialog.getByRole('button',{name:'确认 PRD 并开始任务拆解'});
+    const confirm = dialog.getByRole('button',{name:'确认当前 PRD，进入任务拆分'});
     await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(confirm);
     await screen.findByRole('dialog',{name:'任务详情'});
@@ -407,24 +473,24 @@ describe('workspace regression', () => {
   it.each(['lines','comments','document','diff'])('keeps saved PRD readable and offers explicit fallback confirmation when %s cannot load', async (resource) => {
     failLines = resource === 'lines'; failComments = resource === 'comments'; failDocument = resource === 'document'; failDiff = resource === 'diff';
     const confirm = vi.fn(async () => undefined);
-    renderPanel(confirm);
+    const reviewed = {...state,current_spec_status:'HUMAN_REVIEW' as const,legal_actions:['approve','reject','rework','restore_spec_version'] as SessionStateDto['legal_actions'],review_findings:[]};
+    renderPanel(confirm, reviewed);
     fireEvent.click(screen.getByRole('button',{name:'正文'}));
     expect(await within(screen.getByRole('region',{name:'PRD 正文'})).findByText('这是已保存的 PRD 正文。')).toBeTruthy();
     await screen.findByRole('alert');
-    const approve = screen.getByRole('button',{name:'确认 PRD 并开始任务拆解'});
+    const approve = screen.getByRole('button',{name:'确认当前 PRD，进入任务拆分'});
     expect((approve as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByRole('button',{name:'发布批注并生成新版'})).toBeNull();
-    fireEvent.change(screen.getByPlaceholderText('说明为什么接受当前审核发现'), {
-      target: {value: '已阅读并接受当前审核发现'},
-    });
-    fireEvent.click(screen.getByRole('checkbox'));
+    expect((screen.getByRole('button',{name:'确认批注并生成新版 PRD'}) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: '我已阅读当前 PRD 正文，确认在 Gitea Diff 与评论暂不可用时继续。此操作不会伪造或补写 Gitea 批注。',
+    }));
     expect((approve as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(approve);
-    await waitFor(() => expect(confirm).toHaveBeenCalledWith('已阅读并接受当前审核发现'));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(''));
     failLines = false; failComments = false; failDocument = false; failDiff = false;
     fireEvent.click(screen.getByRole('button',{name:'刷新 PRD'}));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
-    expect(screen.getByRole('button',{name:'确认 PRD 并开始任务拆解'})).toBeTruthy();
+    expect(screen.getByRole('button',{name:'确认当前 PRD，进入任务拆分'})).toBeTruthy();
   });
 
   it('opens the root PRD in a visible dialog and supports closing it', async () => {
@@ -509,7 +575,27 @@ it('shows the complete rendered PRD alongside a diff that includes removed lines
   expect(within(body).getByRole('heading',{name:'需求说明'})).toBeTruthy();
   expect(within(body).getByText('这是已保存的 PRD 正文。')).toBeTruthy();
   const diff = await screen.findByRole('region',{name:'PRD Diff'});
+  expect(within(diff).getByText('Diff · v1 初始版本')).toBeTruthy();
   expect(await within(diff).findByText('-旧要求')).toBeTruthy();
-  expect(within(diff).getByText('+这是已保存的 PRD 正文。')).toBeTruthy();
+  const addedLine = within(diff).getByText('+这是已保存的 PRD 正文。');
+  expect(addedLine).toBeTruthy();
+  expect(addedLine.parentElement?.className).toContain('text-slate-900');
   expect(within(diff).queryByRole('button',{name:/旧要求/})).toBeNull();
+});
+
+it('shows an unchanged PRD as white commentable full-document diff rows', async () => {
+  resourceOverrides = {
+    '/prd/root-1/diff':{wi:'root-1',version:2,filename:'docs/prd/root-1/v2.md',commit_sha:'def456',patch:''},
+    '/prd/root-1':{...doc,version:2,filename:'docs/prd/root-1/v2.md',commit_sha:'def456'},
+    '/prd/root-1/commentable-lines':{wi:'root-1',version:2,filename:'docs/prd/root-1/v2.md',commit_sha:'def456',lines:[{line:1,kind:'addition',text:'# 需求说明'},{line:2,kind:'addition',text:'这是已保存的 PRD 正文。'}]},
+  };
+  renderPanel();
+
+  const diff = await screen.findByRole('region',{name:'PRD Diff'});
+  expect(within(diff).getByText('Diff · v2 对比 v1')).toBeTruthy();
+  expect(within(diff).getByText(/以下显示完整正文/)).toBeTruthy();
+  const firstLine = within(diff).getByRole('button',{name:'给第 1 行添加批注'});
+  expect(firstLine.className).toContain('bg-white');
+  fireEvent.click(firstLine);
+  expect(screen.getByPlaceholderText('给第 1 行添加批注')).toBeTruthy();
 });

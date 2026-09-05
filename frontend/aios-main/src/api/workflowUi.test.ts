@@ -59,6 +59,19 @@ describe('API workspace workflow presentation', () => {
     expect(nextPrdConfirmationStep(state(), 1, false)).toBe('publish_review');
     expect(nextPrdConfirmationStep(state(), 0, false, true)).toBe('submit_comments');
     expect(nextPrdConfirmationStep(state(), 0, true)).toBe('wait');
+    expect(nextPrdConfirmationStep(state({
+      current_spec_status: 'REWORK',
+      legal_actions: ['revise', 'restore_spec_version'],
+      review_findings: [{code: 'SCOPE-001', message: '范围仍有冲突'}],
+    }), 0, false, false, true)).toBe('publish_review');
+  });
+
+  it('never offers decomposition approval while Agent review still requires rework', () => {
+    expect(nextPrdConfirmationStep(state({
+      current_spec_status: 'REWORK',
+      legal_actions: ['approve', 'revise', 'restore_spec_version'],
+      review_findings: [{code: 'SCOPE-001', message: '范围仍有冲突', blocks_progress: true}],
+    }), 0, false)).toBe('none');
   });
 
   it('makes the root card the PRD entry and child cards the Agent Spec entry', () => {

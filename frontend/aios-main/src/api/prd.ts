@@ -44,9 +44,13 @@ export const resolvePrdComment = (
   method: 'POST', body: { resolved }, signal,
 });
 
-export const publishPrdReview = (wi: string, signal?: AbortSignal) =>
+export const publishPrdReview = (
+  wi: string,
+  autoResolveFindings = false,
+  signal?: AbortSignal,
+) =>
   apiClient.request<PublishReviewAcceptedDto>(`/prd/${wi}/reviews/publish`, {
-    method: 'POST', body: {}, signal,
+    method: 'POST', body: { auto_resolve_findings: autoResolveFindings }, signal,
   });
 
 export const getReviewTask = (taskId: string, signal?: AbortSignal) =>

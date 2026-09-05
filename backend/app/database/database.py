@@ -57,6 +57,9 @@ def _migrate_sqlite_gitea_review_contracts(target_engine: Engine) -> None:
     }
     tasks_need_rebuild = "tasks" in names and not {
         "initiator_actor_id",
+        "auto_resolve_findings",
+        "finding_snapshot",
+        "decision_history_snapshot",
         "reply_receipts",
     } <= {column["name"] for column in schema.get_columns("tasks")}
     command_columns = (
@@ -169,6 +172,11 @@ def _rebuild_sqlite_review_tasks(connection: Connection) -> None:
                 "comment_ids": _json_value(row["comment_ids"]),
                 "comment_snapshot": _json_value(row["comment_snapshot"]),
                 "comment_snapshot_hash": row["comment_snapshot_hash"],
+                "auto_resolve_findings": bool(row.get("auto_resolve_findings", False)),
+                "finding_snapshot": _json_value(row.get("finding_snapshot") or []),
+                "decision_history_snapshot": _json_value(
+                    row.get("decision_history_snapshot") or []
+                ),
                 "reply_receipts": _json_value(row.get("reply_receipts") or {}),
                 "new_version": row.get("new_version"),
                 "new_spec_version_id": row.get("new_spec_version_id"),
@@ -434,4 +442,3 @@ def _migrated_clarification_responses(rows: list[dict]) -> list[dict]:
 _settings = Settings.from_env()
 engine = create_engine_for_url(_settings.database_url)
 SessionLocal = make_session_factory(engine)
-

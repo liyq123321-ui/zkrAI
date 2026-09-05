@@ -681,12 +681,6 @@ class CommandService:
                 self._assert_legal(db,project,request.action); self._assert_reviewer(project,request.actor_id)
                 if request.action is CommandAction.REWORK and not self._comments(request): raise ValueError("comments are required for rework")
                 if version is None: raise IllegalAction(request.action,())
-                if (
-                    request.action is CommandAction.APPROVE
-                    and version.status == SpecStatus.REWORK.value
-                    and not self._comments(request)
-                ):
-                    raise ValueError("findings acceptance comments are required")
                 self._advance_project(db,project,request.expected_state_version); db.refresh(project)
                 review=SpecReview(id=_new_id(),project_id=project.id,spec_version_id=version.id,kind=ReviewKind.HUMAN.value,
                     reviewer_id=request.actor_id,input_spec_hash=version.content_hash,verdict=(ReviewVerdict.PASS if request.action is CommandAction.APPROVE else ReviewVerdict.REJECT).value,
@@ -724,10 +718,7 @@ class CommandService:
 
                 version = self._current_spec(db, project)
                 if version is not None:
-                    if request.payload.get("confirm_current_spec") is not True:
-                        raise ValueError("skipping review clarification requires explicit PRD confirmation")
-                    if request.payload.get("spec_version_id") != version.id:
-                        raise StaleState("the confirmed PRD is no longer the current version")
+                    raise IllegalAction(request.action, ())
 
                 self._advance_project(db, project, request.expected_state_version)
                 db.refresh(project)
@@ -748,45 +739,7 @@ class CommandService:
                 )
                 created_ids = [response.id]
                 side_effect_refs = [f"clarification_response:{response.id}"]
-                approval_payload: dict[str, object] = {}
-                if version is None:
-                    project.phase = ProjectPhase.SPECIFICATION.value
-                else:
-                    comments = "用户跳过当前澄清，接受未决项并确认当前 PRD，继续拆分子任务。"
-                    response.answers = {
-                        **response.answers,
-                        "message": comments,
-                        "approved_spec_version_id": version.id,
-                    }
-                    review = SpecReview(
-                        id=_new_id(), project_id=project.id, spec_version_id=version.id,
-                        kind=ReviewKind.HUMAN.value, reviewer_id=request.actor_id,
-                        input_spec_hash=version.content_hash, verdict=ReviewVerdict.PASS.value,
-                        findings=[], comments=comments, command_id=request.command_id,
-                    )
-                    db.add(review)
-                    version.status = SpecStatus.APPROVED.value
-                    project.phase = ProjectPhase.REVIEW.value
-                    created_ids.append(review.id)
-                    side_effect_refs.append(f"spec_review:{review.id}")
-                    approval_payload = {
-                        "spec_version_id": version.id,
-                        "spec_review_id": review.id,
-                        "decision": "SKIP_CLARIFICATION_AND_APPROVE",
-                    }
-                    db.add(AuditEvent(
-                        id=_new_id(), project_id=project.id, session_id=session_id,
-                        event_type="SPEC_HUMAN_APPROVED", actor_id=request.actor_id,
-                        payload={
-                            **approval_payload,
-                            "command_id": request.command_id,
-                            "clarification_request_id": clarification.id,
-                            "clarification_response_id": response.id,
-                            "prior_state_version": request.expected_state_version,
-                            "new_state_version": project.state_version,
-                            "comments": comments,
-                        },
-                    ))
+                project.phase = ProjectPhase.SPECIFICATION.value
                 db.add(response)
                 db.flush()
                 state = self._state(db, project)
@@ -814,7 +767,6 @@ class CommandService:
                         event_type="CLARIFICATION_SKIPPED",
                         actor_id=request.actor_id,
                         payload={
-                            **approval_payload,
                             "command_id": request.command_id,
                             "clarification_request_id": clarification.id,
                             "clarification_response_id": response.id,

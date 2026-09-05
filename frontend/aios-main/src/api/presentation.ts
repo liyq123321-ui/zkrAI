@@ -21,7 +21,7 @@ const labels: Record<string, string> = {
 export const displayLabel = (value: string) => labels[value] || value;
 
 export function progressDescription(state: SessionStateDto): string {
-  if (state.current_spec_version_id && state.legal_actions.includes('skip_clarification')) return '可补充下方澄清问题；也可跳过澄清，确认当前 PRD 并直接拆分子任务。';
+  if (state.current_spec_version_id && state.legal_actions.includes('skip_clarification')) return '请先处理当前 PRD 的澄清问题；存在未决问题时不能进入任务拆分。';
   if (state.current_spec_status === 'REWORK') return 'PRD 已生成，审核发现仍有待处理问题。请打开 PRD 查看意见，在相关行添加修改要求，再提交批注生成新版。';
   if (state.outstanding_questions.length) return '请回答下方问题，帮助系统明确需求；确认信息后会生成 PRD。';
   if (state.legal_actions.includes('convert_to_work_item')) return 'PRD 已确认，可以开始拆解任务及各任务的执行规格。';

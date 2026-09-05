@@ -209,7 +209,7 @@ async def test_approve_creates_receipt_audit_and_human_review_atomically(
 
 
 @pytest.mark.asyncio
-async def test_rework_spec_can_be_approved_only_with_recorded_findings_acceptance(
+async def test_rework_spec_cannot_be_approved_even_with_recorded_findings_acceptance(
     command_service, session_factory, human_review_project, approve_command
 ):
     with session_factory() as db:
@@ -218,7 +218,7 @@ async def test_rework_spec_can_be_approved_only_with_recorded_findings_acceptanc
         version.status = SpecStatus.REWORK.value
         db.commit()
 
-    with pytest.raises(ValueError, match="findings acceptance"):
+    with pytest.raises(IllegalAction):
         await command_service.execute(human_review_project.session_id, approve_command)
 
     accepted = approve_command.model_copy(
@@ -227,12 +227,14 @@ async def test_rework_spec_can_be_approved_only_with_recorded_findings_acceptanc
             "message": "Accept the recorded findings for rapid integration validation.",
         }
     )
-    result = await command_service.execute(human_review_project.session_id, accepted)
+    with pytest.raises(IllegalAction):
+        await command_service.execute(human_review_project.session_id, accepted)
 
-    assert result.state.current_spec_status is SpecStatus.APPROVED
     with session_factory() as db:
-        review = db.query(SpecReview).filter_by(command_id="approve-with-findings").one()
-        assert review.comments == accepted.message
+        project = db.get(Project, human_review_project.id)
+        version = db.get(SpecVersion, project.current_spec_version_id)
+        assert version.status == SpecStatus.REWORK.value
+        assert db.query(SpecReview).filter_by(kind=ReviewKind.HUMAN.value).count() == 0
 
 
 @pytest.mark.asyncio

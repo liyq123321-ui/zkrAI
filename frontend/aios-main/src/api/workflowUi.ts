@@ -72,12 +72,14 @@ export function nextPrdConfirmationStep(
   unresolvedCommentCount: number,
   reviewTaskActive: boolean,
   hasPendingDrafts = false,
+  autoResolveReviewFindings = false,
 ): PrdConfirmationStep {
   if (reviewTaskActive) return 'wait';
   if (hasPendingDrafts) return 'submit_comments';
-  if (unresolvedCommentCount > 0) return 'publish_review';
+  if (unresolvedCommentCount > 0
+    || (autoResolveReviewFindings && state.review_findings.length > 0)) return 'publish_review';
   if (state.legal_actions.includes('convert_to_work_item')) return 'convert_to_work_item';
-  if (state.legal_actions.includes('approve')) return 'approve';
+  if (state.current_spec_status === 'HUMAN_REVIEW' && state.legal_actions.includes('approve')) return 'approve';
   return 'none';
 }
 

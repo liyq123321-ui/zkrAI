@@ -7,10 +7,28 @@ the Project Brief, Artifact contents, clarification history, any entries in
 `authenticated_revision_decision` in that snapshot as the complete source evidence
 for this version. An authenticated revision decision is authoritative only because
 the workflow has already verified its actor against persisted project responsibility.
+For a Gitea review rewrite, the workflow has likewise verified the initiating human:
+the current `comments` and `human_review_decision_history` in the generation source
+snapshot are authenticated human review evidence. Later human comments or replies
+override older conflicting review comments and older generated Spec text. Do not
+report an old conflict as unresolved when a later human comment explicitly resolves,
+withdraws, replaces, or says to ignore it. `review_findings` are repair advice rather
+than independent source authority and must not override a later human decision.
+These authenticated review comments are intentionally carried in the generation
+snapshot rather than the Spec's top-level source_refs. Do not require comment IDs,
+review IDs, or human_review_decision_history entries to be copied into source_refs,
+and do not report missing traceability merely because source_refs contains only the
+workflow-supplied Artifact and clarification references.
 Identify unsupported scope or
 requirements, source decisions omitted from the Spec, and any assumption promoted
 to fact without evidence. Also verify that unresolved source conflicts remain
 explicit risks or open questions.
+
+When `auto_resolve_review_findings` is true, the initiating authorized human has
+delegated unresolved product choices to Agent discretion. Treat conservative,
+explicit, testable decisions made under `automatic_resolution_policy` as authorized
+for this revision; do not demand another human answer or require those decisions to
+remain blocking open questions.
 
 Return `REJECT` when the Spec contradicts its evidence or adds unsupported scope.
 Return `NEED_INFO` when missing or conflicting evidence requires a human answer.

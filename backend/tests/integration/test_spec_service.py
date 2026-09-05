@@ -402,7 +402,7 @@ async def test_resume_auto_review_reuses_rule_receipt_without_regenerating_or_re
 
 
 @pytest.mark.asyncio
-async def test_empty_need_info_verdict_creates_a_stable_answerable_clarification(
+async def test_empty_need_info_verdict_keeps_generated_draft_in_rework(
     session_factory, db_session, complete_brief, valid_spec
 ):
     _add_specification_project(db_session, complete_brief)
@@ -415,18 +415,9 @@ async def test_empty_need_info_verdict_creates_a_stable_answerable_clarification
 
     version = await SpecService(session_factory, agent).create_spec("project-1")
 
-    assert version.status == SpecStatus.NEED_CLARIFICATION.value
+    assert version.status == SpecStatus.REWORK.value
     with session_factory() as db:
-        request = db.query(ClarificationRequest).filter_by(spec_version_id=version.id).one()
-        assert request.questions == [
-            {
-                "question_id": "SPEC-1-REVIEWER-Q1",
-                "question": "What additional project decision or source evidence should be supplied for this Spec?",
-                "reason": "The Reviewer requested more information without identifying a specific finding.",
-                "affected_areas": ["spec"],
-                "blocking": True,
-            }
-        ]
+        assert db.query(ClarificationRequest).filter_by(spec_version_id=version.id).count() == 0
 
 
 @pytest.mark.asyncio
@@ -490,7 +481,7 @@ async def test_uncovered_requirement_still_uses_reviewer_agent(
 
 
 @pytest.mark.asyncio
-async def test_spec_human_decision_creates_focused_request_then_revises_after_its_answer(
+async def test_spec_human_decision_keeps_draft_reviewable_and_allows_revision(
     session_factory, complete_brief, valid_spec, passing_semantic_review
 ):
     """Reusing an answered intake request would drop the Spec decision that blocks revision."""
@@ -527,33 +518,11 @@ async def test_spec_human_decision_creates_focused_request_then_revises_after_it
 
     spec_service = SpecService(session_factory, agent)
     pending = await spec_service.create_spec(intake.project_id)
+    assert pending.status == SpecStatus.REWORK.value
     with session_factory() as db:
-        requests = (
-            db.query(ClarificationRequest)
-            .filter_by(project_id=intake.project_id)
-            .order_by(ClarificationRequest.analysis_round)
-            .all()
-        )
-        focused = requests[-1]
-        assert len(requests) == 2
-        assert focused.id != stale_request_id
-        assert focused.spec_version_id == pending.id
-        assert focused.questions[0]["question"] == "Which region owns the production data?"
-        assert db.query(ClarificationResponse).filter_by(clarification_request_id=focused.id).count() == 0
-        db.get(SpecVersion, pending.id).status = SpecStatus.AUTO_REVIEW.value
-        db.get(Project, intake.project_id).phase = ProjectPhase.REVIEW.value
-        db.commit()
-
-    resumed = await spec_service.create_spec(intake.project_id)
-    assert resumed.id == pending.id
-    with session_factory() as db:
-        assert db.query(ClarificationRequest).filter_by(project_id=intake.project_id).count() == 2
-
-    continued = await project_service.answer_clarification(
-        intake.project_id, actor_id="owner", message="EMEA owns the production data."
-    )
-    assert continued.phase is ProjectPhase.REVIEW
-    assert continued.current_spec_status is SpecStatus.REWORK
+        requests = db.query(ClarificationRequest).filter_by(project_id=intake.project_id).all()
+        assert [request.id for request in requests] == [stale_request_id]
+        assert db.query(ClarificationRequest).filter_by(spec_version_id=pending.id).count() == 0
 
     revised = await spec_service.revise_spec(
         intake.project_id, "Record EMEA as the production-data owner."
@@ -563,7 +532,7 @@ async def test_spec_human_decision_creates_focused_request_then_revises_after_it
 
 
 @pytest.mark.asyncio
-async def test_semantic_human_decision_creates_focused_request_then_continues_to_rework(
+async def test_semantic_human_decision_keeps_draft_reviewable_and_allows_revision(
     session_factory, complete_brief, valid_spec, passing_semantic_review
 ):
     """Reviewer-only human decisions need an answerable request, not an AUTO_REVIEW loop."""
@@ -583,41 +552,14 @@ async def test_semantic_human_decision_creates_focused_request_then_continues_to
 
     pending = await spec_service.create_spec(intake.project_id)
 
-    assert pending.status == SpecStatus.NEED_CLARIFICATION.value
-    with session_factory() as db:
-        focused = (
-            db.query(ClarificationRequest)
-            .filter_by(project_id=intake.project_id, spec_version_id=pending.id)
-            .one()
-        )
-        assert focused.questions == [
-            {
-                "question_id": "SPEC-1-SEMANTIC-Q1",
-                "question": "Which data residency rule applies to production records?",
-                "reason": "Obtain a decision from the data-governance owner.",
-                "affected_areas": ["system_boundaries"],
-                "blocking": True,
-            }
-        ]
-        db.get(SpecVersion, pending.id).status = SpecStatus.AUTO_REVIEW.value
-        db.get(Project, intake.project_id).phase = ProjectPhase.REVIEW.value
-        db.commit()
-
-    resumed = await spec_service.create_spec(intake.project_id)
-    assert resumed.id == pending.id
+    assert pending.status == SpecStatus.REWORK.value
     with session_factory() as db:
         assert (
             db.query(ClarificationRequest)
             .filter_by(project_id=intake.project_id, spec_version_id=pending.id)
             .count()
-            == 1
+            == 0
         )
-
-    continued = await project_service.answer_clarification(
-        intake.project_id, actor_id="owner", message="EU residency rules apply."
-    )
-    assert continued.phase is ProjectPhase.REVIEW
-    assert continued.current_spec_status is SpecStatus.REWORK
 
     revised = await spec_service.revise_spec(intake.project_id, "Apply the EU residency decision.")
     assert revised.revision == 2
@@ -945,4 +887,3 @@ async def test_semantic_receipt_persistence_failure_resumes_saved_result_without
         call = db.query(AgentCall).filter_by(operation="review_spec").one()
         assert call.status == "SUCCEEDED"
         assert call.response == passing_semantic_review.model_dump(mode="json")
-

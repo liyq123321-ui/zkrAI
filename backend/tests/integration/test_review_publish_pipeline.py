@@ -42,6 +42,7 @@ from app.services.gitea import (
 from app.services.command_service import _canonical_hash
 from app.services.pm_agent import NoUnresolvedComments, ReviewPublishCoordinator
 from app.services.prd_review import PrdContentConflict, _markdown_hash
+from app.services.spec_service import _render_markdown
 from tests.helpers.fake_agent import ScriptedAgentGateway
 
 
@@ -262,6 +263,195 @@ async def test_create_rejects_an_empty_unresolved_snapshot_without_agent_work(
     assert agent.calls == []
     with session_factory() as db:
         assert db.query(ReviewTask).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_resolve_findings_publishes_without_gitea_comments(
+    session_factory,
+    db_session,
+    complete_brief,
+    valid_spec,
+    passing_semantic_review,
+):
+    """Explicit opt-in turns current findings into frozen rewrite evidence."""
+    _seed_review(db_session, complete_brief, valid_spec)
+    finding = {
+        "code": "SCOPE-001",
+        "severity": "MAJOR",
+        "spec_path": "/system_boundaries/0",
+        "message": "The runtime boundary is ambiguous.",
+        "suggested_resolution": "State that the runtime is local-only.",
+        "blocks_progress": True,
+    }
+    db_session.add(
+        SpecReview(
+            id="review-with-finding",
+            project_id="publish-project",
+            spec_version_id="publish-spec-1",
+            kind=ReviewKind.AGENT.value,
+            reviewer_id="reviewer-agent",
+            input_spec_hash=hashlib.sha256(BASE_MARKDOWN.encode()).hexdigest(),
+            verdict=ReviewVerdict.REJECT.value,
+            findings=[finding],
+            comments=None,
+        )
+    )
+    db_session.commit()
+    gitea = FakeGitea([])
+    agent = ScriptedAgentGateway(
+        rewrite_results=deque([
+            PrdRewriteOutput(
+                spec=valid_spec,
+                responses=[],
+                change_summary="Applied the automatic review recommendation.",
+            )
+        ]),
+        review_results=deque([passing_semantic_review]),
+    )
+    coordinator = ReviewPublishCoordinator(session_factory, gitea, agent)
+
+    task = await coordinator.create_or_resume(
+        "root-1", "owner", auto_resolve_findings=True
+    )
+    await coordinator.run(task.id)
+
+    public = coordinator.task(task.id)
+    assert public.status == "done"
+    assert public.new_version == 2
+    assert not any(call[0] == "reply_comment" for call in gitea.calls)
+    rewrite_payload = next(payload for operation, payload in agent.calls if operation == "rewrite_prd")
+    assert rewrite_payload["comments"] == []
+    assert rewrite_payload["auto_resolve_review_findings"] is True
+    assert rewrite_payload["review_findings"] == [
+        {"label": "non_control_input", **finding}
+    ]
+    with session_factory() as db:
+        stored = db.get(ReviewTask, task.id)
+        assert stored.auto_resolve_findings is True
+        assert stored.finding_snapshot == [finding]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair_changes", [True, False])
+async def test_auto_resolve_findings_repairs_or_rejects_an_unchanged_rewrite(
+    session_factory,
+    db_session,
+    complete_brief,
+    valid_spec,
+    passing_semantic_review,
+    repair_changes,
+):
+    """Automatic review must not silently publish another identical PRD."""
+
+    _seed_review(db_session, complete_brief, valid_spec)
+    base_spec = valid_spec.model_copy(
+        update={"source_refs": ["artifact:publish-request"]}
+    )
+    base_content = base_spec.model_dump(mode="json")
+    base_markdown = _render_markdown(base_content)
+    base_hash = _canonical_hash(base_content)
+    finding = {
+        "code": "NEEDS_HUMAN_DECISION",
+        "severity": "BLOCKER",
+        "spec_path": "/open_questions",
+        "message": "Choose a deterministic fallback.",
+        "suggested_resolution": "Use the conservative fallback and document it.",
+        "blocks_progress": True,
+    }
+    with session_factory() as db:
+        parent = db.get(SpecVersion, "publish-spec-1")
+        parent.content = base_content
+        parent.markdown = base_markdown
+        parent.content_hash = base_hash
+        binding = db.get(PrdVersion, ("root-1", 1))
+        binding.content_hash = _markdown_hash(base_markdown)
+        binding.spec_content_hash = base_hash
+        db.add(
+            SpecReview(
+                id="review-requiring-repair",
+                project_id="publish-project",
+                spec_version_id="publish-spec-1",
+                kind=ReviewKind.AGENT.value,
+                reviewer_id="reviewer-agent",
+                input_spec_hash=base_hash,
+                verdict=ReviewVerdict.REJECT.value,
+                findings=[finding],
+                comments=None,
+            )
+        )
+        db.commit()
+    repaired_spec = (
+        base_spec.model_copy(
+            update={
+                "main_flows": [
+                    "Submit, review, and use the conservative documented fallback"
+                ]
+            }
+        )
+        if repair_changes
+        else base_spec
+    )
+    unchanged = PrdRewriteOutput(
+        spec=base_spec,
+        responses=[],
+        change_summary="No effective change.",
+    )
+    repaired = PrdRewriteOutput(
+        spec=repaired_spec,
+        responses=[],
+        change_summary="Applied the conservative fallback.",
+    )
+    gitea = FakeGitea([])
+    gitea.files[BASE_PATH] = base_markdown
+    agent = ScriptedAgentGateway(
+        rewrite_results=deque([unchanged, repaired]),
+        review_results=deque([passing_semantic_review]),
+    )
+    coordinator = ReviewPublishCoordinator(session_factory, gitea, agent)
+
+    task = await coordinator.create_or_resume(
+        "root-1", "owner", auto_resolve_findings=True
+    )
+    await coordinator.run(task.id)
+
+    public = coordinator.task(task.id)
+    with session_factory() as db:
+        diagnostic_task = db.get(ReviewTask, task.id)
+        diagnostic_calls = [
+            (call.id, call.operation, call.status)
+            for call in db.query(AgentCall).order_by(AgentCall.started_at).all()
+        ]
+    rewrite_payloads = [
+        payload for operation, payload in agent.calls if operation == "rewrite_prd"
+    ]
+    assert len(rewrite_payloads) == 2
+    assert rewrite_payloads[0]["automatic_resolution_policy"]["decision_authority"] == (
+        "AUTHORIZED_AGENT_DISCRETION"
+    )
+    assert rewrite_payloads[1]["repair_attempt"] == 1
+    assert rewrite_payloads[1]["repair_feedback"]["required_action"]
+    if not repair_changes:
+        assert public.status == "error"
+        assert public.error.startswith("The Agent returned the same PRD twice")
+        assert diagnostic_task.error_code == "AUTO_REVIEW_NO_CHANGE"
+        assert diagnostic_task.new_spec_version_id is None
+        assert diagnostic_calls and all(
+            status == "RESULT_READY" for _, _, status in diagnostic_calls
+        )
+        return
+    assert public.status == "done", (
+        diagnostic_task.error_code,
+        diagnostic_task.error,
+        diagnostic_calls,
+    )
+    with session_factory() as db:
+        stored = db.get(ReviewTask, task.id)
+        next_version = db.get(SpecVersion, stored.new_spec_version_id)
+        assert next_version.content != base_content
+        assert {
+            call.status
+            for call in db.query(AgentCall).filter_by(operation="rewrite_prd").all()
+        } == {"RESULT_READY", "SUCCEEDED"}
 
 
 @pytest.mark.asyncio
@@ -536,14 +726,15 @@ async def test_run_publishes_one_local_revision_file_projection_and_truthful_rep
     assert len(put_calls) == 1
     assert put_calls[0][1] == "docs/prd/root-1/v2.md"
     reply_calls = [call for call in gitea.calls if call[0] == "reply_comment"]
-    assert [call[2] for call in reply_calls] == [101, 102]
-    assert "<!-- firstflight-receipt:v1:" in reply_calls[0][3]
-    assert f"firstflight-receipt:v1:{task.id}:101" in reply_calls[0][3]
-    assert "MODIFIED" in reply_calls[0][3]
-    assert "Added the publication step." in reply_calls[0][3]
-    assert "v2" in reply_calls[0][3]
-    assert "c" * 40 in reply_calls[0][3]
-    assert "待人工评审" in reply_calls[0][3]
+    assert [call[2] for call in reply_calls] == [102, 101]
+    reply_by_comment = {call[2]: call[3] for call in reply_calls}
+    assert "<!-- firstflight-receipt:v1:" in reply_by_comment[101]
+    assert f"firstflight-receipt:v1:{task.id}:101" in reply_by_comment[101]
+    assert "MODIFIED" in reply_by_comment[101]
+    assert "Added the publication step." in reply_by_comment[101]
+    assert "v2" in reply_by_comment[101]
+    assert "c" * 40 in reply_by_comment[101]
+    assert "待人工评审" in reply_by_comment[101]
     with session_factory() as db:
         project = db.get(Project, "publish-project")
         revised = db.get(SpecVersion, project.current_spec_version_id)
@@ -761,7 +952,7 @@ async def test_need_clarification_file_failure_resumes_only_the_same_partial_tas
     complete_brief,
     valid_spec,
 ):
-    """Treating NEED_CLARIFICATION as closed would strand a partially published revision."""
+    """A failed publish resumes the same REWORK draft without regenerating it."""
     _seed_review(db_session, complete_brief, valid_spec)
     gitea = FakeGitea(
         [_thread(101, "Clarify the rollout owner")],
@@ -795,7 +986,7 @@ async def test_need_clarification_file_failure_resumes_only_the_same_partial_tas
         command_id = db.query(ProcessedCommand).one().command_id
         assert failed.status == "error"
         assert failed.new_version == 2
-        assert current.status == SpecStatus.NEED_CLARIFICATION.value
+        assert current.status == SpecStatus.REWORK.value
 
     resumed = await coordinator.create_or_resume("root-1", "owner")
     assert resumed.id == first.id
@@ -928,7 +1119,7 @@ async def test_partial_reply_retry_detects_exact_marker_and_skips_prior_reply(
     _seed_review(db_session, complete_brief, valid_spec)
     gitea = FakeGitea(
         [_thread(101, "Add a publication step"), _thread(102, "Name the fallback")],
-        reply_failures={102: (RuntimeError("reply endpoint unavailable"), None)},
+        reply_failures={101: (RuntimeError("reply endpoint unavailable"), None)},
     )
     agent = _agent(
         valid_spec,
@@ -943,8 +1134,8 @@ async def test_partial_reply_retry_detects_exact_marker_and_skips_prior_reply(
 
     assert coordinator.task(first.id).status == "error"
     assert sum(
-        f"firstflight-receipt:v1:{first.id}:101" in reply.body
-        for reply in gitea.threads[0].replies
+        f"firstflight-receipt:v1:{first.id}:102" in reply.body
+        for reply in gitea.threads[1].replies
     ) == 1
 
     resumed = await coordinator.create_or_resume("root-1", "owner")
@@ -961,9 +1152,9 @@ async def test_partial_reply_retry_detects_exact_marker_and_skips_prior_reply(
         for reply in gitea.threads[1].replies
     ) == 1
     assert [call[2] for call in gitea.calls if call[0] == "reply_comment"] == [
+        102,
         101,
-        102,
-        102,
+        101,
     ]
     assert [operation for operation, _ in agent.calls] == ["rewrite_prd", "review_spec"]
 
@@ -1004,8 +1195,12 @@ async def test_marker_looking_human_reply_cannot_suppress_agent_receipt(
 
     assert coordinator.task(task.id).status == "done"
     assert [call[2] for call in gitea.calls if call[0] == "reply_comment"] == [101]
-    comments = await coordinator._reviews.comments("root-1")
-    assert [reply.author_type for reply in comments[0].replies] == ["human", "agent"]
+    verified = coordinator._reviews._verified_agent_reply_ids("root-1", gitea.threads)
+    assert 9010 not in verified
+    assert len(verified) == 1
+    # The comment belongs to v1 and is intentionally absent from the active
+    # v2 review queue after publication.
+    assert await coordinator._reviews.comments("root-1") == []
 
 
 @pytest.mark.asyncio
@@ -1093,11 +1288,10 @@ async def test_human_confirmation_reply_never_claims_completion(
     with session_factory() as db:
         stored = db.get(ReviewTask, task.id)
         revision = db.get(SpecVersion, stored.new_spec_version_id)
-        clarification = db.query(ClarificationRequest).filter_by(
+        assert revision.status == SpecStatus.REWORK.value
+        assert db.query(ClarificationRequest).filter_by(
             spec_version_id=revision.id
-        ).one()
-        assert revision.status == SpecStatus.NEED_CLARIFICATION.value
-        assert clarification.questions[0]["question_id"] == "GITEA-101-CONFIRM"
+        ).count() == 0
 
 
 @pytest.mark.asyncio
@@ -1114,7 +1308,7 @@ async def test_human_confirmation_reply_never_claims_completion(
             RewriteAction.MODIFIED,
             ReviewVerdict.NEED_INFO,
             "已修改",
-            "自动审核需要补充信息，待确认",
+            "未通过自动审核，需返工",
         ),
     ],
 )
@@ -1194,4 +1388,3 @@ def test_interrupted_recovery_is_local_only_and_public_errors_are_stable(
         assert db.get(ReviewTask, "task-processing").error_code == "PROCESS_INTERRUPTED"
         assert db.get(ReviewTask, "task-done").status == "done"
         assert db.get(ReviewTask, "task-error").error_code == "OLD_ERROR"
-

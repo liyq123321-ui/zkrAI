@@ -53,7 +53,7 @@ import {
 const actionLabels: Record<CommandAction, string> = {
   message: '提交澄清',
   skip_clarification: '跳过澄清并生成 PRD',
-  create_spec: '生成 Spec',
+  create_spec: '生成 PRD',
   revise: '生成修订版',
   approve: '人工通过',
   reject: '人工驳回',
@@ -377,7 +377,6 @@ export function ApiWorkspace() {
       && isSkipClarificationIntent(answer)
       ? 'skip_clarification'
       : action;
-    const confirmsCurrentSpec = effectiveAction === 'skip_clarification' && Boolean(state.current_spec_version_id);
     const message = effectiveAction === 'message'
       ? answer
       : effectiveAction === 'restore_spec_version'
@@ -407,20 +406,13 @@ export function ApiWorkspace() {
           ? { comments: message }
           : effectiveAction === 'restore_spec_version'
             ? { source_revision: sourceRevision }
-            : confirmsCurrentSpec
-              ? { confirm_current_spec: true, spec_version_id: state.current_spec_version_id }
-              : {};
+            : {};
       if (effectiveAction === 'skip_clarification') {
-        setWorkflowProgress(confirmsCurrentSpec
-          ? '正在跳过澄清并确认当前 PRD…'
-          : '正在记录跳过澄清，由 Agent 接管模糊决策…');
+        setWorkflowProgress('正在记录跳过澄清，由 Agent 接管模糊决策…');
       }
       let nextState = await submitCommand(state, effectiveAction, message, payload);
       if (effectiveAction === 'skip_clarification') {
-        if (confirmsCurrentSpec && nextState.legal_actions.includes('convert_to_work_item')) {
-          setWorkflowProgress('PRD 已确认，正在拆分子任务…');
-          nextState = await submitCommand(nextState, 'convert_to_work_item');
-        } else if (!confirmsCurrentSpec && nextState.legal_actions.includes('create_spec')) {
+        if (nextState.legal_actions.includes('create_spec')) {
           setWorkflowProgress('正在根据现有信息和合理假设生成 PRD…');
           nextState = await submitCommand(nextState, 'create_spec');
         }
@@ -790,7 +782,7 @@ export function ApiWorkspace() {
                   )}
                   {sidebarActions.includes('skip_clarification') && (
                     <button disabled={busy} onClick={() => runAction('skip_clarification')} className="ff-secondary-button">
-                      {state.current_spec_version_id ? '跳过澄清，确认当前 PRD 并拆分子任务' : '跳过澄清并生成 PRD'}
+                      跳过澄清并生成 PRD
                     </button>
                   )}
                   {sidebarActions.filter((action) => !['message', 'skip_clarification'].includes(action)).map((action) => (

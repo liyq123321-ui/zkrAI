@@ -78,6 +78,8 @@ def test_prd_review_tables_have_required_columns_and_uniqueness(engine):
     assert {
         "id", "wi", "initiator_actor_id", "status", "base_version", "base_commit_sha",
         "comment_ids", "comment_snapshot", "comment_snapshot_hash",
+        "auto_resolve_findings", "finding_snapshot",
+        "decision_history_snapshot",
         "reply_receipts",
         "new_version", "new_spec_version_id", "new_commit_sha",
         "error_code", "error", "created_at", "updated_at",
@@ -87,6 +89,9 @@ def test_prd_review_tables_have_required_columns_and_uniqueness(engine):
     assert frozenset({"wi", "base_version", "comment_snapshot_hash"}) in task_unique
     assert version_column_meta["spec_content_hash"]["nullable"] is False
     assert task_column_meta["initiator_actor_id"]["nullable"] is False
+    assert task_column_meta["auto_resolve_findings"]["nullable"] is False
+    assert task_column_meta["finding_snapshot"]["nullable"] is False
+    assert task_column_meta["decision_history_snapshot"]["nullable"] is False
     assert task_column_meta["reply_receipts"]["nullable"] is False
     command_columns = {
         item["name"] for item in schema.get_columns("command_attempts")
@@ -190,7 +195,10 @@ def test_legacy_review_contracts_migrate_hash_actor_receipts_and_command_owner_i
                 text("SELECT content_hash, spec_content_hash FROM versions")
             ).one()
             task = connection.execute(
-                text("SELECT initiator_actor_id, reply_receipts FROM tasks")
+                text(
+                    "SELECT initiator_actor_id, auto_resolve_findings, "
+                    "finding_snapshot, decision_history_snapshot, reply_receipts FROM tasks"
+                )
             ).one()
         expected_markdown = "# Caf\u00e9\n"
         assert version == (
@@ -198,7 +206,10 @@ def test_legacy_review_contracts_migrate_hash_actor_receipts_and_command_owner_i
             structured_hash,
         )
         assert task[0] == "owner"
-        assert json.loads(task[1]) == {}
+        assert bool(task[1]) is False
+        assert json.loads(task[2]) == []
+        assert json.loads(task[3]) == []
+        assert json.loads(task[4]) == {}
         assert {"prepare_owner_id", "prepare_owner_started_at"} <= {
             item["name"] for item in inspect(target).get_columns("command_attempts")
         }
@@ -887,4 +898,3 @@ def test_sqlite_clarification_migration_failure_rolls_back_schema_and_every_row(
                 """))
     finally:
         target.dispose()
-

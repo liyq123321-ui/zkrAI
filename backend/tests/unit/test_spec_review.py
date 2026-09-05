@@ -31,8 +31,8 @@ def test_missing_acceptance_coverage_requires_rework(valid_spec):
     assert merge_review_outcome(findings, None) is SpecStatus.REWORK
 
 
-def test_blocking_human_decision_requests_clarification(valid_spec, passing_semantic_review):
-    """A blocking decision must route the workflow back to a human, not rework."""
+def test_blocking_human_decision_routes_generated_draft_to_rework(valid_spec, passing_semantic_review):
+    """A generated draft stays reviewable even when a human decision blocks approval."""
     payload = valid_spec.model_dump()
     payload["open_questions"] = [
         {"question": "Which region owns the data?", "blocking": True}
@@ -42,7 +42,7 @@ def test_blocking_human_decision_requests_clarification(valid_spec, passing_sema
     findings = run_rule_review(broken, set(broken.source_refs))
 
     assert [item.code for item in findings] == ["NEEDS_HUMAN_DECISION"]
-    assert merge_review_outcome(findings, passing_semantic_review) is SpecStatus.NEED_CLARIFICATION
+    assert merge_review_outcome(findings, passing_semantic_review) is SpecStatus.REWORK
 
 
 def test_rule_review_emits_each_stable_code_without_incidental_findings(valid_spec):
@@ -90,8 +90,8 @@ def test_rule_review_emits_each_stable_code_without_incidental_findings(valid_sp
         assert [item.code for item in run_rule_review(broken, set(valid_spec.source_refs))] == [expected_code]
 
 
-def test_blocking_human_decision_precedes_semantic_rework(valid_spec):
-    """Reordering merge precedence would incorrectly send a human decision to rework."""
+def test_blocking_human_decision_and_semantic_rejection_route_to_rework(valid_spec):
+    """All blocking findings on a generated draft remain visible in REWORK."""
     question_spec = type(valid_spec).model_validate(
         {**valid_spec.model_dump(), "open_questions": [{"question": "Choose owner", "blocking": True}]}
     )
@@ -113,7 +113,7 @@ def test_blocking_human_decision_precedes_semantic_rework(valid_spec):
         run_rule_review(question_spec, set(question_spec.source_refs)), semantic_rework
     )
 
-    assert outcome is SpecStatus.NEED_CLARIFICATION
+    assert outcome is SpecStatus.REWORK
 
 
 def test_semantic_verdicts_fail_closed_even_without_findings():
@@ -122,7 +122,7 @@ def test_semantic_verdicts_fail_closed_even_without_findings():
     needs_info = SemanticReview.model_construct(verdict=ReviewVerdict.NEED_INFO, findings=[])
 
     assert merge_review_outcome([], rejected) is SpecStatus.REWORK
-    assert merge_review_outcome([], needs_info) is SpecStatus.NEED_CLARIFICATION
+    assert merge_review_outcome([], needs_info) is SpecStatus.REWORK
 
 
 def test_placeholder_matching_uses_token_boundaries_and_accepts_unknown_qualified_values(valid_spec):

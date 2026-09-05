@@ -34,7 +34,6 @@ from app.domain.workflow import (
             ProjectPhase.REVIEW,
             SpecStatus.REWORK,
             (
-                CommandAction.APPROVE,
                 CommandAction.REVISE,
                 CommandAction.RESTORE_SPEC_VERSION,
             ),
@@ -67,7 +66,6 @@ def test_review_clarification_allows_message_or_explicit_skip():
         WorkflowSnapshot(ProjectPhase.REVIEW, SpecStatus.NEED_CLARIFICATION)
     ) == (
         CommandAction.MESSAGE,
-        CommandAction.SKIP_CLARIFICATION,
         CommandAction.RESTORE_SPEC_VERSION,
     )
 

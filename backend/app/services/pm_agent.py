@@ -24,10 +24,17 @@ from app.database.models import (
     PrdVersion,
     Project,
     ReviewTask,
+    SpecReview,
     SpecVersion,
     WorkItem,
 )
-from app.domain.types import CommandAction, PrdRewriteOutput, RewriteAction, WorkItemKind
+from app.domain.types import (
+    CommandAction,
+    PrdRewriteOutput,
+    ReviewFinding,
+    RewriteAction,
+    WorkItemKind,
+)
 from app.schemas.prd_review import ReviewTaskRead
 from app.schemas.workflow import SessionCommandRequest
 from app.services.gitea import GiteaReply, GiteaThread
@@ -37,6 +44,12 @@ class NoUnresolvedComments(ValueError):
     """The authoritative Gitea review has no work for the PM."""
 
     code = "NO_UNRESOLVED_COMMENTS"
+
+
+class NoReviewFindings(ValueError):
+    """Automatic finding resolution was requested after the findings disappeared."""
+
+    code = "NO_REVIEW_FINDINGS"
 
 
 class _StaleReviewBase(RuntimeError):
@@ -55,8 +68,14 @@ _PUBLIC_TASK_ERRORS = {
     "GITEA_NOT_FOUND": "The required Gitea resource was not found.",
     "PRD_CONTENT_CONFLICT": "The PRD publication conflicts with stored review state.",
     "PM_REWRITE_FAILED": "The PM rewrite did not complete.",
+    "AUTO_REVIEW_NO_CHANGE": (
+        "The Agent returned the same PRD twice while resolving review findings. "
+        "Add an explicit comment to guide the unresolved decision and retry."
+    ),
     "REVIEW_PUBLISH_FAILED": "Review publication did not complete.",
 }
+
+_AUTO_REVIEW_NO_CHANGE = "AUTO_REVIEW_NO_CHANGE"
 
 class RewriteCoverageError(ValueError):
     """The PM did not give exactly one outcome for every frozen comment."""
@@ -147,19 +166,40 @@ class ReviewSnapshot:
 
     base_commit_sha: str
     comments: tuple[ReviewCommentSnapshot, ...]
+    review_findings: tuple[Mapping[str, object], ...] = ()
+    auto_resolve_findings: bool = False
+    decision_history: tuple[ReviewCommentSnapshot, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.base_commit_sha:
             raise ValueError("review snapshot base commit SHA is required")
         object.__setattr__(self, "comments", tuple(self.comments))
+        object.__setattr__(self, "decision_history", tuple(self.decision_history))
+        object.__setattr__(
+            self,
+            "review_findings",
+            tuple(_freeze(dict(finding)) for finding in self.review_findings),
+        )
 
     @classmethod
     def from_gitea(
-        cls, base_commit_sha: str, threads: Sequence[GiteaThread]
+        cls,
+        base_commit_sha: str,
+        threads: Sequence[GiteaThread],
+        *,
+        review_findings: Sequence[Mapping[str, object]] = (),
+        auto_resolve_findings: bool = False,
+        decision_history: Sequence[GiteaThread] = (),
     ) -> "ReviewSnapshot":
         return cls(
             base_commit_sha=base_commit_sha,
             comments=tuple(ReviewCommentSnapshot.from_gitea(thread) for thread in threads),
+            review_findings=tuple(review_findings),
+            auto_resolve_findings=auto_resolve_findings,
+            decision_history=tuple(
+                ReviewCommentSnapshot.from_gitea(thread)
+                for thread in decision_history
+            ),
         )
 
 
@@ -181,6 +221,25 @@ def snapshot_hash(snapshot: ReviewSnapshot) -> str:
         ),
         key=lambda comment: comment["id"],
     )
+    canonical_value["decision_history"] = sorted(
+        canonical_value["decision_history"],
+        key=lambda comment: comment["id"],
+    )
+    # Preserve legacy task hashes when automatic finding resolution is not in
+    # use, while binding opted-in tasks to the exact immutable finding set.
+    if snapshot.auto_resolve_findings or snapshot.review_findings:
+        canonical_value["review_findings"] = sorted(
+            canonical_value["review_findings"],
+            key=lambda finding: json.dumps(
+                finding, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+        )
+        canonical_value["auto_resolve_findings"] = snapshot.auto_resolve_findings
+    else:
+        canonical_value.pop("review_findings", None)
+        canonical_value.pop("auto_resolve_findings", None)
+    if not snapshot.decision_history:
+        canonical_value.pop("decision_history", None)
     canonical = json.dumps(
         canonical_value,
         ensure_ascii=False,
@@ -188,6 +247,30 @@ def snapshot_hash(snapshot: ReviewSnapshot) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def prioritized_review_threads(
+    current_filename: str,
+    threads: Sequence[GiteaThread],
+) -> tuple[list[GiteaThread], list[GiteaThread]]:
+    """Split actionable current comments from newest-first historical decisions."""
+
+    def latest_evidence(thread: GiteaThread) -> tuple[str, int]:
+        timestamps = [thread.comment.created_at, *(reply.created_at for reply in thread.replies)]
+        identifiers = [thread.comment.id, *(reply.id for reply in thread.replies)]
+        return max(timestamps), max(identifiers)
+
+    current = [
+        thread
+        for thread in threads
+        if thread.comment.path == current_filename and not thread.comment.resolved
+    ]
+    history = [
+        thread for thread in threads if thread.comment.path != current_filename
+    ]
+    current.sort(key=latest_evidence, reverse=True)
+    history.sort(key=latest_evidence, reverse=True)
+    return current, history
 
 
 def validate_rewrite(output: PrdRewriteOutput, expected_ids: set[int]) -> PrdRewriteOutput:
@@ -199,6 +282,17 @@ def validate_rewrite(output: PrdRewriteOutput, expected_ids: set[int]) -> PrdRew
     if set(response_ids) != expected_ids:
         raise RewriteCoverageError("rewrite responses must exactly cover frozen comment IDs")
     return output
+
+
+def _rewrite_matches_parent(
+    output: PrdRewriteOutput, parent: SpecVersion, source_refs: Sequence[str]
+) -> bool:
+    """Compare effective persisted content, including workflow-owned provenance."""
+
+    effective = output.spec.model_copy(
+        update={"source_refs": list(source_refs)}
+    ).model_dump(mode="json")
+    return effective == _json_value(parent.content)
 
 
 def _artifact_payload(artifact: object) -> dict[str, object]:
@@ -282,6 +376,25 @@ def build_rewrite_payload(
             _clarification_payload(clarification) for clarification in clarifications
         ],
         "comments": [_comment_payload(comment) for comment in snapshot.comments],
+        "auto_resolve_review_findings": snapshot.auto_resolve_findings,
+        "review_findings": [
+            {"label": "non_control_input", **_json_value(finding)}
+            for finding in snapshot.review_findings
+        ],
+        "human_review_decision_history": [
+            _comment_payload(comment) for comment in snapshot.decision_history
+        ],
+        "processing_order": ["comments", "review_findings"],
+        "automatic_resolution_policy": (
+            {
+                "decision_authority": "AUTHORIZED_AGENT_DISCRETION",
+                "blocking_open_questions": "CHOOSE_CONSERVATIVE_TESTABLE_DEFAULT",
+                "required_result": "CONCRETE_SPEC_CHANGE",
+                "comment_provenance": "GENERATION_SNAPSHOT_NOT_SOURCE_REFS",
+            }
+            if snapshot.auto_resolve_findings
+            else None
+        ),
     }
 
 
@@ -375,16 +488,16 @@ class PmRewriteService:
                     raise CommandHandlerFailure(
                         str(error), agent_call_ids=[existing.id]
                     ) from error
-            call = next(
-                (item for item in calls if item.status == "RESULT_READY"), None
-            )
-            if call is not None and call.status == "RESULT_READY":
-                output = PrdRewriteOutput.model_validate(call.response)
-            elif any(item.status == "PENDING" for item in calls):
+            if any(item.status == "PENDING" for item in calls):
                 call = next(item for item in calls if item.status == "PENDING")
                 raise AgentCallInDoubt(
                     f"rewrite Agent call {call.id} is pending; result must be recovered before retry"
                 )
+            call = next(
+                (item for item in calls if item.status == "RESULT_READY"), None
+            )
+            if call is not None:
+                output = PrdRewriteOutput.model_validate(call.response)
             else:
                 pm_session = self._specs._agent_session(
                     db, project.id, "PM", "Rewrite PRD from frozen Gitea review"
@@ -430,6 +543,110 @@ class PmRewriteService:
                 audit_payload={"review_task_id": task_id},
             ) from error
 
+        prior_no_change_call_id = call.request.get("prior_no_change_call_id")
+        superseded_rewrite_call_ids: list[str] = (
+            [prior_no_change_call_id]
+            if call.request.get("repair_attempt") == 1
+            and isinstance(prior_no_change_call_id, str)
+            else []
+        )
+        if (
+            task.auto_resolve_findings
+            and task.finding_snapshot
+            and _rewrite_matches_parent(output, parent, parent_refs)
+        ):
+            if call.request.get("repair_attempt") == 1:
+                raise CommandHandlerRejected(
+                    _AUTO_REVIEW_NO_CHANGE,
+                    agent_call_ids=[*superseded_rewrite_call_ids, call_id],
+                    audit_payload={"review_task_id": task_id},
+                )
+            superseded_rewrite_call_ids.append(call_id)
+            repair_payload = {
+                **payload,
+                "repair_attempt": 1,
+                "prior_no_change_call_id": call_id,
+                "repair_feedback": {
+                    "reason": "The prior rewrite was semantically identical to the base PRD.",
+                    "required_action": (
+                        "Apply every review finding, choose conservative defaults for "
+                        "delegated decisions, and remove resolved blocking open questions."
+                    ),
+                },
+            }
+            with self._session_factory() as db:
+                repair_calls = (
+                    db.query(AgentCall)
+                    .filter_by(project_id=context.project_id, operation="rewrite_prd")
+                    .order_by(desc(AgentCall.started_at), desc(AgentCall.id))
+                    .all()
+                )
+                repair_call = next(
+                    (item for item in repair_calls if item.request == repair_payload),
+                    None,
+                )
+                if repair_call is not None and repair_call.status == "PENDING":
+                    raise AgentCallInDoubt(
+                        f"rewrite Agent repair call {repair_call.id} is pending; "
+                        "result must be recovered before retry"
+                    )
+                if repair_call is not None and repair_call.status == "RESULT_READY":
+                    repaired_output = PrdRewriteOutput.model_validate(repair_call.response)
+                else:
+                    pm_session = self._specs._agent_session(
+                        db,
+                        context.project_id,
+                        "PM",
+                        "Repair unchanged automatic PRD review rewrite",
+                    )
+                    repair_call = AgentCall(
+                        id=_new_service_id(),
+                        project_id=context.project_id,
+                        agent_session_id=pm_session.id,
+                        operation="rewrite_prd",
+                        request=repair_payload,
+                        status="PENDING",
+                    )
+                    db.add(repair_call)
+                    db.commit()
+                    repaired_output = None
+                repair_call_id = repair_call.id
+            if repaired_output is None:
+                try:
+                    repaired_output = await self._agent.rewrite_prd(repair_payload)
+                except Exception as error:
+                    self._specs._record_call_failure(
+                        context.project_id,
+                        repair_call_id,
+                        error,
+                        "PRD_REWRITE_FAILED",
+                    )
+                    raise CommandHandlerFailure(
+                        str(error),
+                        agent_call_ids=[repair_call_id],
+                    ) from error
+                self._specs._record_call_result(
+                    context.project_id,
+                    repair_call_id,
+                    repaired_output.model_dump(mode="json"),
+                )
+            try:
+                validate_rewrite(repaired_output, expected_ids)
+            except RewriteCoverageError as error:
+                raise CommandHandlerRejected(
+                    str(error),
+                    agent_call_ids=[*superseded_rewrite_call_ids, repair_call_id],
+                    audit_payload={"review_task_id": task_id},
+                ) from error
+            if _rewrite_matches_parent(repaired_output, parent, parent_refs):
+                raise CommandHandlerRejected(
+                    _AUTO_REVIEW_NO_CHANGE,
+                    agent_call_ids=[*superseded_rewrite_call_ids, repair_call_id],
+                    audit_payload={"review_task_id": task_id},
+                )
+            output = repaired_output
+            call_id = repair_call_id
+
         prepared = await self._specs.prepare_external_revision(
             context,
             output.spec,
@@ -455,7 +672,11 @@ class PmRewriteService:
             ],
         )
         return PreparedCommand(
-            payload={**dict(prepared.payload), "review_task_id": task_id},
+            payload={
+                **dict(prepared.payload),
+                "review_task_id": task_id,
+                "superseded_rewrite_call_ids": superseded_rewrite_call_ids,
+            },
             agent_backed=prepared.agent_backed,
             agent_call_ids=list(prepared.agent_call_ids),
             audit_payload={
@@ -478,6 +699,7 @@ class PmRewriteService:
             "base_commit_sha": task.base_commit_sha,
             "review_snapshot_hash": task.comment_snapshot_hash,
             "comment_ids": list(task.comment_ids),
+            "auto_resolve_review_findings": task.auto_resolve_findings,
         }
 
     @staticmethod
@@ -507,10 +729,14 @@ class PmRewriteService:
             "base_commit_sha",
             "review_snapshot_hash",
             "comment_ids",
+            "auto_resolve_review_findings",
         )
         if (
             any(call.request.get(key) != binding[key] for key in stable_keys)
             or call.request.get("comments") != current_payload.get("comments")
+            or call.request.get("review_findings") != current_payload.get("review_findings")
+            or call.request.get("human_review_decision_history")
+            != current_payload.get("human_review_decision_history")
             or call.request.get("spec") != current_payload.get("spec")
         ):
             raise ValueError("saved rewrite Agent call binding is inconsistent")
@@ -574,36 +800,45 @@ class PmRewriteService:
 
 
 def _task_snapshot(task: ReviewTask) -> ReviewSnapshot:
-    comments: list[ReviewCommentSnapshot] = []
-    if not isinstance(task.comment_snapshot, list):
-        raise ValueError("review task snapshot is invalid")
-    for raw_comment in task.comment_snapshot:
-        if not isinstance(raw_comment, Mapping):
+    def parse_comments(raw_comments: object) -> tuple[ReviewCommentSnapshot, ...]:
+        comments: list[ReviewCommentSnapshot] = []
+        if not isinstance(raw_comments, list):
             raise ValueError("review task snapshot is invalid")
-        raw_replies = raw_comment.get("replies", [])
-        if not isinstance(raw_replies, list):
-            raise ValueError("review task snapshot is invalid")
-        replies = tuple(
-            ReviewReplySnapshot(**dict(raw_reply))
-            for raw_reply in raw_replies
-            if isinstance(raw_reply, Mapping)
-        )
-        if len(replies) != len(raw_replies):
-            raise ValueError("review task snapshot is invalid")
-        comments.append(
-            ReviewCommentSnapshot(
-                id=int(raw_comment["id"]),
-                path=str(raw_comment["path"]),
-                line=int(raw_comment["line"]),
-                body=str(raw_comment["body"]),
-                user=str(raw_comment.get("user", "")),
-                created_at=str(raw_comment.get("created_at", "")),
-                resolved=bool(raw_comment.get("resolved", False)),
-                replies=replies,
+        for raw_comment in raw_comments:
+            if not isinstance(raw_comment, Mapping):
+                raise ValueError("review task snapshot is invalid")
+            raw_replies = raw_comment.get("replies", [])
+            if not isinstance(raw_replies, list):
+                raise ValueError("review task snapshot is invalid")
+            replies = tuple(
+                ReviewReplySnapshot(**dict(raw_reply))
+                for raw_reply in raw_replies
+                if isinstance(raw_reply, Mapping)
             )
-        )
+            if len(replies) != len(raw_replies):
+                raise ValueError("review task snapshot is invalid")
+            comments.append(
+                ReviewCommentSnapshot(
+                    id=int(raw_comment["id"]),
+                    path=str(raw_comment["path"]),
+                    line=int(raw_comment["line"]),
+                    body=str(raw_comment["body"]),
+                    user=str(raw_comment.get("user", "")),
+                    created_at=str(raw_comment.get("created_at", "")),
+                    resolved=bool(raw_comment.get("resolved", False)),
+                    replies=replies,
+                )
+            )
+        return tuple(comments)
+
+    comments = parse_comments(task.comment_snapshot)
+    decision_history = parse_comments(task.decision_history_snapshot or [])
     return ReviewSnapshot(
-        base_commit_sha=task.base_commit_sha, comments=tuple(comments)
+        base_commit_sha=task.base_commit_sha,
+        comments=comments,
+        review_findings=tuple(task.finding_snapshot or ()),
+        auto_resolve_findings=bool(task.auto_resolve_findings),
+        decision_history=decision_history,
     )
 
 
@@ -629,10 +864,16 @@ class ReviewPublishCoordinator:
         self._agent = agent
         self._reviews = PrdReviewService(session_factory, gitea)
 
-    async def create_or_resume(self, wi: str, actor_id: str) -> ReviewTask:
+    async def create_or_resume(
+        self,
+        wi: str,
+        actor_id: str,
+        *,
+        auto_resolve_findings: bool = False,
+    ) -> ReviewTask:
         """Freeze external evidence, then create/reset its one durable task."""
 
-        recovery = self._retry_candidate(wi, actor_id)
+        recovery = self._retry_candidate(wi, actor_id, auto_resolve_findings)
         recovery_id = recovery[0] if recovery is not None else None
         recovery_binding = recovery[1] if recovery is not None else None
         if recovery is not None:
@@ -656,11 +897,24 @@ class ReviewPublishCoordinator:
             wi, actor_id, recovery_binding, recovery_id
         )
         threads = self._without_firstflight_replies(wi, threads)
+        current_threads, decision_history = prioritized_review_threads(
+            binding.filename, threads
+        )
+        finding_snapshot = (
+            self._current_review_findings(binding)
+            if auto_resolve_findings
+            else []
+        )
+        if auto_resolve_findings and not finding_snapshot:
+            raise NoReviewFindings("no current review findings")
         snapshot = ReviewSnapshot.from_gitea(
             binding.commit_sha,
-            [thread for thread in threads if not thread.comment.resolved],
+            current_threads,
+            review_findings=finding_snapshot,
+            auto_resolve_findings=auto_resolve_findings,
+            decision_history=decision_history,
         )
-        if not snapshot.comments:
+        if not snapshot.comments and not snapshot.review_findings:
             raise NoUnresolvedComments("no unresolved Gitea review comments")
         digest = snapshot_hash(snapshot)
         if recovery is not None and recovery[2] != digest:
@@ -670,7 +924,9 @@ class ReviewPublishCoordinator:
                 "failed publication evidence changed before it could be resumed"
             )
         comment_ids = [comment.id for comment in snapshot.comments]
-        frozen_comments = _json_value(snapshot)["comments"]
+        frozen_snapshot = _json_value(snapshot)
+        frozen_comments = frozen_snapshot["comments"]
+        frozen_decision_history = frozen_snapshot["decision_history"]
 
         with self._session_factory() as db:
             try:
@@ -696,6 +952,9 @@ class ReviewPublishCoordinator:
                             comment_ids=comment_ids,
                             comment_snapshot=frozen_comments,
                             comment_snapshot_hash=digest,
+                            auto_resolve_findings=auto_resolve_findings,
+                            finding_snapshot=_json_value(snapshot.review_findings),
+                            decision_history_snapshot=frozen_decision_history,
                             reply_receipts={},
                         )
                         db.add(task)
@@ -753,7 +1012,7 @@ class ReviewPublishCoordinator:
         return task
 
     def _retry_candidate(
-        self, wi: str, actor_id: str
+        self, wi: str, actor_id: str, auto_resolve_findings: bool
     ) -> tuple[str, PrdVersion, str] | None:
         """Select an error task that still owns the current local revision."""
 
@@ -781,6 +1040,8 @@ class ReviewPublishCoordinator:
             for task in candidates:
                 if task.initiator_actor_id != actor_id:
                     continue
+                if bool(task.auto_resolve_findings) != auto_resolve_findings:
+                    continue
                 is_current_base = (
                     task.new_spec_version_id is None
                     and task.base_version == current.revision
@@ -803,6 +1064,22 @@ class ReviewPublishCoordinator:
                 ):
                     return task.id, binding, task.comment_snapshot_hash
         return None
+
+    def _current_review_findings(self, binding: PrdVersion) -> list[dict[str, object]]:
+        """Freeze the current version's authoritative auto-review findings."""
+
+        with self._session_factory() as db:
+            reviews = (
+                db.query(SpecReview)
+                .filter_by(spec_version_id=binding.spec_version_id)
+                .order_by(SpecReview.created_at, SpecReview.id)
+                .all()
+            )
+            return [
+                ReviewFinding.model_validate(finding).model_dump(mode="json")
+                for review in reviews
+                for finding in (review.findings or [])
+            ]
 
     def _without_firstflight_replies(
         self, wi: str, threads: Sequence[GiteaThread],
@@ -1420,7 +1697,11 @@ class ReviewPublishCoordinator:
 
     @staticmethod
     def _error_code(error: Exception) -> str:
-        from app.services.command_service import CommandHandlerFailure, StaleState
+        from app.services.command_service import (
+            CommandHandlerFailure,
+            CommandHandlerRejected,
+            StaleState,
+        )
         from app.services.gitea import GiteaError
         from app.services.prd_review import PrdContentConflict
 
@@ -1430,6 +1711,8 @@ class ReviewPublishCoordinator:
             return error.code
         if isinstance(error, PrdContentConflict):
             return "PRD_CONTENT_CONFLICT"
+        if isinstance(error, CommandHandlerRejected) and str(error) == _AUTO_REVIEW_NO_CHANGE:
+            return _AUTO_REVIEW_NO_CHANGE
         if isinstance(error, CommandHandlerFailure):
             return "PM_REWRITE_FAILED"
         return "REVIEW_PUBLISH_FAILED"
@@ -1508,4 +1791,3 @@ class ReviewPublishCoordinator:
             f"{visible}\n<!-- firstflight-receipt:v1:{task_id}:"
             f"{comment_id}:{signature} -->"
         )
-

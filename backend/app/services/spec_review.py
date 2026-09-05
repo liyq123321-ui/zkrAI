@@ -253,15 +253,21 @@ def run_rule_review(
 def merge_review_outcome(
     rule_findings: Iterable[ReviewFinding], semantic_review: SemanticReview | None
 ) -> SpecStatus:
-    """Apply the stable precedence for automatic-review findings."""
+    """Route every generated PRD draft into the human review workflow.
+
+    Reviewer requests for more information remain blocking findings, but a
+    completed draft is still reviewable.  Keeping it in REWORK lets the human
+    inspect the Gitea PR/Diff and provide precise inline feedback instead of
+    stranding the draft behind a separate clarification state.
+    """
 
     all_findings = list(rule_findings)
     if semantic_review is not None:
         all_findings.extend(semantic_review.findings)
         if semantic_review.verdict is ReviewVerdict.NEED_INFO:
-            return SpecStatus.NEED_CLARIFICATION
+            return SpecStatus.REWORK
     if any(item.code == "NEEDS_HUMAN_DECISION" and item.blocks_progress for item in all_findings):
-        return SpecStatus.NEED_CLARIFICATION
+        return SpecStatus.REWORK
     if semantic_review is not None and semantic_review.verdict is ReviewVerdict.REJECT:
         return SpecStatus.REWORK
     if any(item.blocks_progress for item in all_findings):

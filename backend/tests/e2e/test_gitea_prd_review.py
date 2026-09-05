@@ -11,7 +11,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.database.database import create_engine_for_url, make_session_factory
-from app.database.models import Project, SpecVersion
+from app.database.models import PrdVersion, Project, SpecVersion
 from app.domain.types import (
     ClarificationAnalysis,
     PrdRewriteOutput,
@@ -297,7 +297,13 @@ def test_gitea_review_comments_publish_a_new_human_review_spec_without_child_wor
             ]
         ),
     )
-    app = create_app(settings, agent, session_factory, gitea_client=gitea)
+    app = create_app(
+        settings,
+        agent,
+        session_factory,
+        gitea_client=gitea,
+        auto_bind_prd_review=True,
+    )
 
     with TestClient(app) as client:
         assert remote.requests == []
@@ -332,6 +338,12 @@ def test_gitea_review_comments_publish_a_new_human_review_spec_without_child_wor
             ).json()
             if item["kind"] == "ROOT"
         )
+
+        with session_factory() as db:
+            eager_binding = db.query(PrdVersion).filter_by(
+                spec_version_id=v1_state["current_spec_version_id"]
+            ).one()
+            assert eager_binding.wi == root["id"]
 
         bound_v1 = client.get(f"/prd/{root['id']}")
         assert bound_v1.status_code == 200, bound_v1.text
@@ -382,4 +394,3 @@ def test_gitea_review_comments_publish_a_new_human_review_spec_without_child_wor
         f"docs/prd/{root['id']}/v2.md",
     }
     assert agent.child_process_calls == 0
-

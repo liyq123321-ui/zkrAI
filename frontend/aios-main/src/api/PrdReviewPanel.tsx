@@ -55,6 +55,7 @@ export function PrdReviewPanel({
   const [task, setTask] = useState<ReviewTaskDto | null>(null);
   const [replyText, setReplyText] = useState<Record<number, string>>({});
   const [reviewNote, setReviewNote] = useState('');
+  const [autoResolveFindings, setAutoResolveFindings] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reviewReady, setReviewReady] = useState(false);
   const [fallbackConfirmed, setFallbackConfirmed] = useState(false);
@@ -150,6 +151,7 @@ export function PrdReviewPanel({
   }, [load, onResourcesChanged, task?.status, task?.task_id, wi]);
 
   const unresolved = useMemo(() => data?.comments.filter((comment) => !comment.resolved) ?? [], [data]);
+  const hasReviewFindings = sessionState.review_findings.length > 0;
   const reviewTaskActive = Boolean(task && ['pending', 'processing'].includes(task.status));
   const hasPendingDrafts = drafts.some((item) => item.status !== 'done');
   const localConfirmationStep = sessionState.legal_actions.includes('convert_to_work_item')
@@ -158,7 +160,13 @@ export function PrdReviewPanel({
       ? 'approve'
       : 'none';
   const confirmationStep = reviewReady
-    ? nextPrdConfirmationStep(sessionState, unresolved.length, reviewTaskActive, hasPendingDrafts)
+    ? nextPrdConfirmationStep(
+        sessionState,
+        unresolved.length,
+        reviewTaskActive,
+        hasPendingDrafts,
+        autoResolveFindings,
+      )
     : reviewTaskActive
       ? 'wait'
       : hasPendingDrafts
@@ -166,7 +174,12 @@ export function PrdReviewPanel({
         : unresolved.length > 0
           ? 'none'
           : localConfirmationStep;
-  const requiresReviewNote = sessionState.current_spec_status === 'REWORK';
+  const canPublishRevision = confirmationStep === 'publish_review';
+  const canEnterDecomposition = confirmationStep === 'approve' || confirmationStep === 'convert_to_work_item';
+
+  useEffect(() => {
+    if (!hasReviewFindings) setAutoResolveFindings(false);
+  }, [hasReviewFindings]);
 
   function addDraft() {
     if (selectedLine === null || !draftText.trim() || !data?.commentable || !reviewReady) return;
@@ -214,9 +227,10 @@ export function PrdReviewPanel({
     if (!reviewReady) return;
     setBusy(true); setError(null);
     try {
-      const accepted = await publishPrdReview(wi);
+      const accepted = await publishPrdReview(wi, autoResolveFindings);
       localStorage.setItem(taskKey(wi), accepted.task_id);
       setTask({ task_id: accepted.task_id, wi, status: 'pending', base_version: accepted.base_version, new_version: null, new_commit_sha: null, error: null });
+      setAutoResolveFindings(false);
     } catch (reason) { setError(failure(reason)); }
     finally { setBusy(false); }
   }
@@ -225,10 +239,6 @@ export function PrdReviewPanel({
     if (confirmationStep !== 'approve' && confirmationStep !== 'convert_to_work_item') return;
     if (!reviewReady && !fallbackConfirmed) {
       setError('请先确认已阅读正文，并同意在 Gitea 审核数据不可用时继续。');
-      return;
-    }
-    if (requiresReviewNote && !reviewNote.trim()) {
-      setError('当前版本带有审核发现，请填写接受这些发现的确认说明。');
       return;
     }
     setError(null);
@@ -268,45 +278,50 @@ export function PrdReviewPanel({
       {error && <div role="alert" className="mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-200"><p>{error}</p><button type="button" onClick={() => load()} className="mt-2 rounded border border-amber-500/40 px-3 py-1">重试加载</button></div>}
       {task && <div className="mb-4 flex items-center gap-2 rounded-lg bg-cyan-500/10 p-3 text-sm text-cyan-200">{['pending', 'processing'].includes(task.status) && <Loader2 className="h-4 w-4 animate-spin" />}发布任务：{task.status}{task.new_version ? ` · 已生成 v${task.new_version}` : ''}</div>}
 
-      <PrdDocumentViews content={data?.document?.content ?? fallbackSpec.markdown} patch={data?.diff?.patch ?? null} commentable={data?.commentable ?? null} ready={reviewReady && !busy && !workflowBusy && !reviewTaskActive} selectedLine={selectedLine} onSelectLine={setSelectedLine} />
+      <PrdDocumentViews content={data?.document?.content ?? fallbackSpec.markdown} version={data?.document?.version ?? fallbackSpec.revision} patch={data?.diff?.patch ?? null} commentable={data?.commentable ?? null} ready={reviewReady && !busy && !workflowBusy && !reviewTaskActive} selectedLine={selectedLine} onSelectLine={setSelectedLine} />
       {selectedLine !== null && reviewReady && <div className="mb-4 flex gap-2"><input value={draftText} onChange={(event) => setDraftText(event.target.value)} placeholder={`给第 ${selectedLine} 行添加批注`} className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm" /><button aria-label="暂存批注" onClick={addDraft} className="rounded-lg bg-cyan-500 px-3 text-slate-950"><MessageSquarePlus className="h-4 w-4" /></button></div>}
       {sessionState.review_findings.length > 0 && <details className="mb-4 rounded-xl border border-amber-500/20 p-4"><summary className="cursor-pointer text-sm text-amber-200">审核发现 · {sessionState.review_findings.length} 项（点击展开）</summary><div className="mt-3"><ReviewFindings findings={sessionState.review_findings} /></div></details>}
       <div className="mb-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
         <h3 className="text-sm font-medium text-cyan-100">人工审核门禁</h3>
         <p className="mt-1 text-xs leading-5 text-slate-400">
-          有未解决批注时先发布给 Agent 生成新版；没有意见时确认当前 PRD，系统随后自动开始任务拆解。
+          更新 PRD 与进入任务拆分是两个独立方向。更新只生成新版并继续审核；拆分仅在 Agent 自动审核通过且没有待处理批注时可用。
         </p>
-        {requiresReviewNote && confirmationStep === 'approve' && (
-          <textarea
-            value={reviewNote}
-            onChange={(event) => setReviewNote(event.target.value)}
-            placeholder="说明为什么接受当前审核发现"
-            className="mt-3 min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-          />
-        )}
         {!reviewReady && (confirmationStep === 'approve' || confirmationStep === 'convert_to_work_item') && (
           <label className="ff-fallback-approval">
             <input type="checkbox" checked={fallbackConfirmed} onChange={(event) => setFallbackConfirmed(event.target.checked)} />
             <span>我已阅读当前 PRD 正文，确认在 Gitea Diff 与评论暂不可用时继续。此操作不会伪造或补写 Gitea 批注。</span>
           </label>
         )}
-        <div className="mt-3 flex flex-wrap gap-2">
-          {confirmationStep === 'publish_review' && (
-            <button disabled={busy || workflowBusy} onClick={publish} className="flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-xs font-medium text-white disabled:opacity-40">
-              <Send className="h-3.5 w-3.5" />发布批注并生成新版
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div className="rounded-lg border border-slate-700 bg-slate-950 p-3">
+            <h4 className="text-xs font-medium">方向 1 · 根据批注更新 PRD</h4>
+            <p className="mt-1 min-h-10 text-xs leading-5 text-slate-500">Agent 优先融合所有未解决批注；勾选自动处理后，再按推荐建议修复剩余审核发现。生成新版本后仍停留在 PRD 审核阶段。</p>
+            <label className={`mt-3 flex items-center gap-2 text-xs ${hasReviewFindings ? 'cursor-pointer text-slate-300' : 'cursor-not-allowed text-slate-600'}`}>
+              <input
+                type="checkbox"
+                checked={autoResolveFindings}
+                disabled={!hasReviewFindings || busy || workflowBusy || reviewTaskActive}
+                onChange={(event) => setAutoResolveFindings(event.target.checked)}
+              />
+              <span>agent自动处理待审核项</span>
+            </label>
+            <button disabled={busy || workflowBusy || !canPublishRevision} onClick={publish} className="mt-3 flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-xs font-medium text-white disabled:opacity-40">
+              <Send className="h-3.5 w-3.5" />确认批注并生成新版 PRD
             </button>
-          )}
-          {(confirmationStep === 'approve' || confirmationStep === 'convert_to_work_item') && (
-            <button disabled={busy || workflowBusy || (!reviewReady && !fallbackConfirmed)} onClick={confirmAndDecompose} className="flex items-center gap-2 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-medium text-slate-950 disabled:opacity-40">
+          </div>
+          <div className="rounded-lg border border-slate-700 bg-slate-950 p-3">
+            <h4 className="text-xs font-medium">方向 2 · 进入任务拆分</h4>
+            <p className="mt-1 min-h-10 text-xs leading-5 text-slate-500">仅确认当前已通过 Agent 自动审核的版本；该动作不会处理批注。</p>
+            <button disabled={busy || workflowBusy || !canEnterDecomposition || (!reviewReady && !fallbackConfirmed)} onClick={confirmAndDecompose} className="mt-3 flex items-center gap-2 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-medium text-slate-950 disabled:opacity-40">
               {(busy || workflowBusy) && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {confirmationStep === 'approve' ? '确认 PRD 并开始任务拆解' : '开始任务拆解'}
+              {confirmationStep === 'convert_to_work_item' ? '开始任务拆分' : '确认当前 PRD，进入任务拆分'}
             </button>
-          )}
-          {confirmationStep === 'wait' && <span className="text-xs text-cyan-200">Agent 正在处理批注，请等待阶段完成。</span>}
-          {confirmationStep === 'submit_comments' && <span className="text-xs text-amber-200">请先提交上方暂存的批注，再决定是否发布给 Agent。</span>}
-          {!reviewReady && confirmationStep === 'none' && unresolved.length > 0 && <span className="text-xs text-amber-200">存在未解决评论，恢复 Gitea 后才能发布或确认。</span>}
-          {!reviewReady && confirmationStep === 'none' && unresolved.length === 0 && <span className="text-xs text-amber-200">Gitea 审核数据不可用；当前阶段也没有可执行的确认动作。</span>}
-          {reviewReady && confirmationStep === 'none' && <span className="text-xs text-slate-500">当前阶段没有可执行的 PRD 审核动作。</span>}
+          </div>
+          {confirmationStep === 'wait' && <span className="text-xs text-cyan-200">Agent 正在根据批注生成新版 PRD，请等待完成后继续审核。</span>}
+          {confirmationStep === 'submit_comments' && <span className="text-xs text-amber-200">请先逐条提交上方暂存批注，再确认生成新版 PRD。</span>}
+          {sessionState.current_spec_status === 'REWORK' && <span className="text-xs text-amber-200">Agent 自动审核仍有阻断项，请先通过批注生成修订版。</span>}
+          {reviewReady && sessionState.current_spec_status === 'HUMAN_REVIEW' && unresolved.length > 0 && <span className="text-xs text-amber-200">仍有未解决批注，当前版本不能进入任务拆分。</span>}
+          {!reviewReady && confirmationStep === 'none' && <span className="text-xs text-amber-200">Gitea 审核数据不可用；恢复后才能生成修订版或进入拆分。</span>}
         </div>
       </div>
 

@@ -17,12 +17,24 @@ export function diffRows(patch: string): DiffRow[] {
   });
 }
 
-export function PrdDocumentViews({ content, patch, commentable, ready, selectedLine, onSelectLine }: {
-  content: string; patch: string | null; commentable: PrdCommentableLinesDto | null;
+export function unchangedDiffRows(content: string): DiffRow[] {
+  const lines = content.replace(/\r\n?/g, '\n').split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines.map((text, index) => ({
+    text: ` ${text}`,
+    line: index + 1,
+    kind: 'context' as const,
+  }));
+}
+
+export function PrdDocumentViews({ content, version, patch, commentable, ready, selectedLine, onSelectLine }: {
+  content: string; version: number; patch: string | null; commentable: PrdCommentableLinesDto | null;
   ready: boolean; selectedLine: number | null; onSelectLine: (line: number) => void;
 }) {
   const [mode, setMode] = useState<'split' | 'document' | 'diff'>('diff');
   const allowed = new Set(commentable?.lines.map((line) => line.line) ?? []);
+  const unchanged = patch === '';
+  const rows = patch === null ? [] : unchanged ? unchangedDiffRows(content) : diffRows(patch);
   return <div className="mb-5">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
       <div className="flex gap-1 rounded-lg bg-slate-950 p-1" aria-label="阅读方式">
@@ -38,15 +50,16 @@ export function PrdDocumentViews({ content, patch, commentable, ready, selectedL
         </div>
       </section>}
       {mode !== 'document' && <section aria-label="PRD Diff" className="min-w-0 rounded-xl border border-slate-700 bg-slate-950">
-        <h3 className="border-b border-slate-800 px-4 py-3 text-sm font-medium">Diff · 对比仓库基础分支</h3>
-        <p className="border-b border-slate-800 px-4 py-2 text-xs text-slate-400">绿色为新增，红色为删除。首次创建的文档会全部显示为新增。</p>
+        <h3 className="border-b border-slate-800 px-4 py-3 text-sm font-medium">{version > 1 ? `Diff · v${version} 对比 v${version - 1}` : 'Diff · v1 初始版本'}</h3>
+        <p className="border-b border-slate-800 px-4 py-2 text-xs text-slate-400">绿色为相对上一版的新增，红色为相对上一版的删除。仅初始版本会全部显示为新增。</p>
         <div className="max-h-[55vh] overflow-auto font-mono text-xs leading-6">
-          {patch === null ? <p className="p-4 text-slate-400">Diff 暂不可用，仍可阅读完整正文。</p> : diffRows(patch).map((row,index) => {
+          {patch === null ? <p className="p-4 text-slate-400">Diff 暂不可用，仍可阅读完整正文。</p> : <>{unchanged && <p className="border-b border-slate-200 bg-white px-4 py-2 text-slate-600">本版本与上一版无差异，以下显示完整正文，可点击任意可批注行继续提出修改。</p>}{rows.map((row,index) => {
             const canComment = ready && row.line !== null && allowed.has(row.line);
-            const className = `grid w-full grid-cols-[36px_1fr] gap-2 px-3 py-0.5 text-left ${row.kind === 'addition' ? 'bg-emerald-500/10 text-emerald-200' : row.kind === 'deletion' ? 'bg-rose-500/10 text-rose-200' : row.kind === 'header' ? 'bg-slate-800/60 text-slate-400' : 'text-slate-300'} ${canComment ? 'hover:bg-cyan-500/20' : ''} ${selectedLine === row.line && row.line !== null ? 'ring-1 ring-inset ring-cyan-400' : ''}`;
+            const tone = unchanged ? 'bg-white text-slate-900' : row.kind === 'addition' ? 'bg-emerald-500/10 text-slate-900' : row.kind === 'deletion' ? 'bg-rose-500/10 text-slate-900' : row.kind === 'header' ? 'bg-slate-800/60 text-slate-400' : 'text-slate-300';
+            const className = `grid w-full grid-cols-[36px_1fr] gap-2 px-3 py-0.5 text-left ${tone} ${canComment ? 'hover:bg-cyan-500/20' : ''} ${selectedLine === row.line && row.line !== null ? 'ring-1 ring-inset ring-cyan-400' : ''}`;
             const children = <><span className="select-none text-right text-slate-500">{row.line}</span><span className="whitespace-pre-wrap break-all">{row.text || ' '}</span></>;
             return canComment ? <button key={index} type="button" aria-label={`给第 ${row.line} 行添加批注`} className={className} onClick={() => onSelectLine(row.line!)}>{children}</button> : <div key={index} className={className}>{children}</div>;
-          })}
+          })}</>}
         </div>
       </section>}
     </div>
