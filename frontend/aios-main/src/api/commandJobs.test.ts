@@ -124,19 +124,26 @@ describe('observeCommandJob', () => {
     expect(poll).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores an older poll after SSE has delivered a newer version', async () => {
+  it('ignores an older in-flight poll after SSE has delivered a newer version', async () => {
     vi.useFakeTimers();
-    const poll = vi.fn().mockResolvedValue(processing);
+    let release!: (value: CommandJobReadDto) => void;
+    const poll = vi.fn(() => new Promise<CommandJobReadDto>((resolve) => { release = resolve; }));
     const onStatus = vi.fn();
     const observer = observeCommandJob('session-1', accepted, { poll, onStatus });
-    const succeeded = succeededJob();
-    FakeEventSource.instances[0].emit('command.status', succeeded);
-
-    await expect(observer.completion).resolves.toEqual(succeeded.result);
-    expect(onStatus).toHaveBeenCalledTimes(1);
-    expect(onStatus).toHaveBeenLastCalledWith(succeeded);
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(poll).not.toHaveBeenCalled();
+    expect(poll).toHaveBeenCalledTimes(1);
+
+    const newer: CommandJobReadDto = {
+      ...processing,
+      status_version: 3,
+    };
+    FakeEventSource.instances[0].emit('command.status', newer);
+    release(processing);
+    await Promise.resolve();
+
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenLastCalledWith(newer);
+    observer.close();
   });
 
   it('reports connectivity trouble only when SSE and polling are both unavailable', async () => {
@@ -152,6 +159,51 @@ describe('observeCommandJob', () => {
 
     expect(transportError).toHaveBeenCalledTimes(1);
     expect(FakeEventSource.instances[0].close).not.toHaveBeenCalled();
+    observer.close();
+  });
+
+  it('restores SSE availability on open before a transient poll failure', async () => {
+    vi.useFakeTimers();
+    const transportError = vi.fn();
+    const observer = observeCommandJob('session-1', accepted, {
+      poll: vi.fn().mockRejectedValue(new Error('offline')),
+      onTransportError: transportError,
+    });
+
+    FakeEventSource.instances[0].onerror?.(new Event('error'));
+    FakeEventSource.instances[0].emit('open', {});
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(transportError).not.toHaveBeenCalled();
+    observer.close();
+  });
+
+  it('discards invalid JSON snapshots without advancing the version', () => {
+    const onStatus = vi.fn();
+    const observer = observeCommandJob('session-1', accepted, {
+      poll: vi.fn().mockResolvedValue(processing),
+      onStatus,
+    });
+    const source = FakeEventSource.instances[0];
+
+    source.emit('command.status', { ...processing, command_id: 'other-command', status_version: 8 });
+    source.emit('command.status', { ...processing, status: 'unknown', status_version: 9 });
+    source.emit('command.status', { ...processing, status_version: 0 });
+    source.emit('command.status', {
+      ...succeededJob(),
+      status_version: 10,
+      result: { command_id: 'decompose-1', state: null, created_resource_ids: [] },
+    });
+    source.emit('command.status', {
+      ...processing,
+      status: 'failed',
+      status_version: 11,
+      error: { code: 4, message: 'not a string' },
+    });
+    source.emit('command.status', processing);
+
+    expect(onStatus).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenLastCalledWith(processing);
     observer.close();
   });
 
@@ -187,6 +239,20 @@ describe('observeCommandJob', () => {
       message: 'decomposition failed',
     });
     expect(FakeEventSource.instances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles terminal completion even when onStatus throws', async () => {
+    const observer = observeCommandJob('session-1', accepted, {
+      poll: vi.fn().mockResolvedValue(processing),
+      onStatus: () => { throw new Error('render failed'); },
+    });
+    let completed = false;
+    void observer.completion.then(() => { completed = true; });
+
+    FakeEventSource.instances[0].emit('command.status', succeededJob());
+    await Promise.resolve();
+
+    expect(completed).toBe(true);
   });
 
   it('cleans up idempotently when the caller closes a pending observer', () => {

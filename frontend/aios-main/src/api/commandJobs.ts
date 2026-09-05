@@ -6,6 +6,51 @@ import type {
   CommandResultDto,
 } from './dto';
 
+const commandJobStatuses = new Set(['pending', 'processing', 'succeeded', 'failed']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isCommandResult(value: unknown, commandId: string): value is CommandResultDto {
+  return isRecord(value)
+    && value.command_id === commandId
+    && isRecord(value.state)
+    && isStringArray(value.created_resource_ids);
+}
+
+function isErrorDetail(value: unknown): value is { code: string; message: string } {
+  return isRecord(value)
+    && typeof value.code === 'string'
+    && typeof value.message === 'string';
+}
+
+function isCommandJobSnapshot(value: unknown, commandId: string): value is CommandJobReadDto {
+  if (!isRecord(value)
+    || value.command_id !== commandId
+    || typeof value.status !== 'string'
+    || !commandJobStatuses.has(value.status)
+    || typeof value.status_version !== 'number'
+    || !Number.isInteger(value.status_version)
+    || value.status_version < 1
+    || typeof value.created_at !== 'string'
+    || (value.started_at !== null && typeof value.started_at !== 'string')
+    || (value.completed_at !== null && typeof value.completed_at !== 'string')) {
+    return false;
+  }
+  if (value.status === 'succeeded') {
+    return isCommandResult(value.result, commandId) && value.error === null;
+  }
+  if (value.status === 'failed') {
+    return value.result === null && (value.error === null || isErrorDetail(value.error));
+  }
+  return value.result === null && value.error === null;
+}
+
 type ObserverOptions = {
   poll?: () => Promise<CommandJobReadDto>;
   eventSourceFactory?: (url: string) => EventSource;
@@ -47,7 +92,11 @@ export function observeCommandJob(
   const reconcile = (snapshot: CommandJobReadDto) => {
     if (closed || snapshot.status_version <= lastVersion) return;
     lastVersion = snapshot.status_version;
-    options.onStatus?.(snapshot);
+    try {
+      options.onStatus?.(snapshot);
+    } catch {
+      // Consumer rendering callbacks cannot interrupt durable completion handling.
+    }
     if (snapshot.status === 'succeeded' && snapshot.result) {
       close();
       resolveCompletion(snapshot.result);
@@ -83,12 +132,15 @@ export function observeCommandJob(
     source = makeSource(commandJobEventsUrl(accepted.events_url));
     source.addEventListener('command.status', (event) => {
       try {
+        const snapshot: unknown = JSON.parse((event as MessageEvent<string>).data);
+        if (!isCommandJobSnapshot(snapshot, accepted.command_id)) return;
         sseUnavailable = false;
-        reconcile(JSON.parse((event as MessageEvent<string>).data));
+        reconcile(snapshot);
       } catch {
         // A malformed frame is ignored; the durable poll remains authoritative.
       }
     });
+    source.addEventListener('open', () => { sseUnavailable = false; });
     source.onerror = () => { sseUnavailable = true; };
   } catch {
     // Polling remains active and will report a transport problem if it also fails.
