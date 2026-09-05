@@ -117,7 +117,10 @@ export function observeCommandJob(
   const schedulePoll = () => {
     timer = setTimeout(async () => {
       try {
-        reconcile(await poll());
+        const snapshot: unknown = await poll();
+        if (isCommandJobSnapshot(snapshot, accepted.command_id)) {
+          reconcile(snapshot);
+        }
       } catch (error) {
         if (controller.signal.aborted) return;
         if (sseUnavailable) options.onTransportError?.(error);

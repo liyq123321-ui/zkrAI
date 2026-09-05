@@ -207,6 +207,31 @@ describe('observeCommandJob', () => {
     observer.close();
   });
 
+  it('does not let invalid poll snapshots suppress a later valid SSE terminal status', async () => {
+    vi.useFakeTimers();
+    const invalidPolls: CommandJobReadDto[] = [
+      { ...processing, command_id: 'other-command', status_version: 99 },
+      { ...processing, status: 'unknown', status_version: 100 },
+      { ...processing, status_version: 101.5 },
+      { ...succeededJob(), status_version: 102, result: null },
+    ] as unknown as CommandJobReadDto[];
+    const poll = vi.fn(() => Promise.resolve(invalidPolls.shift() ?? processing));
+    const onStatus = vi.fn();
+    const observer = observeCommandJob('session-1', accepted, { poll, onStatus });
+
+    for (let index = 0; index < 4; index += 1) {
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    expect(poll).toHaveBeenCalledTimes(4);
+    expect(onStatus).not.toHaveBeenCalled();
+
+    const succeeded = succeededJob();
+    FakeEventSource.instances[0].emit('command.status', succeeded);
+
+    await expect(observer.completion).resolves.toEqual(succeeded.result);
+    expect(onStatus).toHaveBeenLastCalledWith(succeeded);
+  });
+
   it('ignores malformed SSE frames and lets the durable poll finish the job', async () => {
     vi.useFakeTimers();
     const succeeded = succeededJob();
