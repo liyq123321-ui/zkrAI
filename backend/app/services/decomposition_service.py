@@ -28,7 +28,7 @@ from app.services.task_plan_graph import (
 from app.services.task_specifications import ImplementationPlanError, requirement_snapshots, validate_implementation_plan
 
 
-_DECOMPOSITION_CONTRACT_VERSION = 2
+_DECOMPOSITION_CONTRACT_VERSION = 3
 
 
 class BreakdownValidationError(ValueError):

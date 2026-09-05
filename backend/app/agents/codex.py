@@ -128,6 +128,8 @@ class CodexStructuredRunner:
     ) -> str:
         with tempfile.TemporaryDirectory(prefix="codex-structured-") as directory:
             temp_dir = Path(directory)
+            workspace_dir = temp_dir / "workspace"
+            workspace_dir.mkdir()
             schema_path = temp_dir / "output-schema.json"
             output_path = temp_dir / "output.json"
             schema_path.write_text(
@@ -152,11 +154,7 @@ class CodexStructuredRunner:
                     if self.settings.codex_ignore_user_config
                     else []
                 ),
-                *(
-                    ["--skip-git-repo-check"]
-                    if self.settings.codex_skip_git_repo_check
-                    else []
-                ),
+                "--skip-git-repo-check",
                 "--json",
                 "--ephemeral",
                 "--sandbox",
@@ -166,7 +164,7 @@ class CodexStructuredRunner:
                 "--output-last-message",
                 str(output_path),
                 "--cd",
-                str(cwd),
+                str(workspace_dir),
                 "-",
             ]
             env = os.environ.copy()
@@ -174,7 +172,7 @@ class CodexStructuredRunner:
             try:
                 process = await asyncio.create_subprocess_exec(
                     *command,
-                    cwd=str(cwd),
+                    cwd=str(workspace_dir),
                     env=env,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
