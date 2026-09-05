@@ -2,6 +2,7 @@
 
 from collections import deque
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.agents.codex import AgentExecutionError, AgentOutputError
@@ -70,6 +71,135 @@ def _approved_http_session(client: TestClient, request_id: str) -> dict[str, obj
             "payload": {},
         },
     ).json()["state"]
+
+
+def _breakdown_with_input_refs(payload):
+    breakdown = make_valid_breakdown()
+    refs = list(payload["input_refs"])
+    return breakdown.model_copy(
+        update={
+            "agent_specs": [
+                item.model_copy(update={"context_refs": refs})
+                for item in breakdown.agent_specs
+            ]
+        }
+    )
+
+
+def test_decomposition_returns_accepted_job_and_status_is_pollable(session_factory):
+    agent = ScriptedAgentGateway(
+        analyze_results=deque([ClarificationAnalysis(
+            ready_for_spec=True, questions=[], assumptions=[]
+        )]),
+        generate_results=deque([make_valid_spec()]),
+        review_results=deque([make_passing_semantic_review()]),
+        decompose_results=deque([_breakdown_with_input_refs]),
+    )
+    with TestClient(create_app(agent_gateway=agent, session_factory=session_factory)) as client:
+        approved = _approved_http_session(client, "async-decompose")
+        response = client.post(
+            f"/sessions/{approved['session_id']}/commands",
+            json={
+                "command_id": "decompose-accepted",
+                "action": "convert_to_work_item",
+                "expected_state_version": approved["state_version"],
+                "actor_id": "approver-1",
+                "payload": {},
+            },
+        )
+        assert response.status_code == 202
+        accepted = response.json()
+        assert accepted == {
+            "command_id": "decompose-accepted",
+            "status": "pending",
+            "status_url": f"/sessions/{approved['session_id']}/commands/decompose-accepted",
+            "events_url": f"/sessions/{approved['session_id']}/commands/decompose-accepted/events",
+        }
+        status_response = client.get(accepted["status_url"])
+        assert status_response.status_code == 200
+        assert status_response.json()["status"] == "succeeded"
+        assert status_response.json()["result"]["state"]["phase"] == "AGENT_SPECS_READY"
+
+
+def test_non_decomposition_command_still_returns_completed_200(session_factory):
+    agent = ScriptedAgentGateway(analyze_results=deque([
+        _blocking_analysis("Q-SYNC", "Which deployment boundary applies?")
+    ]))
+    with TestClient(create_app(agent_gateway=agent, session_factory=session_factory)) as client:
+        created = client.post("/sessions", json={
+            "request_id": "sync-command",
+            "actor_id": "approver-1",
+            "brief": make_complete_brief().model_dump(mode="json"),
+        }).json()
+        response = client.post(f"/sessions/{created['session_id']}/commands", json={
+            "command_id": "sync-skip",
+            "action": "skip_clarification",
+            "expected_state_version": created["state_version"],
+            "actor_id": "approver-1",
+            "payload": {},
+        })
+        assert response.status_code == 200
+        assert "state" in response.json()
+        assert "status_url" not in response.json()
+
+
+@pytest.fixture
+def async_job_client(session_factory):
+    agent = ScriptedAgentGateway(
+        analyze_results=deque([ClarificationAnalysis(
+            ready_for_spec=True, questions=[], assumptions=[]
+        )]),
+        generate_results=deque([make_valid_spec()]),
+        review_results=deque([make_passing_semantic_review()]),
+        decompose_results=deque([_breakdown_with_input_refs]),
+    )
+    with TestClient(create_app(
+        agent_gateway=agent, session_factory=session_factory
+    )) as client:
+        approved = _approved_http_session(client, "sse-command")
+        command_id = "sse-decompose"
+        response = client.post(
+            f"/sessions/{approved['session_id']}/commands",
+            json={
+                "command_id": command_id,
+                "action": "convert_to_work_item",
+                "expected_state_version": approved["state_version"],
+                "actor_id": "approver-1",
+                "payload": {},
+            },
+        )
+        assert response.status_code == 202
+        yield client, approved["session_id"], command_id
+
+
+def test_command_job_sse_emits_terminal_snapshot_with_version_id(async_job_client):
+    client, session_id, command_id = async_job_client
+    with client.stream(
+        "GET", f"/sessions/{session_id}/commands/{command_id}/events"
+    ) as response:
+        body = "".join(response.iter_text())
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: command.status" in body
+    assert "id: 3" in body
+    assert '"status":"succeeded"' in body
+
+
+def test_command_job_sse_honors_current_last_event_id(async_job_client):
+    client, session_id, command_id = async_job_client
+    response = client.get(
+        f"/sessions/{session_id}/commands/{command_id}/events",
+        headers={"Last-Event-ID": "3"},
+    )
+    assert response.status_code == 200
+    assert "event: command.status" not in response.text
+
+
+def test_command_job_reads_do_not_cross_session_boundary(async_job_client):
+    client, _, command_id = async_job_client
+    response = client.get(f"/sessions/another-session/commands/{command_id}")
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "NOT_FOUND"
 
 
 def test_session_creation_returns_state(session_factory):
@@ -363,19 +493,22 @@ def test_convert_before_approval_returns_illegal_action(session_factory):
     }
     with TestClient(app) as client:
         created = client.post("/sessions", json=payload).json()
-        response = client.post(
-            f"/sessions/{created['session_id']}/commands",
-            json={
-                "command_id": "convert-early",
-                "action": "convert_to_work_item",
-                "expected_state_version": created["state_version"],
-                "actor_id": "approver-1",
-                "payload": {},
-            },
-        )
+        session_id = created["session_id"]
+        command_body = {
+            "command_id": "convert-early",
+            "action": "convert_to_work_item",
+            "expected_state_version": created["state_version"],
+            "actor_id": "approver-1",
+            "payload": {},
+        }
+        expected_error_code = "ILLEGAL_ACTION"
+        submission = client.post(f"/sessions/{session_id}/commands", json=command_body)
+        snapshot = client.get(submission.json()["status_url"])
 
-    assert response.status_code == 400
-    assert response.json()["detail"]["code"] == "ILLEGAL_ACTION"
+    assert submission.status_code == 202
+    assert snapshot.status_code == 200
+    assert snapshot.json()["status"] == "failed"
+    assert snapshot.json()["error"]["code"] == expected_error_code
 
 
 def test_state_query_and_session_not_found_are_stable(session_factory):
@@ -949,19 +1082,22 @@ def test_breakdown_reviewer_rejection_exposes_domain_code(session_factory):
     app = create_app(agent_gateway=agent, session_factory=session_factory)
     with TestClient(app) as client:
         approved = _approved_http_session(client, "breakdown-semantic-reject")
-        response = client.post(
-            f"/sessions/{approved['session_id']}/commands",
-            json={
-                "command_id": "convert-semantic-reject",
-                "action": "convert_to_work_item",
-                "expected_state_version": approved["state_version"],
-                "actor_id": "approver-1",
-                "payload": {},
-            },
-        )
+        session_id = approved["session_id"]
+        command_body = {
+            "command_id": "convert-semantic-reject",
+            "action": "convert_to_work_item",
+            "expected_state_version": approved["state_version"],
+            "actor_id": "approver-1",
+            "payload": {},
+        }
+        expected_error_code = "SEMANTIC_REVIEW_BLOCKED"
+        submission = client.post(f"/sessions/{session_id}/commands", json=command_body)
+        snapshot = client.get(submission.json()["status_url"])
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "SEMANTIC_REVIEW_BLOCKED"
+    assert submission.status_code == 202
+    assert snapshot.status_code == 200
+    assert snapshot.json()["status"] == "failed"
+    assert snapshot.json()["error"]["code"] == expected_error_code
 
 
 def test_nested_decomposition_agent_output_error_is_422(session_factory):
@@ -977,19 +1113,22 @@ def test_nested_decomposition_agent_output_error_is_422(session_factory):
     app = create_app(agent_gateway=agent, session_factory=session_factory)
     with TestClient(app) as client:
         approved = _approved_http_session(client, "breakdown-invalid-output")
-        response = client.post(
-            f"/sessions/{approved['session_id']}/commands",
-            json={
-                "command_id": "convert-invalid-output",
-                "action": "convert_to_work_item",
-                "expected_state_version": approved["state_version"],
-                "actor_id": "approver-1",
-                "payload": {},
-            },
-        )
+        session_id = approved["session_id"]
+        command_body = {
+            "command_id": "convert-invalid-output",
+            "action": "convert_to_work_item",
+            "expected_state_version": approved["state_version"],
+            "actor_id": "approver-1",
+            "payload": {},
+        }
+        expected_error_code = "INVALID_AGENT_RESULT"
+        submission = client.post(f"/sessions/{session_id}/commands", json=command_body)
+        snapshot = client.get(submission.json()["status_url"])
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "INVALID_AGENT_RESULT"
+    assert submission.status_code == 202
+    assert snapshot.status_code == 200
+    assert snapshot.json()["status"] == "failed"
+    assert snapshot.json()["error"]["code"] == expected_error_code
 
 
 def test_decomposition_local_key_error_preserves_stable_public_code(session_factory, monkeypatch):
@@ -1021,20 +1160,24 @@ def test_decomposition_local_key_error_preserves_stable_public_code(session_fact
     monkeypatch.setattr(DecompositionService, "_materialize_command", local_key_failure)
     with TestClient(app) as client:
         approved = _approved_http_session(client, "breakdown-local-key-code")
-        response = client.post(
-            f"/sessions/{approved['session_id']}/commands",
-            json={
-                "command_id": "convert-local-key-code",
-                "action": "convert_to_work_item",
-                "expected_state_version": approved["state_version"],
-                "actor_id": "approver-1",
-                "payload": {},
-            },
-        )
+        session_id = approved["session_id"]
+        command_body = {
+            "command_id": "convert-local-key-code",
+            "action": "convert_to_work_item",
+            "expected_state_version": approved["state_version"],
+            "actor_id": "approver-1",
+            "payload": {},
+        }
+        expected_error_code = "LOCAL_KEY_EXISTS"
+        submission = client.post(f"/sessions/{session_id}/commands", json=command_body)
+        snapshot = client.get(submission.json()["status_url"])
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "LOCAL_KEY_EXISTS"
-    assert secret not in response.text
+    assert submission.status_code == 202
+    assert snapshot.status_code == 200
+    assert snapshot.json()["status"] == "failed"
+    assert snapshot.json()["error"]["code"] == expected_error_code
+    assert secret not in submission.text
+    assert secret not in snapshot.text
 
 
 def test_spec_clarification_followups_stay_bound_until_ready(session_factory):

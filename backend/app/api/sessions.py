@@ -3,14 +3,22 @@
 from collections.abc import Callable
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.agents.gateway import AgentGateway
 from app.agents.codex import AgentExecutionError
 from app.domain.types import CommandAction, ProjectPhase
 from app.identity import ActorResolver
-from app.schemas.workflow import CommandResult, SessionCommandRequest, SessionCreateRequest, SessionState
+from app.schemas.workflow import (
+    CommandJobRead,
+    CommandSubmission,
+    SessionCommandRequest,
+    SessionCreateRequest,
+    SessionState,
+)
+from app.services.command_jobs import CommandJobCoordinator
 from app.services.command_service import CommandService
 from app.services.error_classification import classify_workflow_error
 from app.services.execution_service import ExecutionService
@@ -35,13 +43,11 @@ def build_router(
     agent_gateway: AgentGateway,
     actor_resolver: ActorResolver,
     prd_review_service: PrdReviewService | None = None,
+    command_jobs: CommandJobCoordinator | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/sessions", tags=["sessions"])
     projects = ProjectService(session_factory, agent_gateway)
     specs = SpecService(session_factory, agent_gateway)
-    from app.services.decomposition_service import DecompositionService
-
-    decomposition = DecompositionService(session_factory, agent_gateway)
     execution = ExecutionService(session_factory)
     commands = CommandService(
         session_factory,
@@ -50,7 +56,6 @@ def build_router(
             CommandAction.CREATE_SPEC: specs.as_command_handler(),
             CommandAction.REVISE: specs.as_command_handler(),
             CommandAction.RESTORE_SPEC_VERSION: specs.as_command_handler(),
-            CommandAction.CONVERT_TO_WORK_ITEM: decomposition.as_command_handler(),
             CommandAction.START_TASK: execution,
             CommandAction.COMPLETE_TASK: execution,
             CommandAction.FAIL_TASK: execution,
@@ -90,13 +95,28 @@ def build_router(
         except Exception as error:
             raise http_error(error) from error
 
-    @router.post("/{session_id}/commands", response_model=CommandResult)
+    @router.post("/{session_id}/commands", response_model=CommandSubmission)
     async def execute_command(
-        session_id: str, request_body: SessionCommandRequest, request: Request
-    ) -> CommandResult:
+        session_id: str,
+        request_body: SessionCommandRequest,
+        request: Request,
+        response: Response,
+        background_tasks: BackgroundTasks,
+    ) -> CommandSubmission:
         actor_id = actor_resolver.resolve(request, request_body.actor_id)
         request_body = request_body.model_copy(update={"actor_id": actor_id})
         try:
+            if request_body.action is CommandAction.CONVERT_TO_WORK_ITEM:
+                if command_jobs is None:
+                    raise RuntimeError("command jobs are not configured")
+                accepted, should_schedule = command_jobs.submit(session_id, request_body)
+                if should_schedule:
+                    background_tasks.add_task(
+                        command_jobs.run,
+                        command_jobs.job_id(session_id, request_body.command_id),
+                    )
+                response.status_code = status.HTTP_202_ACCEPTED
+                return accepted
             result = await commands.execute(session_id, request_body)
             if (
                 prd_review_service is not None
@@ -120,6 +140,48 @@ def build_router(
             return result
         except Exception as error:
             raise http_error(error) from error
+
+    @router.get(
+        "/{session_id}/commands/{command_id}", response_model=CommandJobRead
+    )
+    def get_command_job(session_id: str, command_id: str) -> CommandJobRead:
+        try:
+            if command_jobs is None:
+                raise RuntimeError("command jobs are not configured")
+            return command_jobs.get(session_id, command_id)
+        except Exception as error:
+            raise http_error(error) from error
+
+    @router.get("/{session_id}/commands/{command_id}/events")
+    async def command_job_events(
+        session_id: str,
+        command_id: str,
+        request: Request,
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    ) -> StreamingResponse:
+        try:
+            cursor = max(0, int(last_event_id or "0"))
+            if command_jobs is None:
+                raise RuntimeError("command jobs are not configured")
+            command_jobs.get(session_id, command_id)
+        except ValueError as error:
+            raise HTTPException(400, detail={
+                "code": "INVALID_EVENT_ID", "message": "Last-Event-ID must be an integer."
+            }) from error
+        except Exception as error:
+            raise http_error(error) from error
+
+        async def stream():
+            async for frame in command_jobs.events(session_id, command_id, cursor):
+                if await request.is_disconnected():
+                    return
+                yield frame
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @router.get("/{session_id}/state", response_model=SessionState)
     def get_state(session_id: str) -> SessionState:

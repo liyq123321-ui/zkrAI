@@ -18,7 +18,11 @@ from app.api.prd_review import build_router as build_prd_review_router
 from app.api.sessions import build_router as build_sessions_router
 from app.config import Settings
 from app.database.database import SessionLocal, init_database
+from app.domain.types import CommandAction
 from app.identity import ActorResolver
+from app.services.command_jobs import CommandJobCoordinator
+from app.services.command_service import CommandService
+from app.services.decomposition_service import DecompositionService
 from app.services.gitea import GiteaClient
 from app.services.pm_agent import ReviewPublishCoordinator
 from app.services.prd_review import PrdReviewService
@@ -47,12 +51,22 @@ def create_app(
     publish_coordinator = ReviewPublishCoordinator(
         session_factory, gitea_client, agent_gateway
     )
+    decomposition_commands = CommandService(
+        session_factory,
+        handlers={
+            CommandAction.CONVERT_TO_WORK_ITEM: DecompositionService(
+                session_factory, agent_gateway
+            ).as_command_handler()
+        },
+    )
+    command_jobs = CommandJobCoordinator(session_factory, decomposition_commands.execute)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         try:
             with session_factory() as db:
                 init_database(db.get_bind())
+            command_jobs.mark_interrupted_jobs()
             publish_coordinator.mark_interrupted_tasks()
             yield
         finally:
@@ -95,6 +109,7 @@ def create_app(
             agent_gateway,
             actor_resolver,
             review_service if auto_bind_prd_review else None,
+            command_jobs,
         )
     )
     application.include_router(
