@@ -133,7 +133,7 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) 
                   <li key={agent.agent_session_id}>
                     <div>
                       <strong>{agent.role}</strong>
-                      <span>{statusLabels[agent.status]}</span>
+                      <span className={`is-${agent.status}`}>{statusLabels[agent.status]}</span>
                     </div>
                     <p>{operationLabels[agent.current_operation] ?? agent.current_operation}</p>
                     {agent.current_summary && <p>{agent.current_summary}</p>}

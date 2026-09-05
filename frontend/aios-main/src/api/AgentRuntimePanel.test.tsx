@@ -41,6 +41,17 @@ describe('AgentRuntimePanel', () => {
     expect(within(panel).getByText('拆解已批准的项目规格')).toBeTruthy();
   });
 
+  it('renders status-specific classes for running, completed, and error Agents', async () => {
+    render(<AgentRuntimePanel projects={[{ sessionId:'session-1', title:'知识问答' }]} />);
+
+    const panel = await screen.findByRole('region', { name:'Agent 实时运行状态' });
+    const statusFor = (role: string, status: string) =>
+      within(within(panel).getByText(role).parentElement!).getByText(status);
+    expect(statusFor('PM Agent', '运行中').classList.contains('is-running')).toBe(true);
+    expect(statusFor('Writer Agent', '已完成').classList.contains('is-completed')).toBe(true);
+    expect(statusFor('Reviewer Agent', '异常').classList.contains('is-error')).toBe(true);
+  });
+
   it('renders an explicit empty state', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response('[]', { status:200 }));
     render(<AgentRuntimePanel projects={[{ sessionId:'session-1', title:'空项目' }]} />);
