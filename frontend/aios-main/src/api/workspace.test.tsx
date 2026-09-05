@@ -1071,6 +1071,33 @@ describe('workspace regression', () => {
     expect(commandStatusRequestCount()).toBe(1);
   });
 
+  it('drops a stale decomposition receipt after the session already advanced', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    localStorage.setItem('firstflight.decomposition-job.session-1', 'saved-job');
+    resourceOverrides['/sessions/session-1/state'] = {
+      ...state,
+      phase: 'AGENT_SPECS_READY',
+      state_version: 7,
+      current_spec_status: 'APPROVED',
+      legal_actions: ['start_task', 'complete_task', 'fail_task'],
+      next_action: 'EXECUTE_WORK_ITEMS',
+      review_findings: [],
+    } satisfies SessionStateDto;
+    resourceOverrides['/sessions/session-1/commands/saved-job'] = {
+      command_id: 'saved-job', status: 'failed', status_version: 4,
+      result: null,
+      error: { code: 'PROCESS_INTERRUPTED', message: 'The background command process was interrupted; retry the command.' },
+      created_at: '2026-09-05T00:00:00Z', started_at: '2026-09-05T00:00:01Z', completed_at: '2026-09-05T00:00:10Z',
+    };
+
+    render(<ApiWorkspace />);
+
+    await waitFor(() => expect(screen.getByText('任务规格已就绪')).toBeTruthy());
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBeNull();
+    expect(getRequestCount('/sessions/session-1/commands/saved-job')).toBe(1);
+    expect(screen.queryByText(/PROCESS_INTERRUPTED/)).toBeNull();
+  });
+
   it('closes SSE and cancels polling when the workspace unmounts', async () => {
     localStorage.setItem('firstflight.active-session-id', 'session-1');
     const approved = {

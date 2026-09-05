@@ -554,7 +554,16 @@ export function ApiWorkspace() {
           events_url: `/sessions/${sessionId}/commands/${commandId}/events`,
         }, true);
       } catch (reason) {
-        if (normalizeNetworkError(reason).code !== 'REQUEST_ABORTED') setError(errorText(reason));
+        const normalized = normalizeNetworkError(reason);
+        if (normalized.code === 'REQUEST_ABORTED') return;
+        if (state.phase === 'AGENT_SPECS_READY') {
+          if (localStorage.getItem(decompositionJobKey(sessionId)) === commandId) {
+            localStorage.removeItem(decompositionJobKey(sessionId));
+          }
+          setError(null);
+          return;
+        }
+        setError(errorText(reason));
       } finally {
         setWorkflowProgress(null);
       }
