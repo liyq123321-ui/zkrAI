@@ -1,5 +1,6 @@
 import asyncio
 from collections import deque
+import json
 import os
 from pathlib import Path
 
@@ -264,6 +265,41 @@ async def test_decomposition_prompt_enforces_work_item_kind_partitions(
     assert "exactly one Agent Spec for every TASK" in flat_objective
     assert "copied exactly from the top-level `input_refs`" in flat_objective
     assert "Do not put FR, NFR" in flat_objective
+
+
+@pytest.mark.asyncio
+async def test_base_decomposition_omits_later_implementation_plan_contract(
+    tmp_path, valid_breakdown
+):
+    """The base call must not reason over the large plan schema it must return as null."""
+
+    class RecordingRunner:
+        def __init__(self):
+            self.schema = {}
+
+        async def run(self, prompt, output_type, cwd, **kwargs):
+            self.schema = build_strict_output_schema(output_type)
+            payload = valid_breakdown.model_dump(mode="json")
+            for spec in payload["agent_specs"]:
+                spec.pop("implementation_plan")
+            return output_type.model_validate(payload)
+
+    runner = RecordingRunner()
+    gateway = CodexAgentGateway(
+        runner=runner,
+        settings=_settings(tmp_path, tmp_path / "unused-codex"),
+    )
+
+    result = await gateway.decompose_spec(
+        {
+            "decomposition_stage": "base",
+            "input_refs": ["artifact:brief-1"],
+            "approved_spec": {"source_refs": ["artifact:brief-1"]},
+        }
+    )
+
+    assert "implementation_plan" not in json.dumps(runner.schema)
+    assert all(spec.implementation_plan is None for spec in result.agent_specs)
 
 
 def test_structured_runner_validates_final_message_as_requested_type(

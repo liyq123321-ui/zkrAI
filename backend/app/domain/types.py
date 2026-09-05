@@ -281,8 +281,23 @@ class WorkItemProposal(BaseModel):
     dependency_keys: list[str]
 
 
-class AgentSpecProposal(BaseModel):
+class BaseAgentSpecProposal(BaseModel):
+    """Agent Spec fields produced before task-specific implementation planning."""
+
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_out_of_stage_plan(cls, value):
+        """Accept legacy base responses while keeping the advertised schema small."""
+        if (
+            "implementation_plan" not in cls.model_fields
+            and isinstance(value, dict)
+            and "implementation_plan" in value
+        ):
+            value = dict(value)
+            value.pop("implementation_plan")
+        return value
 
     work_item_key: str = Field(min_length=1)
     objective: str = Field(min_length=1)
@@ -304,8 +319,21 @@ class AgentSpecProposal(BaseModel):
     test_obligations: list[str] = Field(min_length=1)
     risks: list[str]
     open_questions: list[OpenQuestion]
+
+
+class AgentSpecProposal(BaseAgentSpecProposal):
     # Older durable proposals can still be read; current generation gates require a plan.
     implementation_plan: ImplementationPlan | None = None
+
+
+class BaseWorkBreakdown(BaseModel):
+    """Initial task tree without the implementation plans generated in stage two."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    milestones: list[WorkItemProposal] = Field(min_length=1)
+    tasks: list[WorkItemProposal] = Field(min_length=1)
+    agent_specs: list[BaseAgentSpecProposal] = Field(min_length=1)
 
 
 class WorkBreakdown(BaseModel):

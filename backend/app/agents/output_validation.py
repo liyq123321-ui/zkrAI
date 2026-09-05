@@ -4,7 +4,13 @@ from collections.abc import Mapping
 
 from pydantic import BaseModel
 
-from app.domain.types import PrdRewriteOutput, ProjectSpecPayload, WorkBreakdown, WorkBreakdownRevision
+from app.domain.types import (
+    BaseWorkBreakdown,
+    PrdRewriteOutput,
+    ProjectSpecPayload,
+    WorkBreakdown,
+    WorkBreakdownRevision,
+)
 from app.domain.types import AgentSpecProposal
 from app.domain.implementation_plan import ImplementationPlan
 from app.services.task_specifications import ImplementationPlanError, validate_implementation_plan
@@ -84,12 +90,13 @@ def _repair_required_outputs(
 
 
 def _normalize_base_breakdown(
-    result: WorkBreakdown | WorkBreakdownRevision,
+    result: BaseWorkBreakdown | WorkBreakdown | WorkBreakdownRevision,
 ) -> None:
     """Keep the structural stage small even if the Agent emitted full plans."""
 
     for agent_spec in result.agent_specs:
-        agent_spec.implementation_plan = None
+        if hasattr(agent_spec, "implementation_plan"):
+            agent_spec.implementation_plan = None
 
 
 def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str, object]) -> WorkBreakdown:
@@ -113,7 +120,7 @@ def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str,
 
 def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
     """Repair structural omissions; human decisions remain in the review workflow."""
-    if isinstance(result, (WorkBreakdown, WorkBreakdownRevision)):
+    if isinstance(result, (BaseWorkBreakdown, WorkBreakdown, WorkBreakdownRevision)):
         if payload.get("decomposition_stage") == "base":
             _normalize_base_breakdown(result)
         _repair_required_outputs(result)
@@ -158,7 +165,7 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
                 })
         if findings:
             raise OutputConsistencyError(findings)
-    elif isinstance(result, WorkBreakdown):
+    elif isinstance(result, (BaseWorkBreakdown, WorkBreakdown)):
         # Services also import the gateway package; load their checks at call time.
         from app.services.decomposition_service import BreakdownValidationError, validate_breakdown
 
@@ -166,9 +173,14 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
         if not isinstance(approved, Mapping):
             raise ValueError("decomposition requires an approved_spec snapshot")
         snapshot = {**approved, "source_refs": payload.get("input_refs", approved.get("source_refs", []))}
+        breakdown = (
+            result
+            if isinstance(result, WorkBreakdown)
+            else WorkBreakdown.model_validate(result.model_dump(mode="json"))
+        )
         try:
             validate_breakdown(
-                result,
+                breakdown,
                 snapshot,
                 require_implementation_plan=(
                     payload.get("decomposition_stage") != "base"

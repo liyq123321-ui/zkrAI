@@ -16,6 +16,7 @@ from app.config import Settings
 from app.domain.implementation_plan import ImplementationPlan
 from app.agents.output_validation import OutputConsistencyError, merge_breakdown_revision, validate_node_output
 from app.domain.types import (
+    BaseWorkBreakdown,
     ClarificationAnalysis,
     PrdRewriteOutput,
     ProjectSpecPayload,
@@ -267,6 +268,9 @@ class CodexAgentGateway:
                 for task in breakdown.agent_specs:
                     task.implementation_plan = None
             return breakdown
+        if payload.get("decomposition_stage") == "base":
+            base = await self._run_node("pm_decompose", payload, BaseWorkBreakdown)
+            return WorkBreakdown.model_validate(base.model_dump(mode="json"))
         return await self._run_node("pm_decompose", payload, WorkBreakdown)
 
     async def plan_task(self, payload: dict[str, object]) -> ImplementationPlan:
