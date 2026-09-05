@@ -118,6 +118,7 @@ def test_task_planner_does_not_upgrade_dependency_proposals_to_prd_facts():
 
     assert "authoritative only for producer/consumer compatibility" in prompt
     assert "preserve its FIXED or PROPOSED approval status" in prompt
+    assert "Apply every applicable suggested_resolution" in prompt
 
 
 def test_output_schema_requires_nullable_nested_fields_for_strict_mode():

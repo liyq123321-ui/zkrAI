@@ -11,5 +11,9 @@ must also be PROPOSED even though the consumer must implement the exact current
 contract. Every related_tasks entry is plan-free, non-authoritative project context;
 never infer or reuse an implementation contract from it.
 If previous_plan and review_feedback are present, correct that plan and preserve
-its valid detail. Feedback cannot authorize extra scope or fabricated approval.
+its valid detail. Apply every applicable suggested_resolution, including requested
+FIXED/PROPOSED status corrections. When one old decision combines a PRD-backed
+rule with a proposed implementation composition, split it into separate FIXED and
+PROPOSED decisions instead of upgrading the whole composition to FIXED. Feedback
+cannot authorize extra scope or fabricated approval.
 Return only the ImplementationPlan JSON matching the supplied schema.
