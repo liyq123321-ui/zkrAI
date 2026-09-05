@@ -31,6 +31,7 @@ def _analysis() -> ClarificationAnalysis:
 def _write_fake_codex(path: Path) -> Path:
     script = (
         "#!/usr/bin/env python3\n"
+        "import json\n"
         "import os\n"
         "import sys\n"
         "from pathlib import Path\n"
@@ -39,6 +40,15 @@ def _write_fake_codex(path: Path) -> Path:
         "input_log = os.environ.get('FAKE_CODEX_INPUT_LOG')\n"
         "if input_log:\n"
         "    Path(input_log).write_text(stdin_text, encoding='utf-8')\n"
+        "env_log = os.environ.get('FAKE_CODEX_ENV_LOG')\n"
+        "if env_log:\n"
+        "    codex_home = Path(os.environ['CODEX_HOME'])\n"
+        "    Path(env_log).write_text(json.dumps({\n"
+        "        'codex_home': str(codex_home),\n"
+        "        'auth': (codex_home / 'auth.json').read_text(encoding='utf-8') if (codex_home / 'auth.json').exists() else None,\n"
+        "        'agents_exists': (codex_home / 'AGENTS.md').exists(),\n"
+        "        'config_exists': (codex_home / 'config.toml').exists(),\n"
+        "    }), encoding='utf-8')\n"
         "if os.environ.get('FAKE_CODEX_STDOUT'):\n"
         "    print(os.environ['FAKE_CODEX_STDOUT'], flush=True)\n"
         "if os.environ.get('FAKE_CODEX_STDERR'):\n"
@@ -502,6 +512,43 @@ def test_structured_runner_uses_instruction_neutral_workspace(
     assert "--ignore-user-config" in command
 
 
+def test_structured_runner_uses_auth_only_ephemeral_codex_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Global AGENTS, preferences, and memories must not alter typed output."""
+
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    configured_home = tmp_path / "configured-codex-home"
+    configured_home.mkdir()
+    (configured_home / "auth.json").write_text('{"token":"test"}', encoding="utf-8")
+    (configured_home / "AGENTS.md").write_text(
+        "Append this operational reminder to every output name.", encoding="utf-8"
+    )
+    (configured_home / "config.toml").write_text(
+        'model = "configured-model"', encoding="utf-8"
+    )
+    env_log = tmp_path / "codex-env.json"
+    monkeypatch.setenv("FAKE_CODEX_ENV_LOG", str(env_log))
+    monkeypatch.setenv(
+        "FAKE_CODEX_OUTPUT",
+        '{"ready_for_spec":true,"questions":[],"assumptions":[]}',
+    )
+    settings = _settings(tmp_path, executable)
+    object.__setattr__(settings, "codex_home", configured_home)
+
+    asyncio.run(
+        CodexStructuredRunner(settings).run(
+            "Analyze this brief.", ClarificationAnalysis, tmp_path
+        )
+    )
+
+    runtime = json.loads(env_log.read_text(encoding="utf-8"))
+    assert runtime["codex_home"] != str(configured_home)
+    assert runtime["auth"] == '{"token":"test"}'
+    assert runtime["agents_exists"] is False
+    assert runtime["config_exists"] is False
+
+
 def test_structured_runner_reaps_timed_out_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -527,6 +574,46 @@ def test_structured_runner_reaps_timed_out_process(
     if os.name != "nt":
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+
+
+def test_structured_runner_reaps_cancelled_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Application shutdown must not orphan a model subprocess."""
+
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    monkeypatch.setenv("FAKE_CODEX_SLEEP_SECONDS", "10")
+    runner = CodexStructuredRunner(_settings(tmp_path, executable, timeout_seconds=30))
+    spawned: list[asyncio.subprocess.Process] = []
+    create_subprocess_exec = asyncio.create_subprocess_exec
+
+    async def capture_spawned_process(*args, **kwargs):
+        process = await create_subprocess_exec(*args, **kwargs)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_spawned_process)
+
+    async def cancel_running_call() -> bool:
+        task = asyncio.create_task(
+            runner.run("Analyze this brief.", ClarificationAnalysis, tmp_path)
+        )
+        for _ in range(100):
+            if spawned:
+                break
+            await asyncio.sleep(0.01)
+        assert spawned
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        process = spawned[0]
+        leaked = process.returncode is None
+        if leaked:
+            process.terminate()
+            await process.wait()
+        return leaked
+
+    assert asyncio.run(cancel_running_call()) is False
 
 
 def test_structured_runner_wraps_missing_cli_binary_as_execution_error(tmp_path: Path):

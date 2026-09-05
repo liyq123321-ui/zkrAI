@@ -496,7 +496,7 @@ async def test_legacy_rejection_is_not_reused_after_contract_upgrade(
 
     assert len(agent.calls) == 2
     assert "previous_breakdown" not in agent.calls[0][1]
-    assert agent.calls[0][1]["decomposition_contract_version"] == 4
+    assert agent.calls[0][1]["decomposition_contract_version"] == 5
 
 
 @pytest.mark.asyncio
@@ -633,7 +633,7 @@ async def test_resuming_same_command_retains_exhausted_semantic_budget(
             "input_refs": ["artifact:brief-1"],
             "canonical_breakdown": valid_breakdown.model_dump(mode="json"),
             "command_id": "same-command", "input_hash": "same-input", "repair_round": 2,
-            "decomposition_contract_version": 4,
+            "decomposition_contract_version": 5,
         }, response=source_review().model_dump(mode="json")))
     db_session.commit()
     agent = ScriptedAgentGateway(decompose_results=deque([valid_breakdown]),

@@ -6,6 +6,7 @@ import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 from typing import TypeVar
@@ -130,6 +131,11 @@ class CodexStructuredRunner:
             temp_dir = Path(directory)
             workspace_dir = temp_dir / "workspace"
             workspace_dir.mkdir()
+            runtime_home = temp_dir / "codex-home"
+            runtime_home.mkdir(mode=0o700)
+            source_auth = self.settings.codex_home / "auth.json"
+            if source_auth.is_file():
+                shutil.copy2(source_auth, runtime_home / "auth.json")
             schema_path = temp_dir / "output-schema.json"
             output_path = temp_dir / "output.json"
             schema_path.write_text(
@@ -164,7 +170,7 @@ class CodexStructuredRunner:
                 "-",
             ]
             env = os.environ.copy()
-            env["CODEX_HOME"] = str(self.settings.codex_home)
+            env["CODEX_HOME"] = str(runtime_home)
             try:
                 process = await asyncio.create_subprocess_exec(
                     *command,
@@ -195,16 +201,15 @@ class CodexStructuredRunner:
 
             stdout_task = asyncio.create_task(read_stdout())
             stderr_task = asyncio.create_task(read_stderr())
-            assert process.stdin is not None
-            process.stdin.write(prompt.encode("utf-8"))
-            await process.stdin.drain()
-            process.stdin.close()
-
             loop = asyncio.get_running_loop()
             hard_deadline = loop.time() + self.settings.codex_timeout_seconds
             inactivity = self.settings.codex_inactivity_timeout_seconds
             inactivity_deadline = loop.time() + inactivity
             try:
+                assert process.stdin is not None
+                process.stdin.write(prompt.encode("utf-8"))
+                await process.stdin.drain()
+                process.stdin.close()
                 while True:
                     hard_remaining = hard_deadline - loop.time()
                     if hard_remaining <= 0:
@@ -248,14 +253,16 @@ class CodexStructuredRunner:
                         f"Codex timed out after {self.settings.codex_timeout_seconds} seconds"
                     )
                 await asyncio.wait_for(process.wait(), timeout=hard_remaining)
-            except (AgentExecutionError, TimeoutError) as error:
+            except BaseException as error:
                 await self._terminate_and_reap(process)
                 await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
                 if isinstance(error, AgentExecutionError):
                     raise
-                raise AgentExecutionError(
-                    f"Codex timed out after {self.settings.codex_timeout_seconds} seconds"
-                ) from error
+                if isinstance(error, TimeoutError):
+                    raise AgentExecutionError(
+                        f"Codex timed out after {self.settings.codex_timeout_seconds} seconds"
+                    ) from error
+                raise
             await asyncio.gather(stdout_task, stderr_task)
 
             if process.returncode:

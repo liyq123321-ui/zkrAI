@@ -58,7 +58,7 @@ export CODEX_INACTIVITY_TIMEOUT_SECONDS='<seconds>'
 `CODEX_TIMEOUT_SECONDS` 限制一次 Codex 调用的总时长（默认 2,000 秒）；
 `CODEX_INACTIVITY_TIMEOUT_SECONDS` 限制连续收不到 Codex JSONL 事件的时长；默认跟随总调用上限（2,000 秒），避免误杀长时间无流式正文的正常结构化推理，也可在部署环境显式调小。后者用于终止已经失去活动迹象的子进程；等待期间服务每 30 秒更新一次安全的后台等待进度，不暴露模型正文。
 
-结构化 Agent 调用在一次性的中立临时工作目录中运行，并固定使用 `--ignore-user-config`；节点提示和业务证据由服务显式传入，不继承仓库中的 `AGENTS.md` 或用户级风格指令，避免这类元指令污染 PRD、任务名称或交付物合同。模型可继续通过 `CODEX_MODEL` 环境变量显式指定。
+结构化 Agent 调用在一次性的中立临时工作目录中运行，并固定使用 `--ignore-user-config`。每次调用还会创建仅复制 `auth.json` 的临时 `CODEX_HOME`，不加载用户级 `AGENTS.md`、记忆、技能或偏好；节点提示和业务证据只由服务显式传入，避免元指令污染 PRD、任务名称或交付物合同。模型可继续通过 `CODEX_MODEL` 环境变量显式指定。
 
 本服务没有单独的 health endpoint；可用 `POST /sessions` 或读取已有 Session 验证服务可用性。
 
