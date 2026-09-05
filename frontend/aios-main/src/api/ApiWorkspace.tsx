@@ -79,6 +79,9 @@ const workItemActionLabels: Partial<Record<CommandAction, string>> = {
 
 type WorkspaceTab = 'kanban' | 'flow' | 'audit';
 
+const STALE_STATE_RECOVERY_MESSAGE =
+  '状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。';
+
 const hierarchyColumns: Array<{ kind: NonNullable<WorkItemDto['kind']>; title: string; subtitle: string }> = [
   { kind: 'ROOT', title: '项目需求 (Root)', subtitle: '需求、PRD 与人工审核' },
   { kind: 'MILESTONE', title: '里程碑 (Milestones)', subtitle: '交付阶段与关键节点' },
@@ -476,7 +479,7 @@ export function ApiWorkspace() {
         throw new ApiError({
           status: 409,
           code: 'STALE_STATE',
-          message: '状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。',
+          message: STALE_STATE_RECOVERY_MESSAGE,
           retryable: true,
         });
       }
@@ -493,7 +496,10 @@ export function ApiWorkspace() {
     return completion;
   }
 
-  async function submitDecomposition(baseState: SessionStateDto) {
+  async function submitDecomposition(
+    baseState: SessionStateDto,
+    onAccepted?: () => void,
+  ) {
     const fingerprint = JSON.stringify({
       sessionId: baseState.session_id,
       action: 'convert_to_work_item',
@@ -506,7 +512,10 @@ export function ApiWorkspace() {
     const existing = commandObservations.current.get(
       decompositionObservationKey(baseState.session_id, commandId),
     );
-    if (existing) return existing.completion;
+    if (existing) {
+      onAccepted?.();
+      return existing.completion;
+    }
     pendingCommandIds.current.set(fingerprint, commandId);
     const submission = await executeCommand(baseState.session_id, {
       commandId,
@@ -518,6 +527,7 @@ export function ApiWorkspace() {
     }
     localStorage.setItem(decompositionJobKey(baseState.session_id), submission.command_id);
     setWorkflowProgress('PRD 已确认，正在后台拆解子 WorkItem 和 Agent Spec…');
+    onAccepted?.();
     try {
       return await observeDecomposition(baseState.session_id, submission);
     } finally {
@@ -610,7 +620,7 @@ export function ApiWorkspace() {
       if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
         pendingCommandIds.current.clear();
         await refreshResources(state.session_id).catch(() => undefined);
-        setError('状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。');
+        setError(STALE_STATE_RECOVERY_MESSAGE);
       } else if (normalized.code === 'REQUEST_TIMEOUT') {
         const refreshed = await refreshResources(state.session_id).catch(() => null);
         if (refreshed && refreshed.state.state_version !== state.state_version) {
@@ -643,7 +653,7 @@ export function ApiWorkspace() {
       if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
         pendingCommandIds.current.clear();
         await refreshResources(targetState.session_id).catch(() => undefined);
-        setError('状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。');
+        setError(STALE_STATE_RECOVERY_MESSAGE);
       } else {
         setError(errorText(reason));
       }
@@ -658,17 +668,18 @@ export function ApiWorkspace() {
     setBusy(true);
     setError(null);
     let nextState = targetState;
-    let decompositionStarted = false;
+    let decompositionRecoveryOwned = false;
     try {
       if (nextState.legal_actions.includes('approve')) {
         setWorkflowProgress('正在确认当前 PRD…');
         nextState = await submitCommand(nextState, 'approve', reviewNote || undefined);
       }
       if (nextState.legal_actions.includes('convert_to_work_item')) {
-        decompositionStarted = true;
-        nextState = await submitDecomposition(nextState);
+        nextState = await submitDecomposition(nextState, () => {
+          decompositionRecoveryOwned = true;
+        });
       }
-      if (!decompositionStarted) {
+      if (!decompositionRecoveryOwned) {
         const refreshed = await refreshResources(nextState.session_id);
         const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
         if (firstTask) setSelectedWorkItemId(firstTask.id);
@@ -678,7 +689,11 @@ export function ApiWorkspace() {
       if (normalized.code === 'REQUEST_ABORTED') {
         return;
       } else if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
-        setError(normalized.message);
+        if (!decompositionRecoveryOwned) {
+          pendingCommandIds.current.clear();
+          await refreshResources(targetState.session_id).catch(() => undefined);
+        }
+        setError(STALE_STATE_RECOVERY_MESSAGE);
         return;
       } else {
         setError(errorText(reason));
@@ -993,11 +1008,22 @@ export function ApiWorkspace() {
                       if (!state || busy) return;
                       setBusy(true);
                       setError(null);
-                      void submitDecomposition(state)
-                        .catch((reason) => {
-                          if (normalizeNetworkError(reason).code !== 'REQUEST_ABORTED') {
-                            setError(errorText(reason));
+                      let decompositionRecoveryOwned = false;
+                      void submitDecomposition(state, () => {
+                        decompositionRecoveryOwned = true;
+                      })
+                        .catch(async (reason) => {
+                          const normalized = normalizeNetworkError(reason);
+                          if (normalized.code === 'REQUEST_ABORTED') return;
+                          if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
+                            if (!decompositionRecoveryOwned) {
+                              pendingCommandIds.current.clear();
+                              await refreshResources(state.session_id).catch(() => undefined);
+                            }
+                            setError(STALE_STATE_RECOVERY_MESSAGE);
+                            return;
                           }
+                          setError(errorText(reason));
                         })
                         .finally(() => { setWorkflowProgress(null); setBusy(false); });
                     }} className="ff-secondary-button">

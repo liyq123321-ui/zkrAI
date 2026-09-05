@@ -81,6 +81,7 @@ beforeEach(() => {
     }
     const queuedPayload = resourceOverrideSequences[path]?.shift();
     if (queuedPayload !== undefined) {
+      if (queuedPayload instanceof Response) return queuedPayload;
       return new Response(JSON.stringify(queuedPayload), {status:200});
     }
     const payloads: Record<string, unknown> = {
@@ -800,6 +801,7 @@ describe('workspace regression', () => {
     expect(screen.getAllByText(/状态已被其他操作更新。页面已刷新/)).not.toHaveLength(0);
     expect(screen.queryByText(/backend-internal stale comparison detail/)).toBeNull();
     expect(WorkspaceEventSource.instances[0].close).toHaveBeenCalledTimes(1);
+    expect(getRequestCount('/sessions/session-1/state')).toBe(2);
 
     decompose = dialog.getByRole('button', { name: '开始任务拆分' });
     expect((decompose as HTMLButtonElement).disabled).toBe(false);
@@ -812,6 +814,146 @@ describe('workspace regression', () => {
     ]);
     expect(WorkspaceEventSource.instances).toHaveLength(2);
     expect(WorkspaceEventSource.instances[1].url).toContain(retryCommandId);
+  });
+
+  it('refreshes after synchronous approval becomes stale before decomposition is accepted', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const reviewState = {
+      ...state,
+      current_spec_status: 'HUMAN_REVIEW' as const,
+      legal_actions: ['approve'] as SessionStateDto['legal_actions'],
+      review_findings: [],
+    };
+    const concurrentState = {
+      ...reviewState,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+      state_version: reviewState.state_version + 1,
+    };
+    const approveCommandId = '00000000-0000-4000-8000-000000000011';
+    const decomposeCommandId = '00000000-0000-4000-8000-000000000012';
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce(approveCommandId)
+      .mockReturnValueOnce(decomposeCommandId);
+    resourceOverrideSequences['/sessions/session-1/state'] = [reviewState];
+    resourceOverrides['/sessions/session-1/state'] = concurrentState;
+    resourceOverrideSequences['/sessions/session-1/commands'] = [
+      new Response(JSON.stringify({
+        detail: {
+          code: 'STALE_STATE',
+          message: 'internal approve expected=6 actual=7',
+          errors: [],
+        },
+      }), { status: 409 }),
+      {
+        command_id: decomposeCommandId,
+        status: 'pending',
+        status_url: `/sessions/session-1/commands/${decomposeCommandId}`,
+        events_url: `/sessions/session-1/commands/${decomposeCommandId}/events`,
+      },
+    ];
+
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const approve = dialog.getByRole('button', { name: '确认当前 PRD，进入任务拆分' });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(approve);
+
+    await waitFor(() => expect(getRequestCount('/sessions/session-1/state')).toBe(2));
+    expect(commandPostBodies()).toEqual([{
+      command_id: approveCommandId,
+      action: 'approve',
+      expected_state_version: reviewState.state_version,
+      payload: {},
+    }]);
+    expect(screen.getAllByText('状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。')).not.toHaveLength(0);
+    expect(screen.queryByText(/internal approve expected=6 actual=7/)).toBeNull();
+    expect(WorkspaceEventSource.instances).toHaveLength(0);
+
+    const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    expect((decompose as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(decompose);
+
+    await waitFor(() => expect(commandPostBodies()).toHaveLength(2));
+    expect(commandPostBodies()[1]).toEqual({
+      command_id: decomposeCommandId,
+      action: 'convert_to_work_item',
+      expected_state_version: concurrentState.state_version,
+      payload: {},
+    });
+    expect(WorkspaceEventSource.instances).toHaveLength(1);
+    expect(WorkspaceEventSource.instances[0].url).toContain(decomposeCommandId);
+  });
+
+  it('refreshes and rotates identity when decomposition POST is stale before acceptance', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const approvedState = {
+      ...state,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+    };
+    const concurrentState = {
+      ...approvedState,
+      state_version: approvedState.state_version + 1,
+    };
+    const staleCommandId = '00000000-0000-4000-8000-000000000021';
+    const retryCommandId = '00000000-0000-4000-8000-000000000022';
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce(staleCommandId)
+      .mockReturnValueOnce(retryCommandId);
+    resourceOverrideSequences['/sessions/session-1/state'] = [approvedState];
+    resourceOverrides['/sessions/session-1/state'] = concurrentState;
+    resourceOverrideSequences['/sessions/session-1/commands'] = [
+      new Response(JSON.stringify({
+        detail: {
+          code: 'STALE_STATE',
+          message: 'internal decomposition expected=6 actual=7',
+          errors: [],
+        },
+      }), { status: 409 }),
+      {
+        command_id: retryCommandId,
+        status: 'pending',
+        status_url: `/sessions/session-1/commands/${retryCommandId}`,
+        events_url: `/sessions/session-1/commands/${retryCommandId}/events`,
+      },
+    ];
+
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    let decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
+
+    fireEvent.click(decompose);
+
+    await waitFor(() => expect(getRequestCount('/sessions/session-1/state')).toBe(2));
+    expect(commandPostBodies()).toEqual([{
+      command_id: staleCommandId,
+      action: 'convert_to_work_item',
+      expected_state_version: approvedState.state_version,
+      payload: {},
+    }]);
+    expect(screen.getAllByText('状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。')).not.toHaveLength(0);
+    expect(screen.queryByText(/internal decomposition expected=6 actual=7/)).toBeNull();
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBeNull();
+    expect(WorkspaceEventSource.instances).toHaveLength(0);
+
+    decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    expect((decompose as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(decompose);
+
+    await waitFor(() => expect(commandPostBodies()).toHaveLength(2));
+    expect(commandPostBodies()[1]).toEqual({
+      command_id: retryCommandId,
+      action: 'convert_to_work_item',
+      expected_state_version: concurrentState.state_version,
+      payload: {},
+    });
+    expect(WorkspaceEventSource.instances).toHaveLength(1);
+    expect(WorkspaceEventSource.instances[0].url).toContain(retryCommandId);
   });
 
   it('keeps a succeeded job recoverable until its failed resource refresh later succeeds', async () => {
