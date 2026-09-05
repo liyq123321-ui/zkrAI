@@ -329,6 +329,20 @@ WebGUI 会在该命令成功后自动调用 `create_spec`，因此用户只需�
 
 仅在 `REVIEW + APPROVED` 合法。拆解按三个持久阶段执行：PM Agent 先生成不含实施计划的基础任务树；系统验证任务层级、依赖、来源、必填输出和验收映射后，以最多两个并发调用逐任务生成 `implementation_plan`；最后 Reviewer Agent 审核组装后的完整拆解（包括排除项是否被违反）。所有验证和 Reviewer 都通过后，才在一个事务中持久化 WorkItem、依赖和 Agent Spec。
 
+拆解是异步命令：服务在持久化 command job 后立即返回 `202 Accepted`，而不是等待 Agent 完成。提交响应包含稳定的 `command_id`、`status`、`status_url` 与 `events_url`；请使用相同的 command ID 查询和观察该 job。其余命令仍在完成后返回普通的 `200` CommandResult。
+
+```bash
+curl -i -X POST http://127.0.0.1:8088/sessions/SESSION_ID/commands \
+  -H 'Content-Type: application/json' \
+  -d '{"command_id":"COMMAND_ID","action":"convert_to_work_item","expected_state_version":7,"payload":{}}'
+
+curl http://127.0.0.1:8088/sessions/SESSION_ID/commands/COMMAND_ID
+
+curl -N http://127.0.0.1:8088/sessions/SESSION_ID/commands/COMMAND_ID/events
+```
+
+`GET .../commands/COMMAND_ID` 返回持久状态快照（`pending`、`processing`、`succeeded` 或 `failed`）。SSE 是实时通知通道，客户端不能只依赖它；随附前端同时每 5,000 ms 轮询该状态端点，使 SSE 断连或遗漏帧时仍能取得终态。重启进程会使原有的内存 runner 丢失，启动恢复会把未完成的 job 标记为 `PROCESS_INTERRUPTED`；此后可使用完全相同的 command ID 重新提交，服务会重新调度该持久 job。
+
 基础拆解和每个已通过验证的任务计划都会作为可恢复检查点保留。显式重试时，服务只复用与同一项目 UUID、已批准 Spec UUID/内容哈希、输入引用、基础调用 UUID 和任务内容哈希完全匹配的结果，并为当前命令创建新的采用证据；不会按项目名、任务名或裸 `FR-*` 标识查找。某个任务规划失败不会写入半成品业务行，重试只补缺失任务。最终审核若仅指出 `implementation_plan` 路径，会只重做对应任务计划；任务边界问题仍回到基础拆解修订。Spec 发生变化时，旧检查点自动失效。
 
 ```json
