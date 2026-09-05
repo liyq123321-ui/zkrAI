@@ -27,6 +27,7 @@ import type {
   WorkItemDto,
 } from './dto';
 import { ApiError, normalizeNetworkError } from './errors';
+import { AgentRuntimePanel } from './AgentRuntimePanel';
 import { AuditTrail } from './AuditTrail';
 import { AgentSpecDetail, type WorkItemPreview } from './AgentSpecDetail';
 import { getEmployeeOptions } from './employeeDirectory';
@@ -209,6 +210,10 @@ export function ApiWorkspace() {
   }, []);
 
   const projectList = useMemo(() => Object.values(projects), [projects]);
+  const runtimeProjects = useMemo(() => projectList.map((project) => ({
+    sessionId: project.state.session_id,
+    title: projectTitle(project),
+  })), [projectList]);
   const allResources = useMemo<ResourceBundle>(() => ({
     specs: projectList.flatMap((project) => project.resources.specs),
     workItems: projectList.flatMap((project) => project.resources.workItems),
@@ -991,6 +996,7 @@ export function ApiWorkspace() {
         <section className={activeTab === 'audit' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'audit'}>
           <div className="ff-audit-scroll">
             {activeTab === 'audit' && error && <div role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{error}</span></div>}
+            {activeTab === 'audit' && <AgentRuntimePanel projects={runtimeProjects} />}
             <AuditTrail events={allResources.events} specs={allResources.specs} />
           </div>
         </section>

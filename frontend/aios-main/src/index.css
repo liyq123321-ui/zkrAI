@@ -1842,6 +1842,173 @@ button:disabled {
   padding: 16px;
 }
 
+.ff-agent-runtime {
+  margin-bottom: 14px;
+  overflow: hidden;
+  border: 1px solid #cbd6e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #263244;
+  font-size: 12px;
+}
+
+.ff-agent-runtime-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid #e3e9ef;
+}
+
+.ff-agent-runtime-header h2,
+.ff-agent-runtime-header p,
+.ff-agent-runtime-project h3,
+.ff-agent-runtime-project p {
+  margin: 0;
+}
+
+.ff-agent-runtime-header h2,
+.ff-agent-runtime-project h3 {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ff-agent-runtime-header p {
+  color: #788395;
+  font-size: 11px;
+}
+
+.ff-agent-runtime-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  background: #f7f9fb;
+}
+
+.ff-agent-runtime-metrics > div {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #dde5ec;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.ff-agent-runtime-metrics dt {
+  color: #788395;
+  font-size: 10px;
+}
+
+.ff-agent-runtime-metrics dd {
+  margin: 3px 0 0;
+  color: #263244;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.ff-agent-runtime-warning {
+  margin: 0 14px 12px;
+  padding: 8px 10px;
+  border: 1px solid #ead7a5;
+  border-radius: 7px;
+  background: #fff9e8;
+  color: #775b18;
+  font-size: 11px;
+}
+
+.ff-agent-runtime-projects,
+.ff-agent-runtime-agent-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ff-agent-runtime-projects {
+  padding: 0 14px 14px;
+}
+
+.ff-agent-runtime-project {
+  padding: 10px;
+  border: 1px solid #dde5ec;
+  border-radius: 7px;
+}
+
+.ff-agent-runtime-project h3 {
+  margin-bottom: 8px;
+}
+
+.ff-agent-runtime-project ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ff-agent-runtime-agent,
+.ff-agent-runtime-project li {
+  display: grid;
+  grid-template-columns: minmax(150px, .8fr) minmax(220px, 1.4fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid #edf1f4;
+}
+
+.ff-agent-runtime-project li:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.ff-agent-runtime-project li > div {
+  display: grid;
+  gap: 3px;
+}
+
+.ff-agent-runtime-project li strong {
+  font-size: 12px;
+}
+
+.ff-agent-runtime-project li span,
+.ff-agent-runtime .is-running,
+.ff-agent-runtime .is-completed,
+.ff-agent-runtime .is-error {
+  width: fit-content;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ff-agent-runtime-project li span,
+.ff-agent-runtime .is-running {
+  background: #eaf4ec;
+  color: #26713b;
+}
+
+.ff-agent-runtime .is-completed {
+  background: #e8f0fa;
+  color: #376a9e;
+}
+
+.ff-agent-runtime .is-error {
+  background: #fdecec;
+  color: #b04242;
+}
+
+.ff-agent-runtime-project li p {
+  color: #657286;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+@media (max-width: 760px) {
+  .ff-agent-runtime-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ff-agent-runtime-agent,
+  .ff-agent-runtime-project li { grid-template-columns: 1fr; }
+}
+
 .ff-spec-detail {
   color: #263244;
 }
