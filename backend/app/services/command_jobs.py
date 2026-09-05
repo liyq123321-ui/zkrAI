@@ -5,11 +5,11 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
-from time import monotonic
+from time import monotonic, sleep
 from uuid import uuid4
 
 from sqlalchemy import update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.database.models import CommandJob, Project
@@ -27,6 +27,9 @@ from app.services.error_classification import classify_workflow_error
 
 CommandExecutor = Callable[[str, SessionCommandRequest], Awaitable[CommandResult]]
 TERMINAL = frozenset({"succeeded", "failed"})
+_SQLITE_LOCK_RETRY_SECONDS = 1.0
+_SQLITE_LOCK_INITIAL_DELAY = 0.005
+_SQLITE_LOCK_MAX_DELAY = 0.05
 
 
 def _now() -> datetime:
@@ -60,6 +63,11 @@ def _sse(snapshot: CommandJobRead) -> str:
     )
 
 
+def _is_sqlite_lock(error: OperationalError) -> bool:
+    message = str(error.orig).lower()
+    return "database is locked" in message or "database table is locked" in message
+
+
 class CommandJobCoordinator:
     """Submit, claim, and persist results for one durable command job."""
 
@@ -76,6 +84,21 @@ class CommandJobCoordinator:
             raise ValueError("only decomposition commands may use background jobs")
 
         digest = _input_hash(request)
+        deadline = monotonic() + _SQLITE_LOCK_RETRY_SECONDS
+        delay = _SQLITE_LOCK_INITIAL_DELAY
+        while True:
+            try:
+                return self._submit_once(session_id, request, digest)
+            except OperationalError as error:
+                remaining = deadline - monotonic()
+                if remaining <= 0 or not _is_sqlite_lock(error):
+                    raise
+                sleep(min(delay, remaining))
+                delay = min(delay * 2, _SQLITE_LOCK_MAX_DELAY)
+
+    def _submit_once(
+        self, session_id: str, request: SessionCommandRequest, digest: str
+    ) -> tuple[CommandJobAccepted, bool]:
         with self._session_factory() as db:
             with db.begin():
                 project = db.query(Project).filter_by(session_id=session_id).one_or_none()

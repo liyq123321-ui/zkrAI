@@ -1,8 +1,16 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Barrier, Event, Lock
 
 import pytest
+from sqlalchemy import event
 
+from app.database.database import (
+    create_engine_for_url,
+    init_database,
+    make_session_factory,
+)
 from app.database.models import CommandJob, Project
 from app.domain.types import CommandAction
 from app.schemas.workflow import CommandResult, SessionCommandRequest, SessionState
@@ -55,6 +63,48 @@ def seed_project(session_factory):
         db.commit()
 
 
+@pytest.fixture
+def file_session_factory(tmp_path):
+    engine = create_engine_for_url(f"sqlite:///{tmp_path / 'command-jobs.sqlite'}")
+
+    @event.listens_for(engine, "connect")
+    def disable_sqlite_lock_wait(dbapi_connection, connection_record):
+        dbapi_connection.execute("PRAGMA busy_timeout = 0")
+
+    init_database(engine)
+    yield make_session_factory(engine)
+    engine.dispose()
+
+
+def concurrent_submissions(engine, coordinator, requests):
+    barrier = Barrier(len(requests))
+    lock = Lock()
+    reads = 0
+
+    def synchronize_after_initial_job_read(
+        connection, cursor, statement, parameters, context, executemany
+    ):
+        nonlocal reads
+        if "FROM command_jobs" not in statement:
+            return
+        with lock:
+            if reads >= len(requests):
+                return
+            reads += 1
+        barrier.wait(timeout=5)
+
+    event.listen(engine, "after_cursor_execute", synchronize_after_initial_job_read)
+    try:
+        with ThreadPoolExecutor(max_workers=len(requests)) as pool:
+            futures = [
+                pool.submit(coordinator.submit, "session-1", command)
+                for command in requests
+            ]
+            return [future.result(timeout=10) for future in futures]
+    finally:
+        event.remove(engine, "after_cursor_execute", synchronize_after_initial_job_read)
+
+
 @pytest.mark.asyncio
 async def test_job_moves_to_succeeded_and_persists_original_result(session_factory):
     seed_project(session_factory)
@@ -100,6 +150,94 @@ def test_duplicate_submission_is_idempotent_and_conflicting_input_is_rejected(se
     changed = request().model_copy(update={"expected_state_version": 8})
     with pytest.raises(CommandConflict):
         coordinator.submit("session-1", changed)
+
+
+def test_file_sqlite_simultaneous_identical_submissions_converge(file_session_factory):
+    seed_project(file_session_factory)
+
+    async def execute(session_id, command):
+        raise AssertionError("executor is not called by submit")
+
+    coordinator = CommandJobCoordinator(file_session_factory, execute)
+    results = concurrent_submissions(
+        file_session_factory.kw["bind"], coordinator, [request(), request()]
+    )
+
+    accepted = [result[0] for result in results]
+    assert accepted[0] == accepted[1]
+    assert sum(should_schedule for _, should_schedule in results) == 1
+
+
+def test_file_sqlite_simultaneous_conflicting_submissions_converge(file_session_factory):
+    seed_project(file_session_factory)
+
+    async def execute(session_id, command):
+        raise AssertionError("executor is not called by submit")
+
+    coordinator = CommandJobCoordinator(file_session_factory, execute)
+    first, second = request(), request().model_copy(
+        update={"expected_state_version": 8}
+    )
+    with pytest.raises(CommandConflict):
+        concurrent_submissions(file_session_factory.kw["bind"], coordinator, [first, second])
+
+    with file_session_factory() as db:
+        assert db.query(CommandJob).count() == 1
+
+
+def test_file_sqlite_simultaneous_failed_retries_schedule_once(file_session_factory):
+    seed_project(file_session_factory)
+
+    async def execute(session_id, command):
+        raise AssertionError("executor is not called by submit")
+
+    coordinator = CommandJobCoordinator(file_session_factory, execute)
+    coordinator.submit("session-1", request())
+    assert coordinator.mark_interrupted_jobs() == 1
+
+    results = concurrent_submissions(
+        file_session_factory.kw["bind"], coordinator, [request(), request()]
+    )
+
+    assert [accepted.status for accepted, _ in results] == ["pending", "pending"]
+    assert sum(should_schedule for _, should_schedule in results) == 1
+    assert coordinator.get("session-1", "decompose-1").status_version == 3
+
+
+def test_file_sqlite_submission_waits_through_transient_writer_lock(file_session_factory):
+    seed_project(file_session_factory)
+
+    async def execute(session_id, command):
+        raise AssertionError("executor is not called by submit")
+
+    coordinator = CommandJobCoordinator(file_session_factory, execute)
+    engine = file_session_factory.kw["bind"]
+    lock_holder = engine.connect()
+    lock_holder.exec_driver_sql("BEGIN IMMEDIATE")
+    lock_conflict = Event()
+
+    def observe_locked_insert(exception_context):
+        if (
+            "INSERT INTO command_jobs" in (exception_context.statement or "")
+            and "database is locked" in str(exception_context.original_exception)
+        ):
+            lock_conflict.set()
+
+    event.listen(engine, "handle_error", observe_locked_insert)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(coordinator.submit, "session-1", request())
+            assert lock_conflict.wait(timeout=2)
+            lock_holder.rollback()
+            accepted, should_schedule = pending.result(timeout=5)
+    finally:
+        event.remove(engine, "handle_error", observe_locked_insert)
+        if lock_holder.in_transaction():
+            lock_holder.rollback()
+        lock_holder.close()
+
+    assert accepted.status == "pending"
+    assert should_schedule is True
 
 
 @pytest.mark.asyncio
