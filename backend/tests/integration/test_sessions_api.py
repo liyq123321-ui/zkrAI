@@ -1,12 +1,15 @@
 """HTTP contract coverage for project workflow sessions."""
 
 from collections import deque
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.agents.codex import AgentExecutionError, AgentOutputError
 from app.database.models import (
     AgentCall,
+    AgentSession,
     AuditEvent,
     ClarificationRequest,
     ClarificationResponse,
@@ -15,6 +18,7 @@ from app.database.models import (
 )
 from app.domain.types import ClarificationAnalysis, ReviewVerdict, SemanticReview
 from app.services.decomposition_service import BreakdownValidationError, DecompositionService
+from app.services.query_service import QueryService
 from main import create_app
 from tests.helpers.factories import (
     make_complete_brief,
@@ -244,6 +248,101 @@ def test_public_events_include_safe_agent_trace_without_raw_inputs_or_outputs(se
     assert trace["payload"]["phase"] == "analyze_brief"
     assert trace["payload"]["status"] == "done"
     assert secret not in events.text
+
+
+def test_agent_runtime_returns_latest_safe_status_per_started_agent(session_factory):
+    with session_factory() as db:
+        project = Project(
+            id="runtime-project",
+            session_id="runtime-session",
+            creation_request_id="runtime-request",
+            brief={"final_objective": "Runtime dashboard"},
+            final_approver="owner-1",
+            project_manager_ids=["owner-1"],
+            root_owner_ids=["owner-1"],
+        )
+        other = Project(
+            id="other-project",
+            session_id="other-session",
+            creation_request_id="other-request",
+            brief={"final_objective": "Other"},
+            final_approver="owner-1",
+            project_manager_ids=["owner-1"],
+            root_owner_ids=["owner-1"],
+        )
+        started = datetime(2026, 9, 6, 2, 0, tzinfo=timezone.utc)
+        db.add_all([
+            project,
+            other,
+            AgentSession(id="agent-running", project_id=project.id, role="PM", provider="codex", model="gpt-test", purpose="Plan work", created_at=started),
+            AgentSession(id="agent-error", project_id=project.id, role="Reviewer", provider="codex", model=None, purpose="Review work", created_at=started + timedelta(seconds=1)),
+            AgentSession(id="agent-unused", project_id=project.id, role="Unused", provider=None, model=None, purpose=None, created_at=started + timedelta(seconds=2)),
+            AgentSession(id="agent-other", project_id=other.id, role="Other", provider=None, model=None, purpose=None, created_at=started),
+            AgentCall(id="run-old", project_id=project.id, agent_session_id="agent-running", operation="analyze_brief", request={"secret": "do-not-return"}, response={"secret": "do-not-return"}, status="SUCCEEDED", started_at=started, completed_at=started + timedelta(seconds=10)),
+            AgentCall(id="run-new", project_id=project.id, agent_session_id="agent-running", operation="decompose_spec", request={"secret": "do-not-return"}, status="PENDING", started_at=started + timedelta(minutes=1)),
+            AgentCall(id="error-call", project_id=project.id, agent_session_id="agent-error", operation="review_spec", request={}, status="FAILED", error="private traceback", started_at=started + timedelta(minutes=2), completed_at=started + timedelta(minutes=3)),
+            AgentCall(id="other-call", project_id=other.id, agent_session_id="agent-other", operation="generate_spec", request={}, status="RESULT_READY", started_at=started),
+        ])
+        db.commit()
+
+    with TestClient(create_app(session_factory=session_factory)) as client:
+        response = client.get("/sessions/runtime-session/agents/runtime")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "agent_session_id": "agent-running",
+            "project_id": "runtime-project",
+            "role": "PM",
+            "provider": "codex",
+            "model": "gpt-test",
+            "purpose": "Plan work",
+            "status": "running",
+            "current_operation": "decompose_spec",
+            "current_summary": "Decomposing the approved specification",
+            "current_call_id": "run-new",
+            "started_at": "2026-09-06T02:01:00Z",
+            "completed_at": None,
+            "call_count": 2,
+        },
+        {
+            "agent_session_id": "agent-error",
+            "project_id": "runtime-project",
+            "role": "Reviewer",
+            "provider": "codex",
+            "model": None,
+            "purpose": "Review work",
+            "status": "error",
+            "current_operation": "review_spec",
+            "current_summary": "Reviewing specification quality",
+            "current_call_id": "error-call",
+            "started_at": "2026-09-06T02:02:00Z",
+            "completed_at": "2026-09-06T02:03:00Z",
+            "call_count": 1,
+        },
+    ]
+    serialized = response.text
+    assert "do-not-return" not in serialized
+    assert "private traceback" not in serialized
+    assert "agent-unused" not in serialized
+    assert "agent-other" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("stored", "public"),
+    [
+        ("PENDING", "running"),
+        ("PREPARING", "running"),
+        ("RESULT_READY", "completed"),
+        ("SUCCEEDED", "completed"),
+        ("COMPLETED", "completed"),
+        ("NO_CHANGE", "completed"),
+        ("FAILED", "error"),
+        ("AMBIGUOUS", "error"),
+    ],
+)
+def test_agent_runtime_status_mapping_is_stable(stored, public):
+    assert QueryService._agent_runtime_status(stored) == public
 
 
 def test_restore_historical_spec_creates_a_new_reviewed_revision(session_factory):

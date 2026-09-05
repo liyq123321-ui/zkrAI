@@ -16,6 +16,7 @@ from app.services.error_classification import classify_workflow_error
 from app.services.execution_service import ExecutionService
 from app.services.project_service import ProjectService
 from app.services.query_service import (
+    AgentRuntimeRead,
     AgentSpecRead,
     AuditEventRead,
     QueryService,
@@ -153,6 +154,13 @@ def build_router(
     def get_work_item(session_id: str, work_item_id: str) -> WorkItemRead:
         try:
             return queries.work_item(session_id, work_item_id)
+        except Exception as error:
+            raise http_error(error) from error
+
+    @router.get("/{session_id}/agents/runtime", response_model=list[AgentRuntimeRead])
+    def list_agent_runtime(session_id: str) -> list[AgentRuntimeRead]:
+        try:
+            return queries.agent_runtime(session_id)
         except Exception as error:
             raise http_error(error) from error
 

@@ -1,7 +1,7 @@
 """Detached, deterministic read models for workflow resources."""
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database.models import (
     AgentSpec,
     AgentCall,
+    AgentSession,
     AuditEvent,
     Project,
     SpecReview,
@@ -27,6 +28,18 @@ from app.services.execution_graph import (
     startable_work_item_ids,
 )
 from app.services.state_projection import project_state
+
+
+AGENT_OPERATION_SUMMARIES = {
+    "analyze_brief": "Analyzing project brief completeness",
+    "generate_spec": "Generating a project specification",
+    "review_spec": "Reviewing specification quality",
+    "decompose_spec": "Decomposing the approved specification",
+    "plan_task": "Defining task implementation steps and interfaces",
+    "review_breakdown": "Reviewing work-item decomposition",
+    "rewrite_prd": "Applying authoritative PRD review comments",
+    "restore_spec": "Restoring historical specification content",
+}
 
 
 class SessionSummaryRead(BaseModel):
@@ -127,6 +140,24 @@ class AuditEventRead(BaseModel):
     actor_id: str | None
     payload: dict[str, object]
     created_at: datetime
+
+
+class AgentRuntimeRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_session_id: str
+    project_id: str
+    role: str
+    provider: str | None
+    model: str | None
+    purpose: str | None
+    status: str
+    current_operation: str
+    current_summary: str
+    current_call_id: str
+    started_at: datetime
+    completed_at: datetime | None
+    call_count: int
 
 
 class QueryService:
@@ -285,6 +316,51 @@ class QueryService:
             public_events.sort(key=lambda item: (item.created_at, item.id))
             return public_events
 
+    def agent_runtime(self, session_id: str) -> list[AgentRuntimeRead]:
+        with self._session_factory() as db:
+            project = self._project(db, session_id)
+            sessions = (
+                db.query(AgentSession)
+                .filter_by(project_id=project.id)
+                .order_by(AgentSession.created_at, AgentSession.id)
+                .all()
+            )
+            calls = (
+                db.query(AgentCall)
+                .filter_by(project_id=project.id)
+                .order_by(AgentCall.started_at, AgentCall.id)
+                .all()
+            )
+            calls_by_session: dict[str, list[AgentCall]] = {}
+            for call in calls:
+                calls_by_session.setdefault(call.agent_session_id, []).append(call)
+            result: list[AgentRuntimeRead] = []
+            for agent in sessions:
+                agent_calls = calls_by_session.get(agent.id, [])
+                if not agent_calls:
+                    continue
+                latest = agent_calls[-1]
+                result.append(AgentRuntimeRead(
+                    agent_session_id=agent.id,
+                    project_id=project.id,
+                    role=agent.role,
+                    provider=agent.provider,
+                    model=agent.model,
+                    purpose=agent.purpose,
+                    status=self._agent_runtime_status(latest.status),
+                    current_operation=latest.operation,
+                    current_summary=self._agent_operation_summary(latest.operation),
+                    current_call_id=latest.id,
+                    started_at=self._as_utc(latest.started_at),
+                    completed_at=(
+                        self._as_utc(latest.completed_at)
+                        if latest.completed_at is not None
+                        else None
+                    ),
+                    call_count=len(agent_calls),
+                ))
+            return result
+
     @staticmethod
     def _safe_hash(value: object) -> str:
         canonical = json.dumps(
@@ -296,16 +372,6 @@ class QueryService:
     def _agent_trace_read(
         cls, project: Project, call: AgentCall, sequence: int
     ) -> AuditEventRead:
-        summaries = {
-            "analyze_brief": "Analyzing project brief completeness",
-            "generate_spec": "Generating a project specification",
-            "review_spec": "Reviewing specification quality",
-            "decompose_spec": "Decomposing the approved specification",
-            "plan_task": "Defining task implementation steps and interfaces",
-            "review_breakdown": "Reviewing work-item decomposition",
-            "rewrite_prd": "Applying authoritative PRD review comments",
-            "restore_spec": "Restoring historical specification content",
-        }
         request = dict(call.request or {})
         done_statuses = {"RESULT_READY", "SUCCEEDED", "COMPLETED", "NO_CHANGE"}
         status = (
@@ -334,7 +400,7 @@ class QueryService:
                 "agent_call_id": call.id,
                 "sequence": sequence,
                 "phase": call.operation,
-                "summary": summaries.get(call.operation, "Processing an Agent stage"),
+                "summary": cls._agent_operation_summary(call.operation),
                 "input_hash": cls._safe_hash(request),
                 "output_hash": (
                     cls._safe_hash(call.response) if call.response is not None else None
@@ -347,6 +413,26 @@ class QueryService:
                 "safe_error_code": safe_error_code,
             },
             created_at=call.started_at,
+        )
+
+    @staticmethod
+    def _agent_runtime_status(status: str) -> str:
+        if status in {"FAILED", "AMBIGUOUS"}:
+            return "error"
+        if status in {"RESULT_READY", "SUCCEEDED", "COMPLETED", "NO_CHANGE"}:
+            return "completed"
+        return "running"
+
+    @staticmethod
+    def _agent_operation_summary(operation: str) -> str:
+        return AGENT_OPERATION_SUMMARIES.get(operation, "Processing an Agent stage")
+
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        return (
+            value.replace(tzinfo=timezone.utc)
+            if value.tzinfo is None
+            else value.astimezone(timezone.utc)
         )
 
     @staticmethod
