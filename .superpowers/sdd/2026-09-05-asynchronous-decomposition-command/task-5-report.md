@@ -98,3 +98,10 @@ recoverable on a later observation attempt.
 
 Focused verification: `npm test -- src/api/workspace.test.tsx src/api/commandJobs.test.ts`
 (44 tests passed) and `npm run lint` (`tsc --noEmit` passed).
+
+## Fix Round 3
+
+The monotonic Session-state check now runs inside `useWorkspaceProjects`'s
+functional `setProjects` transition. This makes the comparison atomic with
+React's queued project updates, so an older terminal command state cannot be
+committed after a newer state queued in the same render cycle.

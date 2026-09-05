@@ -201,8 +201,6 @@ export function ApiWorkspace() {
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const reconciledDecompositionJobs = useRef(new Set<string>());
   const reconcilingDecompositionJobs = useRef(new Set<string>());
-  const latestProjects = useRef(projects);
-  latestProjects.current = projects;
 
   const decompositionJobKey = (sessionId: string) =>
     `firstflight.decomposition-job.${sessionId}`;
@@ -398,10 +396,7 @@ export function ApiWorkspace() {
     if (reconcilingDecompositionJobs.current.has(reconciliationKey)) return result.state;
     reconcilingDecompositionJobs.current.add(reconciliationKey);
     try {
-      const currentState = latestProjects.current[result.state.session_id]?.state;
-      if (!currentState || result.state.state_version >= currentState.state_version) {
-        updateSessionState(result.state);
-      }
+      updateSessionState(result.state);
       const refreshed = await refreshResources(result.state.session_id);
       const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
       if (firstTask) setSelectedWorkItemId(firstTask.id);

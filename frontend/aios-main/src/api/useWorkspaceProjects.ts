@@ -38,9 +38,14 @@ export function useWorkspaceProjects() {
   }, []);
 
   const updateSessionState = useCallback((state: SessionStateDto) => {
-    setProjects((previous) => ({ ...previous, [state.session_id]: {
-      state, resources: previous[state.session_id]?.resources ?? emptyResources,
-    } }));
+    setProjects((previous) => {
+      if ((previous[state.session_id]?.state.state_version ?? -1) > state.state_version) {
+        return previous;
+      }
+      return { ...previous, [state.session_id]: {
+        state, resources: previous[state.session_id]?.resources ?? emptyResources,
+      } };
+    });
   }, []);
 
   const refreshResources = useCallback(async (sessionId: string, signal?: AbortSignal) => {
