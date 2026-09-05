@@ -105,3 +105,42 @@ The monotonic Session-state check now runs inside `useWorkspaceProjects`'s
 functional `setProjects` transition. This makes the comparison atomic with
 React's queued project updates, so an older terminal command state cannot be
 committed after a newer state queued in the same render cycle.
+
+## Fix Round 4
+
+Closed the remaining test-evidence gaps without changing production behavior:
+
+- A hook-backed workspace harness queues Session version 9 and then reconciles
+  an older terminal version 7 in the same click batch. The rendered state stays
+  at `9:COMPLETE`, exercising the functional updater ordering rather than
+  comparing two separately rendered snapshots.
+- A reload-restored succeeded job now has explicit refresh-recovery coverage.
+  Its first terminal reconciliation gets a 503 while refreshing Session
+  resources; the saved command ID remains and the error is visible. Switching
+  projects away and back replays the same terminal job, performs a second
+  reconciliation refresh successfully, and only then removes local storage.
+
+Mutation/regression evidence:
+
+```text
+# Remove the state-version guard from the functional project update
+npm test -- src/api/workspace.test.tsx -t "older terminal result"
+FAIL: expected 9:COMPLETE, received 7:AGENT_SPECS_READY
+
+# Mark a decomposition reconciliation complete before refreshResources
+npm test -- src/api/workspace.test.tsx -t "failed resource refresh"
+FAIL: expected 3 Session-state GETs, received 2 (the retry was suppressed)
+```
+
+The production code was restored after both mutations. Fresh GREEN evidence:
+
+```text
+npm test -- src/api/workspace.test.tsx src/api/commandJobs.test.ts
+2 files / 46 tests passed
+
+npm test
+8 files / 73 tests passed
+
+npm run lint
+tsc --noEmit passed
+```

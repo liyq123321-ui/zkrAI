@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { ApiWorkspace } from './ApiWorkspace';
 import { PrdReviewPanel } from './PrdReviewPanel';
 import type { SessionStateDto, SessionSummaryDto, SpecVersionDto } from './dto';
+import { useWorkspaceProjects } from './useWorkspaceProjects';
 
 const state: SessionStateDto = {
   session_id:'session-1', project_id:'project-1', phase:'REVIEW', state_version:6,
@@ -25,6 +26,7 @@ let failDiff = false;
 let missingSavedSession = false;
 let resourceOverrides: Record<string, unknown> = {};
 let resourceFailures: Record<string, number> = {};
+let resourceFailureSequences: Record<string, number[]> = {};
 let sessionCatalog: SessionSummaryDto[] = [];
 let fetchSpy: ReturnType<typeof vi.fn>;
 
@@ -46,12 +48,17 @@ beforeEach(() => {
   failLines = false; failComments = false; failDocument = false; failDiff = false; missingSavedSession = false;
   resourceOverrides = {};
   resourceFailures = {};
+  resourceFailureSequences = {};
   sessionCatalog = [{session_id:'session-1',project_id:'project-1',root_work_item_id:'root-1',title:'知识问答'}];
   localStorage.clear();
   WorkspaceEventSource.instances = [];
   vi.stubGlobal('EventSource', WorkspaceEventSource);
   fetchSpy = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     const path = new URL(String(input)).pathname;
+    const queuedFailure = resourceFailureSequences[path]?.shift();
+    if (queuedFailure) {
+      return new Response(JSON.stringify({detail:{code:'TEMPORARILY_UNAVAILABLE',message:'请稍后重试'}}),{status:queuedFailure});
+    }
     if (resourceFailures[path]) {
       return new Response(JSON.stringify({detail:{code:'TEMPORARILY_UNAVAILABLE',message:'请稍后重试'}}),{status:resourceFailures[path]});
     }
@@ -100,6 +107,13 @@ function commandStatusRequestCount(): number {
   ).length;
 }
 
+function getRequestCount(path: string): number {
+  return fetchSpy.mock.calls.filter(([input, options]) =>
+    (!options?.method || options.method === 'GET')
+    && new URL(String(input)).pathname === path
+  ).length;
+}
+
 function renderPanel(
   onConfirmAndDecompose: (reviewNote: string) => Promise<void> = async () => undefined,
   sessionState: SessionStateDto = state,
@@ -107,7 +121,41 @@ function renderPanel(
   return render(<PrdReviewPanel wi="root-1" sessionState={sessionState} fallbackSpec={spec} onConfirmAndDecompose={onConfirmAndDecompose} />);
 }
 
+function QueuedTerminalReconciliationHarness() {
+  const { state: currentState, updateSessionState } = useWorkspaceProjects();
+  if (!currentState) return <span>loading</span>;
+  return (
+    <>
+      <output aria-label="current queued Session state">
+        {currentState.state_version}:{currentState.phase}
+      </output>
+      <button
+        type="button"
+        onClick={() => {
+          updateSessionState({ ...currentState, phase: 'COMPLETE', state_version: 9 });
+          updateSessionState({ ...currentState, phase: 'AGENT_SPECS_READY', state_version: 7 });
+        }}
+      >
+        queue newer state then reconcile older terminal result
+      </button>
+    </>
+  );
+}
+
 describe('workspace regression', () => {
+  it('does not let an older terminal result overwrite a newer queued Session state', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    render(<QueuedTerminalReconciliationHarness />);
+    await screen.findByText('6:REVIEW');
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'queue newer state then reconcile older terminal result',
+    }));
+
+    expect(screen.getByRole('status', { name: 'current queued Session state' }).textContent)
+      .toBe('9:COMPLETE');
+  });
+
   it('shows separate PRD revision and decomposition controls and blocks decomposition on Agent findings', async () => {
     const enterDecomposition = vi.fn(async () => undefined);
     renderPanel(enterDecomposition);
@@ -656,6 +704,66 @@ describe('workspace regression', () => {
     expect(fetchSpy.mock.calls.some(([input, options]) =>
       options?.method === 'POST' && String(input).endsWith('/commands')
     )).toBe(false);
+  });
+
+  it('keeps a succeeded job recoverable until its failed resource refresh later succeeds', async () => {
+    vi.useFakeTimers();
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    localStorage.setItem('firstflight.decomposition-job.session-1', 'saved-job');
+    sessionCatalog.push({
+      session_id: 'session-2', project_id: 'project-2',
+      root_work_item_id: 'root-2', title: '客户支持助手',
+    });
+    const terminalState = {
+      ...state, phase: 'AGENT_SPECS_READY', state_version: 7,
+    };
+    resourceOverrides = {
+      '/sessions/session-1/commands/saved-job': {
+        command_id: 'saved-job', status: 'succeeded', status_version: 3,
+        result: {
+          command_id: 'saved-job', state: terminalState,
+          created_resource_ids: ['task-created'],
+        },
+        error: null, created_at: '2026-09-05T00:00:00Z',
+        started_at: '2026-09-05T00:00:01Z', completed_at: '2026-09-05T00:00:10Z',
+      },
+      '/sessions/session-2/state': {
+        ...state, session_id: 'session-2', project_id: 'project-2',
+        current_spec_version_id: null, legal_actions: [], phase: 'NEED_CLARIFICATION',
+      },
+      '/sessions/session-2/specs': [],
+      '/sessions/session-2/work-items': [
+        { id: 'root-2', kind: 'ROOT', title: '客户支持助手', parent_id: null, dependency_work_item_ids: [] },
+      ],
+      '/sessions/session-2/agent-specs': [],
+      '/sessions/session-2/events': [],
+    };
+    resourceFailureSequences['/sessions/session-1/state'] = [0, 503];
+
+    render(<ApiWorkspace />);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(WorkspaceEventSource.instances).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getRequestCount('/sessions/session-1/commands/saved-job')).toBe(1);
+    expect(getRequestCount('/sessions/session-1/state')).toBe(2);
+    expect(getRequestCount('/sessions/session-1/work-items')).toBe(1);
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBe('saved-job');
+    expect(screen.getAllByText(/TEMPORARILY_UNAVAILABLE：请稍后重试/)).not.toHaveLength(0);
+
+    const projectPicker = screen.getByRole('combobox', { name: '当前对话项目' });
+    fireEvent.change(projectPicker, { target: { value: 'session-2' } });
+    fireEvent.change(projectPicker, { target: { value: 'session-1' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(WorkspaceEventSource.instances).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getRequestCount('/sessions/session-1/commands/saved-job')).toBe(2);
+    expect(getRequestCount('/sessions/session-1/state')).toBe(3);
+    expect(getRequestCount('/sessions/session-1/work-items')).toBe(2);
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBeNull();
   });
 
   it('shows the durable command error and stops observing', async () => {
