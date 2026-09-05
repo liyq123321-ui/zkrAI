@@ -1,11 +1,15 @@
 """HTTP contract coverage for project workflow sessions."""
 
+import asyncio
+import json
 from collections import deque
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.agents.codex import AgentExecutionError, AgentOutputError
+from app.api.sessions import build_router as build_sessions_router
 from app.database.models import (
     AgentCall,
     AuditEvent,
@@ -15,6 +19,9 @@ from app.database.models import (
     WorkItem,
 )
 from app.domain.types import ClarificationAnalysis, ReviewVerdict, SemanticReview
+from app.identity import ActorResolver
+from app.schemas.workflow import CommandResult, SessionState
+from app.services.command_jobs import CommandJobCoordinator
 from app.services.decomposition_service import BreakdownValidationError, DecompositionService
 from main import create_app
 from tests.helpers.factories import (
@@ -141,6 +148,106 @@ def test_non_decomposition_command_still_returns_completed_200(session_factory):
         assert response.status_code == 200
         assert "state" in response.json()
         assert "status_url" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_decomposition_response_is_emitted_before_blocked_executor_finishes(
+    session_factory, test_settings
+):
+    executor_started = asyncio.Event()
+    release_executor = asyncio.Event()
+
+    async def blocked_execute(session_id, command):
+        executor_started.set()
+        await release_executor.wait()
+        return CommandResult(
+            command_id=command.command_id,
+            state=SessionState(
+                session_id=session_id,
+                project_id="blocked-project",
+                phase="AGENT_SPECS_READY",
+                state_version=5,
+                current_spec_version_id="blocked-spec",
+                current_spec_status="APPROVED",
+                legal_actions=[],
+                next_action="NONE",
+                outstanding_questions=[],
+                review_findings=[],
+            ),
+        )
+
+    agent = ScriptedAgentGateway(
+        analyze_results=deque([ClarificationAnalysis(
+            ready_for_spec=True, questions=[], assumptions=[]
+        )]),
+        generate_results=deque([make_valid_spec()]),
+        review_results=deque([make_passing_semantic_review()]),
+    )
+    command_jobs = CommandJobCoordinator(session_factory, blocked_execute)
+    app = FastAPI()
+    app.include_router(build_sessions_router(
+        session_factory,
+        agent,
+        ActorResolver(test_settings),
+        command_jobs=command_jobs,
+    ))
+
+    with TestClient(app) as client:
+        approved = _approved_http_session(client, "blocked-acceptance")
+
+    request_body = json.dumps({
+        "command_id": "blocked-decompose",
+        "action": "convert_to_work_item",
+        "expected_state_version": approved["state_version"],
+        "actor_id": "approver-1",
+        "payload": {},
+    }).encode()
+    sent_messages = []
+    response_body_emitted = asyncio.Event()
+    request_consumed = False
+
+    async def receive():
+        nonlocal request_consumed
+        if not request_consumed:
+            request_consumed = True
+            return {"type": "http.request", "body": request_body}
+        await asyncio.Future()
+
+    async def send(message):
+        sent_messages.append(message)
+        if message["type"] == "http.response.body" and not message.get(
+            "more_body", False
+        ):
+            response_body_emitted.set()
+
+    task = asyncio.create_task(app({
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": f"/sessions/{approved['session_id']}/commands",
+        "raw_path": f"/sessions/{approved['session_id']}/commands".encode(),
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }, receive, send))
+    try:
+        await asyncio.wait_for(response_body_emitted.wait(), timeout=1)
+        await asyncio.wait_for(executor_started.wait(), timeout=1)
+        assert task.done() is False
+        assert sent_messages[0]["type"] == "http.response.start"
+        assert sent_messages[0]["status"] == 202
+        assert json.loads(sent_messages[1]["body"]) == {
+            "command_id": "blocked-decompose",
+            "status": "pending",
+            "status_url": f"/sessions/{approved['session_id']}/commands/blocked-decompose",
+            "events_url": f"/sessions/{approved['session_id']}/commands/blocked-decompose/events",
+        }
+    finally:
+        release_executor.set()
+        await asyncio.wait_for(task, timeout=1)
 
 
 @pytest.fixture
@@ -1100,7 +1207,7 @@ def test_breakdown_reviewer_rejection_exposes_domain_code(session_factory):
     assert snapshot.json()["error"]["code"] == expected_error_code
 
 
-def test_nested_decomposition_agent_output_error_is_422(session_factory):
+def test_nested_decomposition_agent_output_error_is_durable(session_factory):
     """Nested decomposition wrappers must preserve schema-invalid output classification."""
     agent = ScriptedAgentGateway(
         analyze_results=deque(

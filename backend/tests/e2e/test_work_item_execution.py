@@ -7,6 +7,7 @@ persisted but nothing ever traversed it.
 """
 
 from collections import deque
+from time import sleep
 
 import pytest
 from fastapi.testclient import TestClient
@@ -94,6 +95,18 @@ def _run(client, state, command_id, action, payload=None):
         client, state["session_id"], command_id, action,
         state["state_version"], payload or {},
     )
+    if action == "convert_to_work_item":
+        assert response.status_code == 202, response.text
+        for _ in range(20):
+            snapshot = client.get(response.json()["status_url"])
+            assert snapshot.status_code == 200, snapshot.text
+            terminal = snapshot.json()
+            if terminal["status"] in {"succeeded", "failed"}:
+                break
+            sleep(0.01)
+        assert terminal["status"] == "succeeded", terminal
+        assert terminal["result"] is not None
+        return terminal["result"]["state"]
     assert response.status_code == 200, response.text
     return response.json()["state"]
 

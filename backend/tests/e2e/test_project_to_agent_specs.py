@@ -1,6 +1,7 @@
 """End-to-end HTTP proof of the Project-to-child-Agent-Spec stop boundary."""
 
 from collections import deque
+from time import sleep
 
 from fastapi.testclient import TestClient
 
@@ -68,6 +69,18 @@ def test_approved_spec_becomes_queryable_agent_specs_without_child_execution(ses
         if message is not None:
             body["message"] = message
         response = client.post(f"/sessions/{state['session_id']}/commands", json=body)
+        if action == "convert_to_work_item":
+            assert response.status_code == 202, response.text
+            for _ in range(20):
+                snapshot = client.get(response.json()["status_url"])
+                assert snapshot.status_code == 200, snapshot.text
+                terminal = snapshot.json()
+                if terminal["status"] in {"succeeded", "failed"}:
+                    break
+                sleep(0.01)
+            assert terminal["status"] == "succeeded", terminal
+            assert terminal["result"] is not None
+            return terminal["result"]["state"], terminal["result"]
         assert response.status_code == 200, response.text
         return response.json()["state"], response.json()
 
@@ -153,4 +166,3 @@ def test_approved_spec_becomes_queryable_agent_specs_without_child_execution(ses
             f"/sessions/{state['session_id']}/agent-specs/{by_work_item[tasks['t-api']['id']]['id']}"
         ).json()["work_item_id"] == tasks["t-api"]["id"]
     assert agent.child_process_calls == 0
-
