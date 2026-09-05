@@ -86,7 +86,11 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) 
     project,
     agents:snapshots[project.sessionId],
   }));
-  const startedCount = visibleProjects.reduce((count, { agents }) => count + (agents?.length ?? 0), 0);
+  const agents = visibleProjects.flatMap(({ agents }) => agents ?? []);
+  const startedCount = agents.length;
+  const runningCount = agents.filter((agent) => agent.status === 'running').length;
+  const completedCount = agents.filter((agent) => agent.status === 'completed').length;
+  const errorCount = agents.filter((agent) => agent.status === 'error').length;
   const failedProjects = projects.filter((project) => failedIds.includes(project.sessionId));
 
   return (
@@ -99,6 +103,18 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) 
         <div>
           <dt>已启动</dt>
           <dd>{startedCount}</dd>
+        </div>
+        <div>
+          <dt>运行中</dt>
+          <dd>{runningCount}</dd>
+        </div>
+        <div>
+          <dt>已完成</dt>
+          <dd>{completedCount}</dd>
+        </div>
+        <div>
+          <dt>异常</dt>
+          <dd>{errorCount}</dd>
         </div>
       </dl>
       {failedProjects.length > 0 && (

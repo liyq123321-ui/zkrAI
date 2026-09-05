@@ -6,6 +6,7 @@ import { AgentRuntimePanel } from './AgentRuntimePanel';
 const runtime = [
   { agent_session_id:'agent-pm', project_id:'project-1', role:'PM Agent', provider:'codex', model:'gpt-test', purpose:'拆解需求', status:'running', current_operation:'decompose_spec', current_summary:'Decomposing the approved specification', current_call_id:'call-2', started_at:'2026-09-06T02:01:00Z', completed_at:null, call_count:2 },
   { agent_session_id:'agent-reviewer', project_id:'project-1', role:'Reviewer Agent', provider:'codex', model:null, purpose:'审核方案', status:'error', current_operation:'review_spec', current_summary:'Reviewing specification quality', current_call_id:'call-3', started_at:'2026-09-06T02:02:00Z', completed_at:'2026-09-06T02:03:00Z', call_count:1 },
+  { agent_session_id:'agent-writer', project_id:'project-1', role:'Writer Agent', provider:'codex', model:'gpt-test', purpose:'编写规格', status:'completed', current_operation:'generate_spec', current_summary:'Generated the project specification', current_call_id:'call-4', started_at:'2026-09-06T02:04:00Z', completed_at:'2026-09-06T02:05:00Z', call_count:3 },
 ];
 
 function response(body: unknown, status = 200): Response {
@@ -26,13 +27,17 @@ describe('AgentRuntimePanel', () => {
     render(<AgentRuntimePanel projects={[{ sessionId:'session-1', title:'知识问答' }]} />);
 
     const panel = await screen.findByRole('region', { name:'Agent 实时运行状态' });
-    expect(within(panel).getByText('已启动')).toBeTruthy();
-    expect(within(panel).getByText('2')).toBeTruthy();
+    const metrics = panel.querySelector<HTMLElement>('.ff-agent-runtime-metrics')!;
+    const metricValue = (label: string) =>
+      within(metrics).getByText(label).parentElement?.querySelector('dd')?.textContent;
+    expect(metricValue('已启动')).toBe('3');
+    expect(metricValue('运行中')).toBe('1');
+    expect(metricValue('已完成')).toBe('1');
+    expect(metricValue('异常')).toBe('1');
     expect(within(panel).getByText('知识问答')).toBeTruthy();
     expect(within(panel).getByText('PM Agent')).toBeTruthy();
-    expect(within(panel).getByText('运行中')).toBeTruthy();
     expect(within(panel).getByText('Reviewer Agent')).toBeTruthy();
-    expect(within(panel).getByText('异常')).toBeTruthy();
+    expect(within(panel).getByText('Writer Agent')).toBeTruthy();
     expect(within(panel).getByText('拆解已批准的项目规格')).toBeTruthy();
   });
 
