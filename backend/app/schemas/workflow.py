@@ -138,6 +138,9 @@ class CommandJobRead(BaseModel):
     status_version: int = Field(ge=1)
     result: CommandResult | None = None
     error: CommandJobError | None = None
+    progress_stage: str | None = None
+    progress_message: str | None = None
+    last_activity_at: datetime | None = None
     created_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None

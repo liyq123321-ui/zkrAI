@@ -113,11 +113,51 @@ def test_command_jobs_have_durable_status_and_idempotent_identity(engine):
         "id", "project_id", "session_id", "command_id", "input_hash",
         "request_payload", "status", "status_version", "result",
         "error_code", "error_message", "created_at", "started_at",
-        "completed_at", "updated_at",
+        "completed_at", "updated_at", "progress_stage", "progress_message",
+        "last_activity_at",
     } <= set(columns)
     assert frozenset({"session_id", "command_id"}) in unique
     assert columns["status"]["nullable"] is False
     assert columns["status_version"]["nullable"] is False
+
+
+def test_existing_command_jobs_gain_progress_columns_idempotently(tmp_path):
+    target = create_engine_for_url(f"sqlite:///{tmp_path / 'legacy-command-jobs.sqlite'}")
+    try:
+        with target.begin() as connection:
+            connection.execute(text("""
+                CREATE TABLE command_jobs (
+                    id VARCHAR PRIMARY KEY, project_id VARCHAR NOT NULL,
+                    session_id VARCHAR NOT NULL, command_id VARCHAR NOT NULL,
+                    input_hash VARCHAR(64) NOT NULL, request_payload JSON NOT NULL,
+                    status VARCHAR NOT NULL, status_version INTEGER NOT NULL,
+                    result JSON, error_code VARCHAR, error_message TEXT,
+                    created_at DATETIME NOT NULL, started_at DATETIME,
+                    completed_at DATETIME, updated_at DATETIME NOT NULL,
+                    UNIQUE (session_id, command_id)
+                )
+            """))
+            connection.execute(text("""
+                INSERT INTO command_jobs VALUES (
+                    'job-1', 'project-1', 'session-1', 'command-1', 'hash', '{}',
+                    'processing', 2, NULL, NULL, NULL,
+                    '2026-01-01 00:00:00', '2026-01-01 00:00:01', NULL,
+                    '2026-01-01 00:00:01'
+                )
+            """))
+
+        init_database(target)
+        init_database(target)
+
+        columns = {item["name"] for item in inspect(target).get_columns("command_jobs")}
+        with target.connect() as connection:
+            row = connection.execute(text(
+                "SELECT status, error_code, progress_stage FROM command_jobs"
+            )).one()
+        assert {"progress_stage", "progress_message", "last_activity_at"} <= columns
+        assert row == ("failed", "PROCESS_INTERRUPTED", "failed")
+    finally:
+        target.dispose()
 
 
 def test_legacy_review_contracts_migrate_hash_actor_receipts_and_command_owner_idempotently(

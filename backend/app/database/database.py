@@ -38,7 +38,55 @@ def init_database(target_engine: Engine) -> None:
         _migrate_sqlite_clarification_integrity(target_engine)
         _migrate_sqlite_work_items(target_engine)
         _migrate_sqlite_gitea_review_contracts(target_engine)
+        _migrate_sqlite_command_jobs(target_engine)
     Base.metadata.create_all(target_engine)
+
+
+def _migrate_sqlite_command_jobs(target_engine: Engine) -> None:
+    """Add progress fields and settle pre-index active jobs during startup."""
+
+    schema = inspect(target_engine)
+    if "command_jobs" not in set(schema.get_table_names()):
+        return
+    columns = {column["name"] for column in schema.get_columns("command_jobs")}
+    additions = {
+        "progress_stage": "VARCHAR",
+        "progress_message": "TEXT",
+        "last_activity_at": "DATETIME",
+    }
+    with target_engine.connect() as connection:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        try:
+            for name, sql_type in additions.items():
+                if name not in columns:
+                    connection.exec_driver_sql(
+                        f'ALTER TABLE command_jobs ADD COLUMN "{name}" {sql_type}'
+                    )
+            now = datetime.now().isoformat(sep=" ")
+            connection.execute(
+                text("""
+                    UPDATE command_jobs
+                    SET status = 'failed',
+                        status_version = status_version + 1,
+                        result = NULL,
+                        error_code = 'PROCESS_INTERRUPTED',
+                        error_message = :message,
+                        progress_stage = 'failed',
+                        progress_message = :message,
+                        last_activity_at = :now,
+                        completed_at = :now,
+                        updated_at = :now
+                    WHERE status IN ('pending', 'processing')
+                """),
+                {
+                    "message": "The background command process was interrupted; retry the command.",
+                    "now": now,
+                },
+            )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
 
 
 def _migrate_sqlite_gitea_review_contracts(target_engine: Engine) -> None:

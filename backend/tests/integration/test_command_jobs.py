@@ -12,6 +12,7 @@ from app.database.database import (
     make_session_factory,
 )
 from app.database.models import CommandJob, Project
+from app.agents.progress import report_agent_progress
 from app.domain.types import CommandAction
 from app.schemas.workflow import CommandResult, SessionCommandRequest, SessionState
 from app.services.command_jobs import CommandJobCoordinator
@@ -150,6 +151,50 @@ def test_duplicate_submission_is_idempotent_and_conflicting_input_is_rejected(se
     changed = request().model_copy(update={"expected_state_version": 8})
     with pytest.raises(CommandConflict):
         coordinator.submit("session-1", changed)
+
+
+def test_different_command_id_reuses_the_sessions_active_decomposition(session_factory):
+    seed_project(session_factory)
+
+    async def execute(session_id, command):
+        raise AssertionError("executor is not called by submit")
+
+    coordinator = CommandJobCoordinator(session_factory, execute)
+    first, first_schedule = coordinator.submit("session-1", request("decompose-a"))
+    second, second_schedule = coordinator.submit("session-1", request("decompose-b"))
+
+    assert first.command_id == "decompose-a"
+    assert second.command_id == first.command_id
+    assert (first_schedule, second_schedule) == (True, False)
+    with session_factory() as db:
+        assert db.query(CommandJob).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_progress_is_persisted_with_monotonic_status_versions(session_factory):
+    seed_project(session_factory)
+
+    async def execute(session_id, command):
+        report_agent_progress("model_reasoning", "模型正在生成结构化结果。")
+        return CommandResult(
+            command_id=command.command_id,
+            state=state(),
+            created_resource_ids=["work-item-1"],
+        )
+
+    coordinator = CommandJobCoordinator(session_factory, execute)
+    coordinator.submit("session-1", request())
+    with session_factory() as db:
+        job_id = db.query(CommandJob).one().id
+
+    await coordinator.run(job_id)
+
+    snapshot = coordinator.get("session-1", "decompose-1")
+    assert snapshot.status == "succeeded"
+    assert snapshot.status_version == 4
+    assert snapshot.progress_stage == "completed"
+    assert snapshot.progress_message == "后台任务拆分已完成。"
+    assert snapshot.last_activity_at is not None
 
 
 def test_file_sqlite_simultaneous_identical_submissions_converge(file_session_factory):

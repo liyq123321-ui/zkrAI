@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, JSON, String, Text, UniqueConstraint, text
 
 from .database import Base
 
@@ -329,7 +329,16 @@ class CommandJob(Base):
     """Durable execution envelope for one asynchronous Session command."""
 
     __tablename__ = "command_jobs"
-    __table_args__ = (UniqueConstraint("session_id", "command_id", name="uq_command_job"),)
+    __table_args__ = (
+        UniqueConstraint("session_id", "command_id", name="uq_command_job"),
+        Index(
+            "uq_command_job_active_session",
+            "session_id",
+            unique=True,
+            sqlite_where=text("status IN ('pending', 'processing')"),
+            postgresql_where=text("status IN ('pending', 'processing')"),
+        ),
+    )
 
     id = Column(String, primary_key=True)
     project_id = Column(String, nullable=False, index=True)
@@ -342,6 +351,9 @@ class CommandJob(Base):
     result = Column(JSON, nullable=True)
     error_code = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
+    progress_stage = Column(String, nullable=True)
+    progress_message = Column(Text, nullable=True)
+    last_activity_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)

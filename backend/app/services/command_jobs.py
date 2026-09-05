@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.database.models import CommandJob, Project
+from app.agents.progress import bind_agent_progress
 from app.domain.types import CommandAction
 from app.schemas.workflow import (
     CommandJobAccepted,
@@ -108,6 +109,19 @@ class CommandJobCoordinator:
                 job = db.query(CommandJob).filter_by(
                     session_id=session_id, command_id=request.command_id
                 ).one_or_none()
+                if job is not None and job.input_hash != digest:
+                    raise CommandConflict("command_id was used with different input")
+                active = (
+                    db.query(CommandJob)
+                    .filter(
+                        CommandJob.session_id == session_id,
+                        CommandJob.status.in_(("pending", "processing")),
+                    )
+                    .order_by(CommandJob.created_at, CommandJob.id)
+                    .first()
+                )
+                if active is not None and (job is None or active.id != job.id):
+                    return self._accepted(active), False
                 should_schedule = False
                 if job is None:
                     candidate = CommandJob(
@@ -127,11 +141,21 @@ class CommandJobCoordinator:
                     except IntegrityError:
                         job = db.query(CommandJob).filter_by(
                             session_id=session_id, command_id=request.command_id
-                        ).one()
+                        ).one_or_none()
+                        if job is None:
+                            job = (
+                                db.query(CommandJob)
+                                .filter(
+                                    CommandJob.session_id == session_id,
+                                    CommandJob.status.in_(("pending", "processing")),
+                                )
+                                .order_by(CommandJob.created_at, CommandJob.id)
+                                .one()
+                            )
                     else:
                         return self._accepted(candidate), True
 
-                if job.input_hash != digest:
+                if job.command_id == request.command_id and job.input_hash != digest:
                     raise CommandConflict("command_id was used with different input")
                 if job.status == "failed":
                     retry = db.execute(
@@ -166,6 +190,9 @@ class CommandJobCoordinator:
                     status="processing",
                     status_version=CommandJob.status_version + 1,
                     started_at=_now(),
+                    progress_stage="starting",
+                    progress_message="后台任务拆分已启动。",
+                    last_activity_at=_now(),
                     error_code=None,
                     error_message=None,
                 )
@@ -179,13 +206,55 @@ class CommandJobCoordinator:
             session_id = job.session_id
             request = SessionCommandRequest.model_validate(job.request_payload)
 
+        current_version = claimed_version
+
+        def report_progress(stage: str, message: str) -> None:
+            nonlocal current_version
+            updated = self.update_progress(
+                job_id, current_version, stage=stage, message=message
+            )
+            if updated is not None:
+                current_version = updated
+
         try:
-            result = await self._execute(session_id, request)
+            with bind_agent_progress(report_progress):
+                result = await self._execute(session_id, request)
         except Exception as error:
             public = classify_workflow_error(error)
-            self._finish_failure(job_id, claimed_version, public.code, public.message)
+            self._finish_failure(job_id, current_version, public.code, public.message)
             return
-        self._finish_success(job_id, claimed_version, result)
+        self._finish_success(job_id, current_version, result)
+
+    def update_progress(
+        self,
+        job_id: str,
+        expected_version: int,
+        *,
+        stage: str,
+        message: str,
+    ) -> int | None:
+        """Persist one public-safe progress transition owned by the live runner."""
+
+        now = _now()
+        with self._session_factory() as db:
+            updated = db.execute(
+                update(CommandJob)
+                .where(
+                    CommandJob.id == job_id,
+                    CommandJob.status == "processing",
+                    CommandJob.status_version == expected_version,
+                )
+                .values(
+                    status_version=CommandJob.status_version + 1,
+                    progress_stage=stage.strip()[:100],
+                    progress_message=message.strip()[:1000],
+                    last_activity_at=now,
+                    updated_at=now,
+                )
+                .returning(CommandJob.status_version)
+            ).scalar_one_or_none()
+            db.commit()
+            return int(updated) if updated is not None else None
 
     def get(self, session_id: str, command_id: str) -> CommandJobRead:
         with self._session_factory() as db:
@@ -217,7 +286,13 @@ class CommandJobCoordinator:
                     error_message=(
                         "The background command process was interrupted; retry the command."
                     ),
+                    progress_stage="failed",
+                    progress_message=(
+                        "后台任务进程已中断，请重新提交拆分。"
+                    ),
+                    last_activity_at=_now(),
                     completed_at=_now(),
+                    updated_at=_now(),
                 )
             )
             db.commit()
@@ -268,6 +343,9 @@ class CommandJobCoordinator:
                 if job.error_code and job.error_message
                 else None
             ),
+            progress_stage=job.progress_stage,
+            progress_message=job.progress_message,
+            last_activity_at=job.last_activity_at,
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,
@@ -291,6 +369,9 @@ class CommandJobCoordinator:
                     result=result.model_dump(mode="json"),
                     error_code=None,
                     error_message=None,
+                    progress_stage="completed",
+                    progress_message="后台任务拆分已完成。",
+                    last_activity_at=now,
                     completed_at=now,
                     updated_at=now,
                 )
@@ -315,6 +396,9 @@ class CommandJobCoordinator:
                     result=None,
                     error_code=code,
                     error_message=message,
+                    progress_stage="failed",
+                    progress_message=message,
+                    last_activity_at=now,
                     completed_at=now,
                     updated_at=now,
                 )
