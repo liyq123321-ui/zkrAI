@@ -1,5 +1,8 @@
 """Transport contracts for the project workflow API."""
 
+from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.types import (
@@ -67,3 +70,38 @@ class CommandResult(BaseModel):
     command_id: str
     state: SessionState
     created_resource_ids: list[str] = Field(default_factory=list)
+
+
+CommandJobStatus = Literal["pending", "processing", "succeeded", "failed"]
+
+
+class CommandJobError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    message: str
+
+
+class CommandJobAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: str
+    status: CommandJobStatus
+    status_url: str
+    events_url: str
+
+
+class CommandJobRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: str
+    status: CommandJobStatus
+    status_version: int = Field(ge=1)
+    result: CommandResult | None = None
+    error: CommandJobError | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+CommandSubmission = CommandResult | CommandJobAccepted

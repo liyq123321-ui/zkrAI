@@ -325,6 +325,29 @@ class CommandAttempt(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
 
+class CommandJob(Base):
+    """Durable execution envelope for one asynchronous Session command."""
+
+    __tablename__ = "command_jobs"
+    __table_args__ = (UniqueConstraint("session_id", "command_id", name="uq_command_job"),)
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, nullable=False, index=True)
+    session_id = Column(String, nullable=False, index=True)
+    command_id = Column(String, nullable=False)
+    input_hash = Column(String(64), nullable=False)
+    request_payload = Column(JSON, nullable=False)
+    status = Column(String, nullable=False, default="pending")
+    status_version = Column(Integer, nullable=False, default=1)
+    result = Column(JSON, nullable=True)
+    error_code = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class PrdVersion(Base):
     """Projection binding an immutable Spec revision to its Gitea PRD file."""
 
@@ -436,4 +459,3 @@ class WorkItemRun(Base):
     agent_call_id = Column(String, nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
-

@@ -99,6 +99,27 @@ def test_prd_review_tables_have_required_columns_and_uniqueness(engine):
     assert {"prepare_owner_id", "prepare_owner_started_at"} <= command_columns
 
 
+def test_command_jobs_have_durable_status_and_idempotent_identity(engine):
+    init_database(engine)
+    schema = inspect(engine)
+
+    columns = {item["name"]: item for item in schema.get_columns("command_jobs")}
+    unique = {
+        frozenset(item.get("column_names") or [])
+        for item in schema.get_unique_constraints("command_jobs")
+    }
+
+    assert {
+        "id", "project_id", "session_id", "command_id", "input_hash",
+        "request_payload", "status", "status_version", "result",
+        "error_code", "error_message", "created_at", "started_at",
+        "completed_at", "updated_at",
+    } <= set(columns)
+    assert frozenset({"session_id", "command_id"}) in unique
+    assert columns["status"]["nullable"] is False
+    assert columns["status_version"]["nullable"] is False
+
+
 def test_legacy_review_contracts_migrate_hash_actor_receipts_and_command_owner_idempotently(
     tmp_path,
 ):
