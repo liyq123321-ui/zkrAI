@@ -1,5 +1,6 @@
 import { apiClient } from './client';
 import type {
+  AgentRuntimeDto,
   AgentSpecDto,
   AuditEventDto,
   CommandAction,
@@ -44,6 +45,9 @@ export function getSessionState(sessionId: string, signal?: AbortSignal) {
 
 export const listSessions = (signal?: AbortSignal) =>
   apiClient.request<SessionSummaryDto[]>('/sessions', { signal });
+
+export const listAgentRuntime = (sessionId: string, signal?: AbortSignal) =>
+  apiClient.request<AgentRuntimeDto[]>(`/sessions/${sessionId}/agents/runtime`, { signal });
 
 export function executeCommand(
   sessionId: string,
