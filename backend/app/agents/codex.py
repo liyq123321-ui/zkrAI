@@ -30,6 +30,7 @@ from app.domain.types import (
 ModelT = TypeVar("ModelT", bound=BaseModel)
 NODE_PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts" / "nodes"
 logger = logging.getLogger(__name__)
+_CODEX_PROGRESS_HEARTBEAT_SECONDS = 30.0
 
 
 class AgentExecutionError(RuntimeError):
@@ -208,6 +209,7 @@ class CodexStructuredRunner:
             loop = asyncio.get_running_loop()
             hard_deadline = loop.time() + self.settings.codex_timeout_seconds
             inactivity = self.settings.codex_inactivity_timeout_seconds
+            inactivity_deadline = loop.time() + inactivity
             try:
                 while True:
                     hard_remaining = hard_deadline - loop.time()
@@ -215,19 +217,36 @@ class CodexStructuredRunner:
                         raise AgentExecutionError(
                             f"Codex timed out after {self.settings.codex_timeout_seconds} seconds"
                         )
-                    wait_seconds = min(inactivity, hard_remaining)
+                    inactivity_remaining = inactivity_deadline - loop.time()
+                    if inactivity_remaining <= 0:
+                        raise AgentExecutionError(
+                            f"Codex made no progress for {inactivity:g} seconds"
+                        )
+                    wait_seconds = min(
+                        _CODEX_PROGRESS_HEARTBEAT_SECONDS,
+                        inactivity_remaining,
+                        hard_remaining,
+                    )
                     try:
                         line = await asyncio.wait_for(events.get(), timeout=wait_seconds)
                     except TimeoutError as error:
-                        if loop.time() >= hard_deadline:
+                        now = loop.time()
+                        if now >= hard_deadline:
                             raise AgentExecutionError(
                                 f"Codex timed out after {self.settings.codex_timeout_seconds} seconds"
                             ) from error
-                        raise AgentExecutionError(
-                            f"Codex made no progress for {inactivity:g} seconds"
-                        ) from error
+                        if now >= inactivity_deadline:
+                            raise AgentExecutionError(
+                                f"Codex made no progress for {inactivity:g} seconds"
+                            ) from error
+                        report_agent_progress(
+                            "model_waiting",
+                            "模型仍在后台运行，等待结构化结果。",
+                        )
+                        continue
                     if line is None:
                         break
+                    inactivity_deadline = loop.time() + inactivity
                     self._report_jsonl_progress(line)
                 hard_remaining = hard_deadline - loop.time()
                 if hard_remaining <= 0:

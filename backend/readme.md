@@ -56,8 +56,7 @@ export CODEX_INACTIVITY_TIMEOUT_SECONDS='<seconds>'
 ```
 
 `CODEX_TIMEOUT_SECONDS` 限制一次 Codex 调用的总时长（默认 2,000 秒）；
-`CODEX_INACTIVITY_TIMEOUT_SECONDS` 限制连续收不到 Codex JSONL 事件的时长（默认 600 秒）。
-后者用于终止已经失去活动迹象的子进程，而正常输出的长任务仍可继续运行。
+`CODEX_INACTIVITY_TIMEOUT_SECONDS` 限制连续收不到 Codex JSONL 事件的时长；默认跟随总调用上限（2,000 秒），避免误杀长时间无流式正文的正常结构化推理，也可在部署环境显式调小。后者用于终止已经失去活动迹象的子进程；等待期间服务每 30 秒更新一次安全的后台等待进度，不暴露模型正文。
 
 本服务没有单独的 health endpoint；可用 `POST /sessions` 或读取已有 Session 验证服务可用性。
 

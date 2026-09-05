@@ -441,6 +441,34 @@ def test_structured_runner_stops_a_silent_process_at_inactivity_timeout(
     assert monotonic() - started < 1.5
 
 
+def test_structured_runner_reports_waiting_heartbeat_before_long_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    monkeypatch.setenv("FAKE_CODEX_STDOUT", '{"type":"turn.started"}')
+    monkeypatch.setenv("FAKE_CODEX_SLEEP_SECONDS", "0.2")
+    monkeypatch.setenv(
+        "FAKE_CODEX_OUTPUT",
+        '{"ready_for_spec":true,"questions":[],"assumptions":[]}',
+    )
+    settings = _settings(tmp_path, executable, timeout_seconds=2)
+    object.__setattr__(settings, "codex_inactivity_timeout_seconds", 1)
+    progress: list[tuple[str, str]] = []
+    import app.agents.codex as codex_module
+
+    monkeypatch.setattr(codex_module, "_CODEX_PROGRESS_HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(
+        codex_module,
+        "report_agent_progress",
+        lambda stage, message: progress.append((stage, message)),
+    )
+
+    runner = CodexStructuredRunner(settings)
+    asyncio.run(runner.run("Analyze this brief.", ClarificationAnalysis, tmp_path))
+
+    assert ("model_waiting", "模型仍在后台运行，等待结构化结果。") in progress
+
+
 def test_structured_runner_reaps_timed_out_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
