@@ -408,6 +408,9 @@ def async_job_client(session_factory):
 
 def test_command_job_sse_emits_terminal_snapshot_with_version_id(async_job_client):
     client, session_id, command_id = async_job_client
+    snapshot = client.get(
+        f"/sessions/{session_id}/commands/{command_id}"
+    ).json()
     with client.stream(
         "GET", f"/sessions/{session_id}/commands/{command_id}/events"
     ) as response:
@@ -415,15 +418,18 @@ def test_command_job_sse_emits_terminal_snapshot_with_version_id(async_job_clien
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: command.status" in body
-    assert "id: 3" in body
+    assert f"id: {snapshot['status_version']}" in body
     assert '"status":"succeeded"' in body
 
 
 def test_command_job_sse_honors_current_last_event_id(async_job_client):
     client, session_id, command_id = async_job_client
+    snapshot = client.get(
+        f"/sessions/{session_id}/commands/{command_id}"
+    ).json()
     response = client.get(
         f"/sessions/{session_id}/commands/{command_id}/events",
-        headers={"Last-Event-ID": "3"},
+        headers={"Last-Event-ID": str(snapshot["status_version"])},
     )
     assert response.status_code == 200
     assert "event: command.status" not in response.text

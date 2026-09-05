@@ -52,7 +52,12 @@ export CODEX_BINARY='<codex-executable>'
 export CODEX_RUNTIME_HOME='<codex-runtime-home>'
 export CODEX_WORKING_DIRECTORY='<firstflight-working-directory>'
 export CODEX_TIMEOUT_SECONDS='<seconds>'
+export CODEX_INACTIVITY_TIMEOUT_SECONDS='<seconds>'
 ```
+
+`CODEX_TIMEOUT_SECONDS` 限制一次 Codex 调用的总时长（默认 2,000 秒）；
+`CODEX_INACTIVITY_TIMEOUT_SECONDS` 限制连续收不到 Codex JSONL 事件的时长（默认 600 秒）。
+后者用于终止已经失去活动迹象的子进程，而正常输出的长任务仍可继续运行。
 
 本服务没有单独的 health endpoint；可用 `POST /sessions` 或读取已有 Session 验证服务可用性。
 
@@ -329,7 +334,7 @@ WebGUI 会在该命令成功后自动调用 `create_spec`，因此用户只需�
 
 仅在 `REVIEW + APPROVED` 合法。拆解按三个持久阶段执行：PM Agent 先生成不含实施计划的基础任务树；系统验证任务层级、依赖、来源、必填输出和验收映射后，以最多两个并发调用逐任务生成 `implementation_plan`；最后 Reviewer Agent 审核组装后的完整拆解（包括排除项是否被违反）。所有验证和 Reviewer 都通过后，才在一个事务中持久化 WorkItem、依赖和 Agent Spec。
 
-拆解是异步命令：服务在持久化 command job 后立即返回 `202 Accepted`，而不是等待 Agent 完成。提交响应包含稳定的 `command_id`、`status`、`status_url` 与 `events_url`，并把 `Location` 响应头设为同一个 `status_url`。异步拆解的 command ID 必须是 1–255 个 URL-safe ASCII 字符（字母、数字、`.`、`_`、`~`、`-`），这样返回的状态和事件路径可以直接使用；其余同步命令保留原有 command ID 兼容性与普通的 `200` CommandResult。
+拆解是异步命令：服务在持久化 command job 后立即返回 `202 Accepted`，而不是等待 Agent 完成。提交响应包含稳定的 `command_id`、`status`、`status_url` 与 `events_url`，并把 `Location` 响应头设为同一个 `status_url`。异步拆解的 command ID 必须是 1–255 个 URL-safe ASCII 字符（字母、数字、`.`、`_`、`~`、`-`），这样返回的状态和事件路径可以直接使用；其余同步命令保留原有 command ID 兼容性与普通的 `200` CommandResult。同一 Session 同一时刻只允许一个未完成的拆解 job；即使重复提交使用了不同 command ID，服务也会返回已有活动 job，不会并行调用模型。
 
 ```bash
 curl -i -X POST http://127.0.0.1:8088/sessions/SESSION_ID/commands \
@@ -341,7 +346,9 @@ curl http://127.0.0.1:8088/sessions/SESSION_ID/commands/COMMAND_ID
 curl -N http://127.0.0.1:8088/sessions/SESSION_ID/commands/COMMAND_ID/events
 ```
 
-`GET .../commands/COMMAND_ID` 返回持久状态快照（`pending`、`processing`、`succeeded` 或 `failed`）。SSE 是实时通知通道，客户端不能只依赖它；随附前端在页面恢复已保存的 job 时先立即读取一次状态，之后以非重叠请求每 5,000 ms 轮询该状态端点，使 SSE 断连或遗漏帧时仍能取得终态。重启进程会使原有的内存 runner 丢失，启动恢复会把未完成的 job 标记为 `PROCESS_INTERRUPTED`；此后可使用完全相同的 command ID 重新提交，服务会重新调度该持久 job。
+`GET .../commands/COMMAND_ID` 返回持久状态快照（`pending`、`processing`、`succeeded` 或 `failed`），并包含 `progress_stage`、`progress_message`、`last_activity_at`。逻辑阶段包括基础拆解、逐任务计划、语义审核、定向修复和准备落库；Codex 子进程的启动、推理、工作与完成事件也会更新活动时间和安全的中文进度文案，原始模型内容不会暴露到公开 API。
+
+SSE 是实时通知通道，客户端不能只依赖它；随附前端在页面恢复已保存的 job 时先立即读取一次状态，之后以非重叠请求每 5,000 ms 轮询该状态端点，使 SSE 断连或遗漏帧时仍能取得终态。重启进程会使原有的内存 runner 丢失，启动迁移会补齐旧数据库的进度字段、把未完成的 job 标记为 `PROCESS_INTERRUPTED`，并建立 Session 级活动 job 唯一约束；此后可使用完全相同的 command ID 重新提交，服务会重新调度该持久 job。
 
 SSE 成功响应的 `Content-Type` 是 `text/event-stream`。每个状态帧都采用 `event: command.status`，其 `id` 是该 job 单调递增的 `status_version`，`data` 是完整的 JSON 状态快照，结构与状态查询响应相同。浏览器重连时应把最后收到的 `id` 放进 `Last-Event-ID`；服务将它视为游标，只在当前快照版本更高时发出该快照。该端点不保存逐版本事件历史，因此客户端始终应以最新快照为准，而不是假定可以补回每个中间状态。
 
