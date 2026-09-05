@@ -72,7 +72,7 @@ describe('ApiClient', () => {
     expect(commandTimeoutMs('create_spec')).toBe(4_150_000);
     expect(commandTimeoutMs('revise')).toBe(4_150_000);
     expect(commandTimeoutMs('restore_spec_version')).toBe(4_150_000);
-    expect(commandTimeoutMs('convert_to_work_item')).toBe(4_150_000);
+    expect(commandTimeoutMs('convert_to_work_item')).toBe(130_000);
     expect(commandTimeoutMs('publish_review')).toBe(4_150_000);
     expect(commandTimeoutMs('message')).toBe(2_075_000);
     expect(commandTimeoutMs('skip_clarification')).toBe(130_000);

@@ -39,6 +39,7 @@ import { PrdReviewPanel } from './PrdReviewPanel';
 import {
   createSession,
   executeCommand,
+  isCommandJobAccepted,
 } from './sessions';
 import {
   actionPlacement,
@@ -363,6 +364,9 @@ export function ApiWorkspace() {
       message,
       payload,
     });
+    if (isCommandJobAccepted(result)) {
+      throw new Error('后台拆分任务已开始，当前工作区尚未接入进度观察。');
+    }
     pendingCommandIds.current.delete(fingerprint);
     updateSessionState(result.state);
     return result.state;

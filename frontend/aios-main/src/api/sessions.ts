@@ -1,9 +1,13 @@
 import { apiClient } from './client';
+import { appConfig } from './config';
 import type {
   AgentSpecDto,
   AuditEventDto,
   CommandAction,
+  CommandJobAcceptedDto,
+  CommandJobReadDto,
   CommandResultDto,
+  CommandSubmissionDto,
   ProjectBriefDto,
   SessionStateDto,
   SessionSummaryDto,
@@ -19,7 +23,6 @@ const DOUBLE_AGENT_ACTIONS = new Set<CommandAction>([
   'create_spec',
   'revise',
   'restore_spec_version',
-  'convert_to_work_item',
   'publish_review',
 ]);
 
@@ -56,7 +59,7 @@ export function executeCommand(
   },
   signal?: AbortSignal,
 ) {
-  return apiClient.request<CommandResultDto>(`/sessions/${sessionId}/commands`, {
+  return apiClient.request<CommandSubmissionDto>(`/sessions/${sessionId}/commands`, {
     method: 'POST',
     body: {
       command_id: input.commandId,
@@ -69,6 +72,24 @@ export function executeCommand(
     timeoutMs: commandTimeoutMs(input.action),
   });
 }
+
+export function isCommandJobAccepted(
+  value: CommandSubmissionDto,
+): value is CommandJobAcceptedDto {
+  return 'status_url' in value && 'events_url' in value;
+}
+
+export const getCommandJob = (
+  sessionId: string,
+  commandId: string,
+  signal?: AbortSignal,
+) => apiClient.request<CommandJobReadDto>(
+  `/sessions/${sessionId}/commands/${commandId}`,
+  { signal },
+);
+
+export const commandJobEventsUrl = (eventsUrl: string) =>
+  `${appConfig.apiBaseUrl}${eventsUrl}`;
 
 export const listSpecs = (sessionId: string, signal?: AbortSignal) =>
   apiClient.request<SpecVersionDto[]>(`/sessions/${sessionId}/specs`, { signal });

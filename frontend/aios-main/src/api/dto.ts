@@ -126,6 +126,28 @@ export interface CommandResultDto {
   created_resource_ids: string[];
 }
 
+export type CommandJobStatus = 'pending' | 'processing' | 'succeeded' | 'failed';
+
+export interface CommandJobAcceptedDto {
+  command_id: string;
+  status: CommandJobStatus;
+  status_url: string;
+  events_url: string;
+}
+
+export interface CommandJobReadDto {
+  command_id: string;
+  status: CommandJobStatus;
+  status_version: number;
+  result: CommandResultDto | null;
+  error: { code: string; message: string } | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export type CommandSubmissionDto = CommandResultDto | CommandJobAcceptedDto;
+
 export interface HealthDto {
   status: 'ok';
   database: 'ok';
