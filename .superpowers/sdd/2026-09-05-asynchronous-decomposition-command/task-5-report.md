@@ -56,3 +56,34 @@ does not cancel the backend job.
 ## Commit
 
 `170b5be feat: run task decomposition in background`
+
+## Fix Round 1
+
+### Root cause and RED
+
+Review found that the alternate sidebar decomposition action bypassed the
+background helper, while reload recovery performed a one-shot status GET before
+it reserved an observer. The existing reload regression expected that immediate
+GET. After changing the recovery contract to reserve direct observer ownership,
+that focused test failed at the old immediate-request assertion, proving the
+test was exercising the recovery boundary rather than a timing typo.
+
+### Fix and GREEN
+
+- All `convert_to_work_item` paths now enter `submitDecomposition`.
+- Active observers are keyed by Session and command ID, so restoring or
+  re-entering the same job reuses the same completion path rather than creating
+  another browser observer.
+- Reload constructs the durable accepted-job identity directly; SSE starts
+  immediately and the observer owns the retrying five-second poll.
+- Terminal state updates no longer overwrite a newer in-memory Session state;
+  refresh runs before the stored recovery key is removed.
+
+Fresh verification:
+
+```text
+cd frontend/aios-main && npm test && npm run lint
+```
+
+Result: 8 test files / 71 tests passed; `tsc --noEmit` passed, and
+`git diff --check` was clean.

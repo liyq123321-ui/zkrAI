@@ -198,11 +198,13 @@ export function ApiWorkspace() {
   const [agentFilter, setAgentFilter] = useState('ALL');
   const [selectedRootIds, setSelectedRootIds] = useState<string[] | null>(null);
   const pendingCommandIds = useRef(new Map<string, string>());
-  const commandObservation = useRef<{ close: () => void } | null>(null);
+  const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const reconciledDecompositionJobs = useRef(new Set<string>());
 
   const decompositionJobKey = (sessionId: string) =>
     `firstflight.decomposition-job.${sessionId}`;
+  const decompositionObservationKey = (sessionId: string, commandId: string) =>
+    `${sessionId}:${commandId}`;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -219,8 +221,8 @@ export function ApiWorkspace() {
   }, []);
 
   useEffect(() => () => {
-    commandObservation.current?.close();
-    commandObservation.current = null;
+    commandObservations.current.forEach((observation) => observation.close());
+    commandObservations.current.clear();
   }, []);
 
   const projectList = useMemo(() => Object.values(projects), [projects]);
@@ -391,11 +393,14 @@ export function ApiWorkspace() {
     const reconciliationKey = `${storageKey}:${result.command_id}`;
     if (reconciledDecompositionJobs.current.has(reconciliationKey)) return result.state;
     reconciledDecompositionJobs.current.add(reconciliationKey);
-    localStorage.removeItem(storageKey);
-    updateSessionState(result.state);
+    const currentState = projects[result.state.session_id]?.state;
+    if (!currentState || result.state.state_version >= currentState.state_version) {
+      updateSessionState(result.state);
+    }
     const refreshed = await refreshResources(result.state.session_id);
     const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
     if (firstTask) setSelectedWorkItemId(firstTask.id);
+    localStorage.removeItem(storageKey);
     return result.state;
   }
 
@@ -403,21 +408,27 @@ export function ApiWorkspace() {
     sessionId: string,
     accepted: CommandJobAcceptedDto,
   ) {
+    const observationKey = decompositionObservationKey(sessionId, accepted.command_id);
+    const existing = commandObservations.current.get(observationKey);
+    if (existing) return existing.completion;
     const observer = observeCommandJob(sessionId, accepted, {
       onStatus: () => setError(null),
       onTransportError: (reason) => setError(errorText(reason)),
     });
-    commandObservation.current = observer;
     setObservingDecomposition(true);
-    try {
+    const completion = (async () => {
       const result = await observer.completion;
       return reconcileDecompositionSuccess(result);
-    } finally {
-      if (commandObservation.current === observer) {
-        commandObservation.current = null;
+    })().finally(() => {
+      if (commandObservations.current.get(observationKey)?.close === observer.close) {
+        commandObservations.current.delete(observationKey);
+        if (commandObservations.current.size === 0) {
         setObservingDecomposition(false);
+        }
       }
-    }
+    });
+    commandObservations.current.set(observationKey, { close: observer.close, completion });
+    return completion;
   }
 
   async function submitDecomposition(baseState: SessionStateDto) {
@@ -430,6 +441,10 @@ export function ApiWorkspace() {
     const commandId = pendingCommandIds.current.get(fingerprint)
       ?? savedCommandId
       ?? crypto.randomUUID();
+    const existing = commandObservations.current.get(
+      decompositionObservationKey(baseState.session_id, commandId),
+    );
+    if (existing) return existing.completion;
     pendingCommandIds.current.set(fingerprint, commandId);
     const submission = await executeCommand(baseState.session_id, {
       commandId,
@@ -449,26 +464,16 @@ export function ApiWorkspace() {
   }
 
   useEffect(() => {
-    if (!state || commandObservation.current) return;
+    if (!state) return;
     const commandId = localStorage.getItem(decompositionJobKey(state.session_id));
     if (!commandId) return;
-    const controller = new AbortController();
     const sessionId = state.session_id;
     const resume = async () => {
       try {
-        const snapshot = await getCommandJob(sessionId, commandId, controller.signal);
-        if (snapshot.status === 'failed') {
-          setError(`${snapshot.error?.code ?? 'WORKFLOW_ERROR'}：${snapshot.error?.message ?? '后台拆分任务失败。'}`);
-          return;
-        }
-        if (snapshot.status === 'succeeded' && snapshot.result) {
-          await reconcileDecompositionSuccess(snapshot.result);
-          return;
-        }
         setWorkflowProgress('正在恢复后台任务拆分进度…');
         await observeDecomposition(sessionId, {
           command_id: commandId,
-          status: snapshot.status,
+          status: 'processing',
           status_url: `/sessions/${sessionId}/commands/${commandId}`,
           events_url: `/sessions/${sessionId}/commands/${commandId}/events`,
         });
@@ -480,9 +485,8 @@ export function ApiWorkspace() {
     };
     void resume();
     return () => {
-      controller.abort();
-      commandObservation.current?.close();
-      commandObservation.current = null;
+      commandObservations.current.forEach((observation) => observation.close());
+      commandObservations.current.clear();
     };
   }, [state?.session_id]);
 
@@ -641,9 +645,9 @@ export function ApiWorkspace() {
   }, [refreshResources, selectedProject?.state.session_id]);
 
   function switchConversation(sessionId: string | null) {
-    const wasObservingDecomposition = commandObservation.current !== null;
-    commandObservation.current?.close();
-    commandObservation.current = null;
+    const wasObservingDecomposition = commandObservations.current.size > 0;
+    commandObservations.current.forEach((observation) => observation.close());
+    commandObservations.current.clear();
     if (wasObservingDecomposition) {
       setObservingDecomposition(false);
       setBusy(false);
@@ -920,7 +924,14 @@ export function ApiWorkspace() {
                     </button>
                   ))}
                   {state.legal_actions.includes('convert_to_work_item') && (
-                    <button type="button" disabled={busy} onClick={() => runAction('convert_to_work_item')} className="ff-secondary-button">
+                    <button type="button" disabled={busy || observingDecomposition} onClick={() => {
+                      if (!state || busy) return;
+                      setBusy(true);
+                      setError(null);
+                      void submitDecomposition(state)
+                        .catch((reason) => setError(errorText(reason)))
+                        .finally(() => { setWorkflowProgress(null); setBusy(false); });
+                    }} className="ff-secondary-button">
                       继续拆分子任务
                     </button>
                   )}

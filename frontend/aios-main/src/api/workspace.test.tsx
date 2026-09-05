@@ -641,6 +641,15 @@ describe('workspace regression', () => {
     };
     render(<ApiWorkspace />);
     await vi.advanceTimersByTimeAsync(1);
+    expect(WorkspaceEventSource.instances).toHaveLength(1);
+    expect(fetchSpy.mock.calls.some(([input]) =>
+      String(input).endsWith('/commands/saved-job')
+    )).toBe(false);
+    await vi.advanceTimersByTimeAsync(4_998);
+    expect(fetchSpy.mock.calls.some(([input]) =>
+      String(input).endsWith('/commands/saved-job')
+    )).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     expect(fetchSpy.mock.calls.some(([input]) =>
       String(input).endsWith('/commands/saved-job')
     )).toBe(true);
