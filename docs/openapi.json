@@ -1132,6 +1132,28 @@
       },
       "SessionCommandRequest": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "convert_to_work_item"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "command_id": {
+                  "maxLength": 255,
+                  "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._~-]{0,254})$"
+                }
+              }
+            }
+          }
+        ],
         "properties": {
           "action": {
             "$ref": "#/components/schemas/CommandAction"
@@ -2539,7 +2561,15 @@
                 }
               }
             },
-            "description": "Durable asynchronous decomposition command accepted."
+            "description": "Durable asynchronous decomposition command accepted.",
+            "headers": {
+              "Location": {
+                "description": "Durable command-job status resource.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {

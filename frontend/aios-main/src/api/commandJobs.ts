@@ -7,6 +7,21 @@ import type {
 } from './dto';
 
 const commandJobStatuses = new Set(['pending', 'processing', 'succeeded', 'failed']);
+const commandActions = new Set([
+  'message',
+  'skip_clarification',
+  'create_spec',
+  'revise',
+  'approve',
+  'reject',
+  'rework',
+  'publish_review',
+  'convert_to_work_item',
+  'restore_spec_version',
+  'start_task',
+  'complete_task',
+  'fail_task',
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -16,10 +31,45 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
-function isCommandResult(value: unknown, commandId: string): value is CommandResultDto {
+function isClarificationQuestion(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.question_id === 'string'
+    && typeof value.question === 'string'
+    && typeof value.reason === 'string'
+    && isStringArray(value.affected_areas)
+    && typeof value.blocking === 'boolean';
+}
+
+function isSessionState(value: unknown, sessionId: string): boolean {
+  return isRecord(value)
+    && value.session_id === sessionId
+    && typeof value.project_id === 'string'
+    && typeof value.phase === 'string'
+    && typeof value.state_version === 'number'
+    && Number.isInteger(value.state_version)
+    && value.state_version >= 0
+    && (value.current_spec_version_id === null
+      || typeof value.current_spec_version_id === 'string')
+    && (value.current_spec_status === null
+      || typeof value.current_spec_status === 'string')
+    && Array.isArray(value.legal_actions)
+    && value.legal_actions.every((action) =>
+      typeof action === 'string' && commandActions.has(action))
+    && typeof value.next_action === 'string'
+    && Array.isArray(value.outstanding_questions)
+    && value.outstanding_questions.every(isClarificationQuestion)
+    && Array.isArray(value.review_findings)
+    && value.review_findings.every(isRecord);
+}
+
+function isCommandResult(
+  value: unknown,
+  commandId: string,
+  sessionId: string,
+): value is CommandResultDto {
   return isRecord(value)
     && value.command_id === commandId
-    && isRecord(value.state)
+    && isSessionState(value.state, sessionId)
     && isStringArray(value.created_resource_ids);
 }
 
@@ -29,7 +79,11 @@ function isErrorDetail(value: unknown): value is { code: string; message: string
     && typeof value.message === 'string';
 }
 
-function isCommandJobSnapshot(value: unknown, commandId: string): value is CommandJobReadDto {
+function isCommandJobSnapshot(
+  value: unknown,
+  commandId: string,
+  sessionId: string,
+): value is CommandJobReadDto {
   if (!isRecord(value)
     || value.command_id !== commandId
     || typeof value.status !== 'string'
@@ -43,7 +97,7 @@ function isCommandJobSnapshot(value: unknown, commandId: string): value is Comma
     return false;
   }
   if (value.status === 'succeeded') {
-    return isCommandResult(value.result, commandId) && value.error === null;
+    return isCommandResult(value.result, commandId, sessionId) && value.error === null;
   }
   if (value.status === 'failed') {
     return value.result === null && (value.error === null || isErrorDetail(value.error));
@@ -55,6 +109,7 @@ type ObserverOptions = {
   poll?: () => Promise<CommandJobReadDto>;
   eventSourceFactory?: (url: string) => EventSource;
   pollIntervalMs?: number;
+  pollImmediately?: boolean;
   onStatus?: (status: CommandJobReadDto) => void;
   onTransportError?: (error: unknown) => void;
 };
@@ -106,7 +161,7 @@ export function observeCommandJob(
       };
       close();
       rejectCompletion(new ApiError({
-        status: 0,
+        status: error.code === 'STALE_STATE' ? 409 : 0,
         code: error.code,
         message: error.message,
         retryable: true,
@@ -114,29 +169,32 @@ export function observeCommandJob(
     }
   };
 
-  const schedulePoll = () => {
-    timer = setTimeout(async () => {
-      try {
-        const snapshot: unknown = await poll();
-        if (isCommandJobSnapshot(snapshot, accepted.command_id)) {
-          reconcile(snapshot);
-        }
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        if (sseUnavailable) options.onTransportError?.(error);
-      } finally {
-        if (!closed) schedulePoll();
+  const pollOnce = async () => {
+    try {
+      const snapshot: unknown = await poll();
+      if (isCommandJobSnapshot(snapshot, accepted.command_id, sessionId)) {
+        reconcile(snapshot);
       }
-    }, pollIntervalMs);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      if (sseUnavailable) options.onTransportError?.(error);
+    } finally {
+      if (!closed) schedulePoll();
+    }
   };
 
-  schedulePoll();
+  const schedulePoll = () => {
+    timer = setTimeout(() => { void pollOnce(); }, pollIntervalMs);
+  };
+
+  if (options.pollImmediately) void pollOnce();
+  else schedulePoll();
   try {
     source = makeSource(commandJobEventsUrl(accepted.events_url));
     source.addEventListener('command.status', (event) => {
       try {
         const snapshot: unknown = JSON.parse((event as MessageEvent<string>).data);
-        if (!isCommandJobSnapshot(snapshot, accepted.command_id)) return;
+        if (!isCommandJobSnapshot(snapshot, accepted.command_id, sessionId)) return;
         sseUnavailable = false;
         reconcile(snapshot);
       } catch {

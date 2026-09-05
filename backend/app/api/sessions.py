@@ -103,6 +103,12 @@ def build_router(
             status.HTTP_202_ACCEPTED: {
                 "model": CommandJobAccepted,
                 "description": "Durable asynchronous decomposition command accepted.",
+                "headers": {
+                    "Location": {
+                        "description": "Durable command-job status resource.",
+                        "schema": {"type": "string"},
+                    }
+                },
             }
         },
     )
@@ -127,6 +133,7 @@ def build_router(
                 return JSONResponse(
                     status_code=status.HTTP_202_ACCEPTED,
                     content=accepted.model_dump(mode="json"),
+                    headers={"Location": accepted.status_url},
                 )
             result = await commands.execute(session_id, request_body)
             if (

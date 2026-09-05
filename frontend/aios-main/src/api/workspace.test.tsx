@@ -25,8 +25,10 @@ let failDocument = false;
 let failDiff = false;
 let missingSavedSession = false;
 let resourceOverrides: Record<string, unknown> = {};
+let resourceOverrideSequences: Record<string, unknown[]> = {};
 let resourceFailures: Record<string, number> = {};
 let resourceFailureSequences: Record<string, number[]> = {};
+let resourceDelaySequences: Record<string, Promise<void>[]> = {};
 let sessionCatalog: SessionSummaryDto[] = [];
 let fetchSpy: ReturnType<typeof vi.fn>;
 
@@ -47,14 +49,18 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false; };
   failLines = false; failComments = false; failDocument = false; failDiff = false; missingSavedSession = false;
   resourceOverrides = {};
+  resourceOverrideSequences = {};
   resourceFailures = {};
   resourceFailureSequences = {};
+  resourceDelaySequences = {};
   sessionCatalog = [{session_id:'session-1',project_id:'project-1',root_work_item_id:'root-1',title:'知识问答'}];
   localStorage.clear();
   WorkspaceEventSource.instances = [];
   vi.stubGlobal('EventSource', WorkspaceEventSource);
   fetchSpy = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     const path = new URL(String(input)).pathname;
+    const delay = resourceDelaySequences[path]?.shift();
+    if (delay) await delay;
     const queuedFailure = resourceFailureSequences[path]?.shift();
     if (queuedFailure) {
       return new Response(JSON.stringify({detail:{code:'TEMPORARILY_UNAVAILABLE',message:'请稍后重试'}}),{status:queuedFailure});
@@ -72,6 +78,10 @@ beforeEach(() => {
     }
     if ((failLines && path.endsWith('/commentable-lines')) || (failComments && path.endsWith('/comments')) || (failDocument && path === '/prd/root-1') || (failDiff && path.endsWith('/diff'))) {
       return new Response(JSON.stringify({detail:{code:'GITEA_UNAVAILABLE',message:'Gitea is temporarily unavailable.'}}), {status:503});
+    }
+    const queuedPayload = resourceOverrideSequences[path]?.shift();
+    if (queuedPayload !== undefined) {
+      return new Response(JSON.stringify(queuedPayload), {status:200});
     }
     const payloads: Record<string, unknown> = {
       '/healthz':{status:'ok',database:'ok'},
@@ -97,7 +107,7 @@ beforeEach(() => {
   });
   vi.stubGlobal('fetch',fetchSpy);
 });
-afterEach(() => {cleanup();localStorage.clear();vi.unstubAllGlobals();vi.useRealTimers();});
+afterEach(() => {cleanup();localStorage.clear();vi.unstubAllGlobals();vi.restoreAllMocks();vi.useRealTimers();});
 
 function commandStatusRequestCount(): number {
   return fetchSpy.mock.calls.filter(([input, options]) =>
@@ -112,6 +122,28 @@ function getRequestCount(path: string): number {
     (!options?.method || options.method === 'GET')
     && new URL(String(input)).pathname === path
   ).length;
+}
+
+function commandPostBodies(): Array<Record<string, unknown>> {
+  return fetchSpy.mock.calls
+    .filter(([input, options]) =>
+      options?.method === 'POST'
+      && new URL(String(input)).pathname === '/sessions/session-1/commands')
+    .map(([, options]) => JSON.parse(String(options?.body)) as Record<string, unknown>);
+}
+
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: () => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function renderPanel(
@@ -690,20 +722,96 @@ describe('workspace regression', () => {
     render(<ApiWorkspace />);
     await vi.advanceTimersByTimeAsync(1);
     expect(WorkspaceEventSource.instances).toHaveLength(1);
-    expect(fetchSpy.mock.calls.some(([input]) =>
-      String(input).endsWith('/commands/saved-job')
-    )).toBe(false);
+    expect(getRequestCount('/sessions/session-1/commands/saved-job')).toBe(1);
     await vi.advanceTimersByTimeAsync(4_998);
-    expect(fetchSpy.mock.calls.some(([input]) =>
-      String(input).endsWith('/commands/saved-job')
-    )).toBe(false);
+    expect(getRequestCount('/sessions/session-1/commands/saved-job')).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(fetchSpy.mock.calls.some(([input]) =>
-      String(input).endsWith('/commands/saved-job')
-    )).toBe(true);
+    expect(getRequestCount('/sessions/session-1/commands/saved-job')).toBe(2);
     expect(fetchSpy.mock.calls.some(([input, options]) =>
       options?.method === 'POST' && String(input).endsWith('/commands')
     )).toBe(false);
+  });
+
+  it('recovers a stale decomposition after a concurrent client advances state and retries with a new command ID', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const firstState = {
+      ...state,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+    };
+    const concurrentState = { ...firstState, state_version: firstState.state_version + 1 };
+    const firstCommandId = '00000000-0000-4000-8000-000000000001';
+    const retryCommandId = '00000000-0000-4000-8000-000000000002';
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce(firstCommandId)
+      .mockReturnValueOnce(retryCommandId);
+    resourceOverrideSequences['/sessions/session-1/state'] = [firstState];
+    resourceOverrides['/sessions/session-1/state'] = concurrentState;
+    resourceOverrideSequences['/sessions/session-1/commands'] = [
+      {
+        command_id: firstCommandId,
+        status: 'pending',
+        status_url: `/sessions/session-1/commands/${firstCommandId}`,
+        events_url: `/sessions/session-1/commands/${firstCommandId}/events`,
+      },
+      {
+        command_id: retryCommandId,
+        status: 'pending',
+        status_url: `/sessions/session-1/commands/${retryCommandId}`,
+        events_url: `/sessions/session-1/commands/${retryCommandId}/events`,
+      },
+    ];
+    resourceOverrides[`/sessions/session-1/commands/${firstCommandId}`] = {
+      command_id: firstCommandId,
+      status: 'failed',
+      status_version: 3,
+      result: null,
+      error: {
+        code: 'STALE_STATE',
+        message: 'backend-internal stale comparison detail',
+      },
+      created_at: '2026-09-05T00:00:00Z',
+      started_at: '2026-09-05T00:00:01Z',
+      completed_at: '2026-09-05T00:00:10Z',
+    };
+    resourceOverrides[`/sessions/session-1/commands/${retryCommandId}`] = {
+      command_id: retryCommandId,
+      status: 'processing',
+      status_version: 2,
+      result: null,
+      error: null,
+      created_at: '2026-09-05T00:00:11Z',
+      started_at: '2026-09-05T00:00:12Z',
+      completed_at: null,
+    };
+
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    let decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
+    vi.useFakeTimers();
+
+    fireEvent.click(decompose);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBeNull();
+    expect(screen.getAllByText(/状态已被其他操作更新。页面已刷新/)).not.toHaveLength(0);
+    expect(screen.queryByText(/backend-internal stale comparison detail/)).toBeNull();
+    expect(WorkspaceEventSource.instances[0].close).toHaveBeenCalledTimes(1);
+
+    decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    expect((decompose as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(decompose);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(commandPostBodies()).toMatchObject([
+      { command_id: firstCommandId, expected_state_version: firstState.state_version },
+      { command_id: retryCommandId, expected_state_version: concurrentState.state_version },
+    ]);
+    expect(WorkspaceEventSource.instances).toHaveLength(2);
+    expect(WorkspaceEventSource.instances[1].url).toContain(retryCommandId);
   });
 
   it('keeps a succeeded job recoverable until its failed resource refresh later succeeds', async () => {
@@ -871,6 +979,157 @@ describe('workspace regression', () => {
     expect(WorkspaceEventSource.instances[0].close).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(commandStatusRequestCount()).toBe(0);
+  });
+
+  it('retains terminal recovery and does not select an old task when refresh finishes after a project switch', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    sessionCatalog.push({session_id:'session-2',project_id:'project-2',root_work_item_id:'root-2',title:'客户支持助手'});
+    const approved = {
+      ...state,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+    };
+    resourceOverrides = {
+      '/sessions/session-1/state': approved,
+      '/sessions/session-1/commands': {
+        command_id: 'decompose-job-1', status: 'pending',
+        status_url: '/sessions/session-1/commands/decompose-job-1',
+        events_url: '/sessions/session-1/commands/decompose-job-1/events',
+      },
+      '/sessions/session-1/commands/decompose-job-1': {
+        command_id: 'decompose-job-1', status: 'succeeded', status_version: 3,
+        result: {
+          command_id: 'decompose-job-1',
+          state: { ...approved, phase: 'AGENT_SPECS_READY', state_version: 7 },
+          created_resource_ids: ['task-todo'],
+        },
+        error: null, created_at: '2026-09-05T00:00:00Z',
+        started_at: '2026-09-05T00:00:01Z', completed_at: '2026-09-05T00:00:10Z',
+      },
+      '/sessions/session-2/state':{...state,session_id:'session-2',project_id:'project-2',current_spec_version_id:null,legal_actions:[],phase:'NEED_CLARIFICATION'},
+      '/sessions/session-2/specs':[],
+      '/sessions/session-2/work-items':[{id:'root-2',kind:'ROOT',title:'客户支持助手',parent_id:null,dependency_work_item_ids:[]}],
+      '/sessions/session-2/agent-specs':[],
+      '/sessions/session-2/events':[],
+    };
+    render(<ApiWorkspace />);
+    const decompose = await screen.findByRole('button', { name: '继续拆分子任务' });
+    await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
+    const delayedRefresh = deferred();
+    resourceDelaySequences['/sessions/session-1/state'] = [delayedRefresh.promise];
+    vi.useFakeTimers();
+
+    fireEvent.click(decompose);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBe('decompose-job-1');
+
+    const projectPicker = screen.getByRole('combobox', { name: '当前对话项目' });
+    fireEvent.change(projectPicker, { target: { value: 'session-2' } });
+    delayedRefresh.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect((projectPicker as HTMLSelectElement).value).toBe('session-2');
+    expect(screen.queryByRole('dialog', { name: '任务详情' })).toBeNull();
+    expect(screen.queryByText(/REQUEST_ABORTED|NETWORK_ERROR/)).toBeNull();
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBe('decompose-job-1');
+  });
+
+  it('does not surface a late old-project refresh error after switching projects', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    sessionCatalog.push({session_id:'session-2',project_id:'project-2',root_work_item_id:'root-2',title:'客户支持助手'});
+    const approved = {
+      ...state,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+    };
+    resourceOverrides = {
+      '/sessions/session-1/state': approved,
+      '/sessions/session-1/commands': {
+        command_id: 'decompose-job-1', status: 'pending',
+        status_url: '/sessions/session-1/commands/decompose-job-1',
+        events_url: '/sessions/session-1/commands/decompose-job-1/events',
+      },
+      '/sessions/session-1/commands/decompose-job-1': {
+        command_id: 'decompose-job-1', status: 'succeeded', status_version: 3,
+        result: {
+          command_id: 'decompose-job-1',
+          state: { ...approved, phase: 'AGENT_SPECS_READY', state_version: 7 },
+          created_resource_ids: ['task-todo'],
+        },
+        error: null, created_at: '2026-09-05T00:00:00Z',
+        started_at: '2026-09-05T00:00:01Z', completed_at: '2026-09-05T00:00:10Z',
+      },
+      '/sessions/session-2/state':{...state,session_id:'session-2',project_id:'project-2',current_spec_version_id:null,legal_actions:[],phase:'NEED_CLARIFICATION'},
+      '/sessions/session-2/specs':[],
+      '/sessions/session-2/work-items':[{id:'root-2',kind:'ROOT',title:'客户支持助手',parent_id:null,dependency_work_item_ids:[]}],
+      '/sessions/session-2/agent-specs':[],
+      '/sessions/session-2/events':[],
+    };
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
+    const delayedRefresh = deferred();
+    resourceDelaySequences['/sessions/session-1/state'] = [delayedRefresh.promise];
+    vi.useFakeTimers();
+
+    fireEvent.click(decompose);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(0);
+    fireEvent.change(screen.getByRole('combobox', { name: '当前对话项目' }), { target: { value: 'session-2' } });
+    const oldRefreshRequest = fetchSpy.mock.calls.filter(([input]) =>
+      new URL(String(input)).pathname === '/sessions/session-1/state').at(-1);
+    expect(oldRefreshRequest?.[1]?.signal?.aborted).toBe(true);
+    delayedRefresh.reject(new Error('late old-project refresh failure'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(screen.queryByText(/NETWORK_ERROR/)).toBeNull();
+    expect(screen.queryByText(/late old-project refresh failure/)).toBeNull();
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBe('decompose-job-1');
+  });
+
+  it('keeps terminal recovery after unmount when a delayed refresh later succeeds', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const approved = {
+      ...state,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+    };
+    resourceOverrides['/sessions/session-1/state'] = approved;
+    resourceOverrides['/sessions/session-1/commands'] = {
+      command_id: 'decompose-job-1', status: 'pending',
+      status_url: '/sessions/session-1/commands/decompose-job-1',
+      events_url: '/sessions/session-1/commands/decompose-job-1/events',
+    };
+    resourceOverrides['/sessions/session-1/commands/decompose-job-1'] = {
+      command_id: 'decompose-job-1', status: 'succeeded', status_version: 3,
+      result: {
+        command_id: 'decompose-job-1',
+        state: { ...approved, phase: 'AGENT_SPECS_READY', state_version: 7 },
+        created_resource_ids: ['task-todo'],
+      },
+      error: null, created_at: '2026-09-05T00:00:00Z',
+      started_at: '2026-09-05T00:00:01Z', completed_at: '2026-09-05T00:00:10Z',
+    };
+    const view = render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
+    const delayedRefresh = deferred();
+    resourceDelaySequences['/sessions/session-1/state'] = [delayedRefresh.promise];
+    vi.useFakeTimers();
+
+    fireEvent.click(decompose);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(0);
+    view.unmount();
+    delayedRefresh.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBe('decompose-job-1');
   });
 });
 

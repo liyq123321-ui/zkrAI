@@ -105,6 +105,10 @@ def test_command_job_openapi_contract_distinguishes_sync_and_async_responses(
     assert command_responses["202"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CommandJobAccepted"
     }
+    assert command_responses["202"]["headers"]["Location"] == {
+        "description": "Durable command-job status resource.",
+        "schema": {"type": "string"},
+    }
 
     status_response = schema["paths"][
         "/sessions/{session_id}/commands/{command_id}"
@@ -120,6 +124,22 @@ def test_command_job_openapi_contract_distinguishes_sync_and_async_responses(
         "text/event-stream": {"schema": {"type": "string"}}
     }
     assert any(parameter["name"] == "Last-Event-ID" for parameter in events["parameters"])
+
+    request_schema = schema["components"]["schemas"]["SessionCommandRequest"]
+    assert {
+        "if": {
+            "properties": {"action": {"const": "convert_to_work_item"}},
+            "required": ["action"],
+        },
+        "then": {
+            "properties": {
+                "command_id": {
+                    "maxLength": 255,
+                    "pattern": r"^[A-Za-z0-9](?:[A-Za-z0-9._~-]{0,254})$",
+                }
+            }
+        },
+    } in request_schema["allOf"]
 
 
 def test_decomposition_returns_accepted_job_and_status_is_pollable(session_factory):
@@ -152,10 +172,86 @@ def test_decomposition_returns_accepted_job_and_status_is_pollable(session_facto
             "status_url": f"/sessions/{approved['session_id']}/commands/decompose-accepted",
             "events_url": f"/sessions/{approved['session_id']}/commands/decompose-accepted/events",
         }
+        assert response.headers["location"] == accepted["status_url"]
         status_response = client.get(accepted["status_url"])
         assert status_response.status_code == 200
         assert status_response.json()["status"] == "succeeded"
         assert status_response.json()["result"]["state"]["phase"] == "AGENT_SPECS_READY"
+
+
+@pytest.mark.parametrize(
+    "command_id",
+    [
+        "decompose?query",
+        "decompose#fragment",
+        "decompose/path",
+        "decompose job",
+        "拆分任务",
+    ],
+)
+def test_decomposition_rejects_command_ids_that_cannot_be_used_as_url_segments(
+    session_factory,
+    command_id,
+):
+    agent = ScriptedAgentGateway(
+        analyze_results=deque([
+            ClarificationAnalysis(ready_for_spec=True, questions=[], assumptions=[])
+        ])
+    )
+    with TestClient(create_app(agent_gateway=agent, session_factory=session_factory)) as client:
+        created = client.post(
+            "/sessions",
+            json={
+                "request_id": f"invalid-command-id-{len(command_id)}",
+                "actor_id": "approver-1",
+                "brief": make_complete_brief().model_dump(mode="json"),
+            },
+        ).json()
+        response = client.post(
+            f"/sessions/{created['session_id']}/commands",
+            json={
+                "command_id": command_id,
+                "action": "convert_to_work_item",
+                "expected_state_version": created["state_version"],
+                "actor_id": "approver-1",
+                "payload": {},
+            },
+        )
+
+    assert response.status_code == 422
+    assert "URL-safe ASCII" in response.text
+
+
+def test_url_unsafe_legacy_command_id_remains_compatible_for_synchronous_commands(
+    session_factory,
+):
+    agent = ScriptedAgentGateway(
+        analyze_results=deque([
+            _blocking_analysis("Q-SYNC-ID", "Which deployment boundary applies?")
+        ])
+    )
+    with TestClient(create_app(agent_gateway=agent, session_factory=session_factory)) as client:
+        created = client.post(
+            "/sessions",
+            json={
+                "request_id": "sync-command-id-compatibility",
+                "actor_id": "approver-1",
+                "brief": make_complete_brief().model_dump(mode="json"),
+            },
+        ).json()
+        response = client.post(
+            f"/sessions/{created['session_id']}/commands",
+            json={
+                "command_id": "legacy sync/id?仍兼容",
+                "action": "skip_clarification",
+                "expected_state_version": created["state_version"],
+                "actor_id": "approver-1",
+                "payload": {},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["command_id"] == "legacy sync/id?仍兼容"
 
 
 def test_non_decomposition_command_still_returns_completed_200(session_factory):

@@ -89,6 +89,29 @@ afterEach(() => {
 });
 
 describe('observeCommandJob', () => {
+  it('can read durable status immediately, then waits 5000 ms after that request completes', async () => {
+    vi.useFakeTimers();
+    let release!: (value: CommandJobReadDto) => void;
+    const poll = vi.fn(() => new Promise<CommandJobReadDto>((resolve) => { release = resolve; }));
+
+    const observer = observeCommandJob('session-1', accepted, {
+      poll,
+      pollImmediately: true,
+    });
+    expect(poll).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(poll).toHaveBeenCalledTimes(1);
+    release(processing);
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(poll).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(poll).toHaveBeenCalledTimes(2);
+    observer.close();
+  });
+
   it('polls every 5000 ms without overlapping requests when SSE is quiet', async () => {
     vi.useFakeTimers();
     const poll = vi.fn<() => Promise<CommandJobReadDto>>();
@@ -232,6 +255,34 @@ describe('observeCommandJob', () => {
     expect(onStatus).toHaveBeenLastCalledWith(succeeded);
   });
 
+  it('rejects a terminal result whose Session state is only a partial object', async () => {
+    vi.useFakeTimers();
+    const partial = {
+      ...succeededJob(),
+      status_version: 99,
+      result: {
+        command_id: 'decompose-1',
+        state: { session_id: 'session-1' },
+        created_resource_ids: ['work-item-1'],
+      },
+    } as unknown as CommandJobReadDto;
+    const poll = vi.fn().mockResolvedValue(partial);
+    const onStatus = vi.fn();
+    const observer = observeCommandJob('session-1', accepted, {
+      poll,
+      onStatus,
+      pollImmediately: true,
+    });
+    await Promise.resolve();
+
+    expect(onStatus).not.toHaveBeenCalled();
+    const succeeded = succeededJob();
+    FakeEventSource.instances[0].emit('command.status', succeeded);
+
+    await expect(observer.completion).resolves.toEqual(succeeded.result);
+    expect(onStatus).toHaveBeenCalledWith(succeeded);
+  });
+
   it('ignores malformed SSE frames and lets the durable poll finish the job', async () => {
     vi.useFakeTimers();
     const succeeded = succeededJob();
@@ -264,6 +315,30 @@ describe('observeCommandJob', () => {
       message: 'decomposition failed',
     });
     expect(FakeEventSource.instances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves STALE_STATE as an actionable durable conflict', async () => {
+    const failed: CommandJobReadDto = {
+      ...processing,
+      status: 'failed',
+      status_version: 3,
+      error: {
+        code: 'STALE_STATE',
+        message: 'The workflow state changed; retry with current state.',
+      },
+      completed_at: '2026-09-05T00:00:10Z',
+    };
+    const observer = observeCommandJob('session-1', accepted, {
+      poll: vi.fn().mockResolvedValue(processing),
+    });
+
+    FakeEventSource.instances[0].emit('command.status', failed);
+
+    await expect(observer.completion).rejects.toMatchObject({
+      status: 409,
+      code: 'STALE_STATE',
+      retryable: true,
+    });
   });
 
   it('settles terminal completion even when onStatus throws', async () => {

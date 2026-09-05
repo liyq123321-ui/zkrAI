@@ -15,7 +15,7 @@ from app.database.models import CommandJob, Project
 from app.domain.types import CommandAction
 from app.schemas.workflow import CommandResult, SessionCommandRequest, SessionState
 from app.services.command_jobs import CommandJobCoordinator
-from app.services.command_service import CommandConflict
+from app.services.command_service import CommandConflict, StaleState
 
 
 def request(command_id: str = "decompose-1") -> SessionCommandRequest:
@@ -261,6 +261,32 @@ async def test_failure_is_classified_without_persisting_internal_detail(session_
     with session_factory() as db:
         persisted = db.get(CommandJob, job_id)
         assert "secret" not in (persisted.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_stale_state_failure_keeps_public_code_without_internal_detail(
+    session_factory,
+):
+    seed_project(session_factory)
+
+    async def execute(session_id, command):
+        raise StaleState("expected=7 actual=8 internal=/private/workflow.db")
+
+    coordinator = CommandJobCoordinator(session_factory, execute)
+    coordinator.submit("session-1", request())
+    with session_factory() as db:
+        job_id = db.query(CommandJob).one().id
+    await coordinator.run(job_id)
+
+    snapshot = coordinator.get("session-1", "decompose-1")
+    assert snapshot.status == "failed"
+    assert snapshot.error is not None
+    assert snapshot.error.code == "STALE_STATE"
+    assert snapshot.error.message == (
+        "The workflow state changed or the request conflicts; retry with current state."
+    )
+    assert "internal" not in snapshot.model_dump_json()
+    assert "/private" not in snapshot.model_dump_json()
 
 
 def test_startup_marks_abandoned_jobs_and_identical_submit_reschedules(session_factory):

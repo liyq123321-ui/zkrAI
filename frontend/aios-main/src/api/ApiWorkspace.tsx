@@ -109,6 +109,16 @@ function errorText(error: unknown): string {
   return `${normalized.code}：${normalized.message}`;
 }
 
+function throwIfObservationCancelled(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  throw new ApiError({
+    status: 0,
+    code: 'REQUEST_ABORTED',
+    message: '请求已取消。',
+    retryable: false,
+  });
+}
+
 function assigneeLabel(item: WorkItemDto): string {
   return item.suggested_assignee || item.responsible_role || '待分配 Agent';
 }
@@ -199,6 +209,7 @@ export function ApiWorkspace() {
   const [selectedRootIds, setSelectedRootIds] = useState<string[] | null>(null);
   const pendingCommandIds = useRef(new Map<string, string>());
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
+  const decompositionLifecycles = useRef(new Set<AbortController>());
   const reconciledDecompositionJobs = useRef(new Set<string>());
   const reconcilingDecompositionJobs = useRef(new Set<string>());
 
@@ -222,6 +233,8 @@ export function ApiWorkspace() {
   }, []);
 
   useEffect(() => () => {
+    decompositionLifecycles.current.forEach((controller) => controller.abort());
+    decompositionLifecycles.current.clear();
     commandObservations.current.forEach((observation) => observation.close());
     commandObservations.current.clear();
   }, []);
@@ -389,15 +402,20 @@ export function ApiWorkspace() {
     return result.state;
   }
 
-  async function reconcileDecompositionSuccess(result: CommandResultDto) {
+  async function reconcileDecompositionSuccess(
+    result: CommandResultDto,
+    signal: AbortSignal,
+  ) {
     const storageKey = decompositionJobKey(result.state.session_id);
     const reconciliationKey = `${storageKey}:${result.command_id}`;
     if (reconciledDecompositionJobs.current.has(reconciliationKey)) return result.state;
     if (reconcilingDecompositionJobs.current.has(reconciliationKey)) return result.state;
     reconcilingDecompositionJobs.current.add(reconciliationKey);
     try {
+      throwIfObservationCancelled(signal);
       updateSessionState(result.state);
-      const refreshed = await refreshResources(result.state.session_id);
+      const refreshed = await refreshResources(result.state.session_id, signal);
+      throwIfObservationCancelled(signal);
       const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
       if (firstTask) setSelectedWorkItemId(firstTask.id);
       localStorage.removeItem(storageKey);
@@ -411,27 +429,67 @@ export function ApiWorkspace() {
   async function observeDecomposition(
     sessionId: string,
     accepted: CommandJobAcceptedDto,
+    pollImmediately = false,
   ) {
     const observationKey = decompositionObservationKey(sessionId, accepted.command_id);
     const existing = commandObservations.current.get(observationKey);
     if (existing) return existing.completion;
+    const lifecycle = new AbortController();
+    decompositionLifecycles.current.add(lifecycle);
     const observer = observeCommandJob(sessionId, accepted, {
-      onStatus: () => setError(null),
-      onTransportError: (reason) => setError(errorText(reason)),
+      pollImmediately,
+      onStatus: () => {
+        if (!lifecycle.signal.aborted) setError(null);
+      },
+      onTransportError: (reason) => {
+        if (!lifecycle.signal.aborted) setError(errorText(reason));
+      },
     });
+    const close = () => {
+      lifecycle.abort();
+      observer.close();
+    };
     setObservingDecomposition(true);
     const completion = (async () => {
-      const result = await observer.completion;
-      return reconcileDecompositionSuccess(result);
+      try {
+        const result = await observer.completion;
+        throwIfObservationCancelled(lifecycle.signal);
+        return await reconcileDecompositionSuccess(result, lifecycle.signal);
+      } catch (reason) {
+        throwIfObservationCancelled(lifecycle.signal);
+        const normalized = normalizeNetworkError(reason);
+        if (normalized.status !== 409 || normalized.code !== 'STALE_STATE') throw reason;
+
+        const storageKey = decompositionJobKey(sessionId);
+        if (localStorage.getItem(storageKey) === accepted.command_id) {
+          localStorage.removeItem(storageKey);
+        }
+        pendingCommandIds.current.clear();
+        if (commandObservations.current.get(observationKey)?.close === close) {
+          commandObservations.current.delete(observationKey);
+          if (commandObservations.current.size === 0) setObservingDecomposition(false);
+        }
+        await refreshResources(sessionId, lifecycle.signal).catch(() => {
+          throwIfObservationCancelled(lifecycle.signal);
+        });
+        throwIfObservationCancelled(lifecycle.signal);
+        throw new ApiError({
+          status: 409,
+          code: 'STALE_STATE',
+          message: '状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。',
+          retryable: true,
+        });
+      }
     })().finally(() => {
-      if (commandObservations.current.get(observationKey)?.close === observer.close) {
+      decompositionLifecycles.current.delete(lifecycle);
+      if (commandObservations.current.get(observationKey)?.close === close) {
         commandObservations.current.delete(observationKey);
         if (commandObservations.current.size === 0) {
-        setObservingDecomposition(false);
+          setObservingDecomposition(false);
         }
       }
     });
-    commandObservations.current.set(observationKey, { close: observer.close, completion });
+    commandObservations.current.set(observationKey, { close, completion });
     return completion;
   }
 
@@ -480,7 +538,7 @@ export function ApiWorkspace() {
           status: 'processing',
           status_url: `/sessions/${sessionId}/commands/${commandId}`,
           events_url: `/sessions/${sessionId}/commands/${commandId}/events`,
-        });
+        }, true);
       } catch (reason) {
         if (normalizeNetworkError(reason).code !== 'REQUEST_ABORTED') setError(errorText(reason));
       } finally {
@@ -617,10 +675,11 @@ export function ApiWorkspace() {
       }
     } catch (reason) {
       const normalized = normalizeNetworkError(reason);
-      if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
-        pendingCommandIds.current.clear();
-        await refreshResources(targetState.session_id).catch(() => undefined);
-        setError('状态已被其他操作更新。页面已刷新，请确认最新 PRD 后重新提交。');
+      if (normalized.code === 'REQUEST_ABORTED') {
+        return;
+      } else if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
+        setError(normalized.message);
+        return;
       } else {
         setError(errorText(reason));
       }
@@ -650,6 +709,8 @@ export function ApiWorkspace() {
 
   function switchConversation(sessionId: string | null) {
     const wasObservingDecomposition = commandObservations.current.size > 0;
+    decompositionLifecycles.current.forEach((controller) => controller.abort());
+    decompositionLifecycles.current.clear();
     commandObservations.current.forEach((observation) => observation.close());
     commandObservations.current.clear();
     if (wasObservingDecomposition) {
@@ -933,7 +994,11 @@ export function ApiWorkspace() {
                       setBusy(true);
                       setError(null);
                       void submitDecomposition(state)
-                        .catch((reason) => setError(errorText(reason)))
+                        .catch((reason) => {
+                          if (normalizeNetworkError(reason).code !== 'REQUEST_ABORTED') {
+                            setError(errorText(reason));
+                          }
+                        })
                         .finally(() => { setWorkflowProgress(null); setBusy(false); });
                     }} className="ff-secondary-button">
                       继续拆分子任务

@@ -1,9 +1,10 @@
 """Transport contracts for the project workflow API."""
 
+import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.types import (
     ClarificationQuestion,
@@ -12,6 +13,10 @@ from app.domain.types import (
     ReviewFinding,
     SpecStatus,
 )
+
+
+ASYNC_COMMAND_ID_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9._~-]{0,254})$"
+_ASYNC_COMMAND_ID = re.compile(ASYNC_COMMAND_ID_PATTERN)
 
 
 class ProjectBrief(BaseModel):
@@ -39,7 +44,29 @@ class SessionCreateRequest(BaseModel):
 
 
 class SessionCommandRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "action": {"const": "convert_to_work_item"}
+                        },
+                        "required": ["action"],
+                    },
+                    "then": {
+                        "properties": {
+                            "command_id": {
+                                "maxLength": 255,
+                                "pattern": ASYNC_COMMAND_ID_PATTERN,
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+    )
 
     command_id: str = Field(min_length=1)
     action: CommandAction
@@ -47,6 +74,18 @@ class SessionCommandRequest(BaseModel):
     actor_id: str | None = Field(default=None, min_length=1)
     message: str | None = None
     payload: dict[str, object] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_async_command_id(self):
+        if (
+            self.action is CommandAction.CONVERT_TO_WORK_ITEM
+            and _ASYNC_COMMAND_ID.fullmatch(self.command_id) is None
+        ):
+            raise ValueError(
+                "convert_to_work_item command_id must be 1-255 URL-safe ASCII "
+                "characters (letters, digits, '.', '_', '~', or '-')"
+            )
+        return self
 
 
 class SessionState(BaseModel):
