@@ -28,6 +28,17 @@ let resourceFailures: Record<string, number> = {};
 let sessionCatalog: SessionSummaryDto[] = [];
 let fetchSpy: ReturnType<typeof vi.fn>;
 
+class WorkspaceEventSource {
+  static instances: WorkspaceEventSource[] = [];
+  close = vi.fn();
+  onerror: ((event: Event) => void) | null = null;
+  addEventListener = vi.fn();
+
+  constructor(readonly url: string) {
+    WorkspaceEventSource.instances.push(this);
+  }
+}
+
 beforeEach(() => {
   // jsdom has no native dialog implementation; exercise visibility here and native focus in browser QA.
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
@@ -37,6 +48,8 @@ beforeEach(() => {
   resourceFailures = {};
   sessionCatalog = [{session_id:'session-1',project_id:'project-1',root_work_item_id:'root-1',title:'知识问答'}];
   localStorage.clear();
+  WorkspaceEventSource.instances = [];
+  vi.stubGlobal('EventSource', WorkspaceEventSource);
   fetchSpy = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     const path = new URL(String(input)).pathname;
     if (resourceFailures[path]) {
@@ -77,7 +90,15 @@ beforeEach(() => {
   });
   vi.stubGlobal('fetch',fetchSpy);
 });
-afterEach(() => {cleanup();localStorage.clear();vi.unstubAllGlobals();});
+afterEach(() => {cleanup();localStorage.clear();vi.unstubAllGlobals();vi.useRealTimers();});
+
+function commandStatusRequestCount(): number {
+  return fetchSpy.mock.calls.filter(([input, options]) =>
+    (!options?.method || options.method === 'GET')
+    && new URL(String(input)).pathname
+      === '/sessions/session-1/commands/decompose-job-1'
+  ).length;
+}
 
 function renderPanel(
   onConfirmAndDecompose: (reviewNote: string) => Promise<void> = async () => undefined,
@@ -565,6 +586,174 @@ describe('workspace regression', () => {
     expect(within(sidebar).getByRole('button',{name:'查看 PRD 与审核意见'})).toBeTruthy();
     expect(within(sidebar).queryByRole('combobox',{name:'历史 PRD 版本'})).toBeNull();
     expect(within(sidebar).queryByRole('button',{name:'基于历史版本创建新版'})).toBeNull();
+  });
+
+  it('submits decomposition once and polls its job every five seconds', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const approved = {
+      ...state,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+    };
+    resourceOverrides['/sessions/session-1/state'] = approved;
+    resourceOverrides['/sessions/session-1/commands'] = {
+      command_id: 'decompose-job-1',
+      status: 'pending',
+      status_url: '/sessions/session-1/commands/decompose-job-1',
+      events_url: '/sessions/session-1/commands/decompose-job-1/events',
+    };
+    resourceOverrides['/sessions/session-1/commands/decompose-job-1'] = {
+      command_id: 'decompose-job-1', status: 'succeeded', status_version: 3,
+      result: { command_id: 'decompose-job-1', state: { ...approved, phase: 'AGENT_SPECS_READY', state_version: 7 }, created_resource_ids: ['task-created'] },
+      error: null, created_at: '2026-09-05T00:00:00Z', started_at: '2026-09-05T00:00:01Z', completed_at: '2026-09-05T00:00:10Z',
+    };
+
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
+    vi.useFakeTimers();
+    fireEvent.click(decompose);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchSpy.mock.calls.some(([input, options]) =>
+      options?.method === 'POST' && String(input).endsWith('/sessions/session-1/commands')
+    )).toBe(true);
+    expect(screen.getByText(/正在后台拆解子 WorkItem/)).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(commandStatusRequestCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(commandStatusRequestCount()).toBe(1);
+    expect(localStorage.getItem('firstflight.decomposition-job.session-1')).toBeNull();
+    expect(fetchSpy.mock.calls.filter(([input]) =>
+      new URL(String(input)).pathname === '/sessions/session-1/work-items'
+    )).toHaveLength(2);
+  });
+
+  it('resumes a saved decomposition job after reload without posting it again', async () => {
+    vi.useFakeTimers();
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    localStorage.setItem('firstflight.decomposition-job.session-1', 'saved-job');
+    resourceOverrides['/sessions/session-1/commands/saved-job'] = {
+      command_id: 'saved-job', status: 'processing', status_version: 2,
+      result: null, error: null, created_at: '2026-09-05T00:00:00Z', started_at: '2026-09-05T00:00:01Z', completed_at: null,
+    };
+    render(<ApiWorkspace />);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchSpy.mock.calls.some(([input]) =>
+      String(input).endsWith('/commands/saved-job')
+    )).toBe(true);
+    expect(fetchSpy.mock.calls.some(([input, options]) =>
+      options?.method === 'POST' && String(input).endsWith('/commands')
+    )).toBe(false);
+  });
+
+  it('shows the durable command error and stops observing', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const approved = {
+      ...state,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+    };
+    resourceOverrides['/sessions/session-1/state'] = approved;
+    resourceOverrides['/sessions/session-1/commands'] = {
+      command_id: 'decompose-job-1', status: 'pending',
+      status_url: '/sessions/session-1/commands/decompose-job-1',
+      events_url: '/sessions/session-1/commands/decompose-job-1/events',
+    };
+    resourceOverrides['/sessions/session-1/commands/decompose-job-1'] = {
+      command_id: 'decompose-job-1', status: 'failed', status_version: 3,
+      result: null, error: { code: 'AGENT_UNAVAILABLE', message: 'An Agent operation is unavailable; retry the workflow action.' },
+      created_at: '2026-09-05T00:00:00Z', started_at: '2026-09-05T00:00:01Z', completed_at: '2026-09-05T00:00:10Z',
+    };
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
+    vi.useFakeTimers();
+    fireEvent.click(decompose);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getAllByText(/AGENT_UNAVAILABLE：An Agent operation is unavailable/)).not.toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(commandStatusRequestCount()).toBe(1);
+  });
+
+  it('closes SSE and cancels polling when the workspace unmounts', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const approved = {
+      ...state,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+    };
+    resourceOverrides['/sessions/session-1/state'] = approved;
+    resourceOverrides['/sessions/session-1/commands'] = {
+      command_id: 'decompose-job-1', status: 'pending',
+      status_url: '/sessions/session-1/commands/decompose-job-1',
+      events_url: '/sessions/session-1/commands/decompose-job-1/events',
+    };
+    resourceOverrides['/sessions/session-1/commands/decompose-job-1'] = {
+      command_id: 'decompose-job-1', status: 'processing', status_version: 2,
+      result: null, error: null, created_at: '2026-09-05T00:00:00Z', started_at: '2026-09-05T00:00:01Z', completed_at: null,
+    };
+    const view = render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
+    vi.useFakeTimers();
+    fireEvent.click(decompose);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(WorkspaceEventSource.instances).toHaveLength(1);
+
+    view.unmount();
+    expect(WorkspaceEventSource.instances[0].close).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(commandStatusRequestCount()).toBe(0);
+  });
+
+  it('closes an active decomposition observer when the user switches projects', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    sessionCatalog.push({session_id:'session-2',project_id:'project-2',root_work_item_id:'root-2',title:'客户支持助手'});
+    const approved = {
+      ...state,
+      current_spec_status: 'APPROVED' as const,
+      legal_actions: ['convert_to_work_item'] as SessionStateDto['legal_actions'],
+    };
+    resourceOverrides = {
+      '/sessions/session-1/state': approved,
+      '/sessions/session-1/commands': {
+        command_id: 'decompose-job-1', status: 'pending',
+        status_url: '/sessions/session-1/commands/decompose-job-1',
+        events_url: '/sessions/session-1/commands/decompose-job-1/events',
+      },
+      '/sessions/session-1/commands/decompose-job-1': {
+        command_id: 'decompose-job-1', status: 'processing', status_version: 2,
+        result: null, error: null, created_at: '2026-09-05T00:00:00Z', started_at: '2026-09-05T00:00:01Z', completed_at: null,
+      },
+      '/sessions/session-2/state':{...state,session_id:'session-2',project_id:'project-2',current_spec_version_id:null,legal_actions:[],phase:'NEED_CLARIFICATION'},
+      '/sessions/session-2/specs':[],
+      '/sessions/session-2/work-items':[{id:'root-2',kind:'ROOT',title:'客户支持助手',parent_id:null,dependency_work_item_ids:[]}],
+      '/sessions/session-2/agent-specs':[],
+      '/sessions/session-2/events':[],
+    };
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
+    await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
+    vi.useFakeTimers();
+    fireEvent.click(decompose);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(WorkspaceEventSource.instances).toHaveLength(1);
+
+    fireEvent.change(screen.getByRole('combobox', { name: '当前对话项目' }), { target: { value: 'session-2' } });
+    expect(WorkspaceEventSource.instances[0].close).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(commandStatusRequestCount()).toBe(0);
   });
 });
 

@@ -39,8 +39,11 @@ import { PrdReviewPanel } from './PrdReviewPanel';
 import {
   createSession,
   executeCommand,
+  getCommandJob,
   isCommandJobAccepted,
 } from './sessions';
+import { observeCommandJob } from './commandJobs';
+import type { CommandJobAcceptedDto, CommandResultDto } from './dto';
 import {
   actionPlacement,
   isSkipClarificationIntent,
@@ -187,6 +190,7 @@ export function ApiWorkspace() {
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
   const [workItemPreviews, setWorkItemPreviews] = useState<Record<string, WorkItemPreview>>({});
   const [workflowProgress, setWorkflowProgress] = useState<string | null>(null);
+  const [observingDecomposition, setObservingDecomposition] = useState(false);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('kanban');
   const [chatOpen, setChatOpen] = useState(true);
   const [search, setSearch] = useState('');
@@ -194,6 +198,11 @@ export function ApiWorkspace() {
   const [agentFilter, setAgentFilter] = useState('ALL');
   const [selectedRootIds, setSelectedRootIds] = useState<string[] | null>(null);
   const pendingCommandIds = useRef(new Map<string, string>());
+  const commandObservation = useRef<{ close: () => void } | null>(null);
+  const reconciledDecompositionJobs = useRef(new Set<string>());
+
+  const decompositionJobKey = (sessionId: string) =>
+    `firstflight.decomposition-job.${sessionId}`;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -207,6 +216,11 @@ export function ApiWorkspace() {
       });
 
     return () => controller.abort();
+  }, []);
+
+  useEffect(() => () => {
+    commandObservation.current?.close();
+    commandObservation.current = null;
   }, []);
 
   const projectList = useMemo(() => Object.values(projects), [projects]);
@@ -372,6 +386,106 @@ export function ApiWorkspace() {
     return result.state;
   }
 
+  async function reconcileDecompositionSuccess(result: CommandResultDto) {
+    const storageKey = decompositionJobKey(result.state.session_id);
+    const reconciliationKey = `${storageKey}:${result.command_id}`;
+    if (reconciledDecompositionJobs.current.has(reconciliationKey)) return result.state;
+    reconciledDecompositionJobs.current.add(reconciliationKey);
+    localStorage.removeItem(storageKey);
+    updateSessionState(result.state);
+    const refreshed = await refreshResources(result.state.session_id);
+    const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
+    if (firstTask) setSelectedWorkItemId(firstTask.id);
+    return result.state;
+  }
+
+  async function observeDecomposition(
+    sessionId: string,
+    accepted: CommandJobAcceptedDto,
+  ) {
+    const observer = observeCommandJob(sessionId, accepted, {
+      onStatus: () => setError(null),
+      onTransportError: (reason) => setError(errorText(reason)),
+    });
+    commandObservation.current = observer;
+    setObservingDecomposition(true);
+    try {
+      const result = await observer.completion;
+      return reconcileDecompositionSuccess(result);
+    } finally {
+      if (commandObservation.current === observer) {
+        commandObservation.current = null;
+        setObservingDecomposition(false);
+      }
+    }
+  }
+
+  async function submitDecomposition(baseState: SessionStateDto) {
+    const fingerprint = JSON.stringify({
+      sessionId: baseState.session_id,
+      action: 'convert_to_work_item',
+      stateVersion: baseState.state_version,
+    });
+    const savedCommandId = localStorage.getItem(decompositionJobKey(baseState.session_id));
+    const commandId = pendingCommandIds.current.get(fingerprint)
+      ?? savedCommandId
+      ?? crypto.randomUUID();
+    pendingCommandIds.current.set(fingerprint, commandId);
+    const submission = await executeCommand(baseState.session_id, {
+      commandId,
+      action: 'convert_to_work_item',
+      expectedStateVersion: baseState.state_version,
+    });
+    if (!isCommandJobAccepted(submission)) {
+      throw new Error('Decomposition command did not return a background job.');
+    }
+    localStorage.setItem(decompositionJobKey(baseState.session_id), submission.command_id);
+    setWorkflowProgress('PRD 已确认，正在后台拆解子 WorkItem 和 Agent Spec…');
+    try {
+      return await observeDecomposition(baseState.session_id, submission);
+    } finally {
+      pendingCommandIds.current.delete(fingerprint);
+    }
+  }
+
+  useEffect(() => {
+    if (!state || commandObservation.current) return;
+    const commandId = localStorage.getItem(decompositionJobKey(state.session_id));
+    if (!commandId) return;
+    const controller = new AbortController();
+    const sessionId = state.session_id;
+    const resume = async () => {
+      try {
+        const snapshot = await getCommandJob(sessionId, commandId, controller.signal);
+        if (snapshot.status === 'failed') {
+          setError(`${snapshot.error?.code ?? 'WORKFLOW_ERROR'}：${snapshot.error?.message ?? '后台拆分任务失败。'}`);
+          return;
+        }
+        if (snapshot.status === 'succeeded' && snapshot.result) {
+          await reconcileDecompositionSuccess(snapshot.result);
+          return;
+        }
+        setWorkflowProgress('正在恢复后台任务拆分进度…');
+        await observeDecomposition(sessionId, {
+          command_id: commandId,
+          status: snapshot.status,
+          status_url: `/sessions/${sessionId}/commands/${commandId}`,
+          events_url: `/sessions/${sessionId}/commands/${commandId}/events`,
+        });
+      } catch (reason) {
+        if (normalizeNetworkError(reason).code !== 'REQUEST_ABORTED') setError(errorText(reason));
+      } finally {
+        setWorkflowProgress(null);
+      }
+    };
+    void resume();
+    return () => {
+      controller.abort();
+      commandObservation.current?.close();
+      commandObservation.current = null;
+    };
+  }, [state?.session_id]);
+
   async function runAction(action: CommandAction) {
     if (!state || busy) return;
     const effectiveAction = action === 'message'
@@ -478,18 +592,21 @@ export function ApiWorkspace() {
     setBusy(true);
     setError(null);
     let nextState = targetState;
+    let decompositionStarted = false;
     try {
       if (nextState.legal_actions.includes('approve')) {
         setWorkflowProgress('正在确认当前 PRD…');
         nextState = await submitCommand(nextState, 'approve', reviewNote || undefined);
       }
       if (nextState.legal_actions.includes('convert_to_work_item')) {
-        setWorkflowProgress('PRD 已确认，正在拆解子 WorkItem 和 Agent Spec…');
-        nextState = await submitCommand(nextState, 'convert_to_work_item');
+        decompositionStarted = true;
+        nextState = await submitDecomposition(nextState);
       }
-      const refreshed = await refreshResources(nextState.session_id);
-      const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
-      if (firstTask) setSelectedWorkItemId(firstTask.id);
+      if (!decompositionStarted) {
+        const refreshed = await refreshResources(nextState.session_id);
+        const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
+        if (firstTask) setSelectedWorkItemId(firstTask.id);
+      }
     } catch (reason) {
       const normalized = normalizeNetworkError(reason);
       if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
@@ -524,6 +641,14 @@ export function ApiWorkspace() {
   }, [refreshResources, selectedProject?.state.session_id]);
 
   function switchConversation(sessionId: string | null) {
+    const wasObservingDecomposition = commandObservation.current !== null;
+    commandObservation.current?.close();
+    commandObservation.current = null;
+    if (wasObservingDecomposition) {
+      setObservingDecomposition(false);
+      setBusy(false);
+      setWorkflowProgress(null);
+    }
     selectSession(sessionId);
     setAnswer('');
     setRestoreRevision('');
@@ -612,7 +737,7 @@ export function ApiWorkspace() {
               <select
                 aria-label="当前对话项目"
                 value={activeSessionId ?? ''}
-                disabled={busy}
+                disabled={busy && !observingDecomposition}
                 onChange={(event) => switchConversation(event.target.value || null)}
               >
                 <option value="">新任务</option>
