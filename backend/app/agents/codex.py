@@ -1,6 +1,7 @@
 """Codex CLI implementation of the typed agent gateway."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -30,6 +31,8 @@ from app.domain.types import (
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 NODE_PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts" / "nodes"
+BUNDLED_SKILL_ROOT = Path(__file__).resolve().parents[2] / "skills"
+PRD_DRAWIO_NODES = frozenset({"pm_generate_spec", "pm_rewrite_prd"})
 logger = logging.getLogger(__name__)
 _CODEX_PROGRESS_HEARTBEAT_SECONDS = 30.0
 
@@ -40,6 +43,42 @@ class AgentExecutionError(RuntimeError):
 
 class AgentOutputError(RuntimeError):
     """Codex completed but did not produce contract-valid output."""
+
+
+def _bundled_skill_digest(source: Path) -> str:
+    """Hash sorted relative paths and file bytes using the checked-in format."""
+
+    entries: list[str] = []
+    for path in sorted(
+        (candidate for candidate in source.rglob("*") if candidate.is_file()),
+        key=lambda candidate: candidate.relative_to(source).as_posix(),
+    ):
+        if path.is_symlink():
+            raise AgentExecutionError("bundled skill integrity check failed")
+        relative = path.relative_to(source).as_posix()
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        entries.append(f"{digest}  ./{relative}\n")
+    return hashlib.sha256("".join(entries).encode("utf-8")).hexdigest()
+
+
+def install_bundled_skills(runtime_home: Path, names: tuple[str, ...]) -> None:
+    """Copy only explicitly trusted, integrity-checked skills into one run."""
+
+    destination = runtime_home / "skills"
+    for name in names:
+        if name != "drawio-skill":
+            raise AgentExecutionError(f"bundled skill is not allowed: {name}")
+        source = BUNDLED_SKILL_ROOT / name
+        manifest_path = BUNDLED_SKILL_ROOT / f"{name}-source.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            expected = str(manifest["tree_sha256"])
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise AgentExecutionError("bundled skill integrity check failed") from error
+        if not source.is_dir() or _bundled_skill_digest(source) != expected:
+            raise AgentExecutionError("bundled skill integrity check failed")
+        destination.mkdir(exist_ok=True)
+        shutil.copytree(source, destination / name)
 
 
 def build_node_prompt(
@@ -89,13 +128,19 @@ class CodexStructuredRunner:
     async def run(
         self, prompt: str, output_type: type[ModelT], cwd: Path,
         *, validate_output: Callable[[ModelT], None] | None = None,
+        bundled_skills: tuple[str, ...] = (),
     ) -> ModelT:
         repair_prompt = prompt
         last_error: ValidationError | OutputConsistencyError | None = None
 
         for attempt in range(3):
             try:
-                output = await self._run_once(repair_prompt, output_type, cwd)
+                output = await self._run_once(
+                    repair_prompt,
+                    output_type,
+                    cwd,
+                    bundled_skills=bundled_skills,
+                )
                 result = output_type.model_validate_json(output)
                 if validate_output is not None:
                     validate_output(result)
@@ -125,7 +170,12 @@ class CodexStructuredRunner:
         )
 
     async def _run_once(
-        self, prompt: str, output_type: type[BaseModel], cwd: Path
+        self,
+        prompt: str,
+        output_type: type[BaseModel],
+        cwd: Path,
+        *,
+        bundled_skills: tuple[str, ...] = (),
     ) -> str:
         with tempfile.TemporaryDirectory(prefix="codex-structured-") as directory:
             temp_dir = Path(directory)
@@ -136,6 +186,7 @@ class CodexStructuredRunner:
             source_auth = self.settings.codex_home / "auth.json"
             if source_auth.is_file():
                 shutil.copy2(source_auth, runtime_home / "auth.json")
+            install_bundled_skills(runtime_home, bundled_skills)
             schema_path = temp_dir / "output-schema.json"
             output_path = temp_dir / "output.json"
             schema_path.write_text(
@@ -397,9 +448,18 @@ class CodexAgentGateway:
         elif node_name in {"pm_decompose", "pm_revise_breakdown", "pm_plan_task", "reviewer_breakdown"}:
             objective += "\n\n" + (NODE_PROMPT_DIR / "task_implementation_rules.txt").read_text(encoding="utf-8")
         prompt = build_node_prompt(objective=objective, input_payload=payload)
+        bundled_skills = (
+            ("drawio-skill",) if node_name in PRD_DRAWIO_NODES else ()
+        )
         if node_name in {"pm_generate_spec", "pm_rewrite_prd", "pm_decompose", "pm_revise_breakdown", "pm_plan_task"}:
             return await self.runner.run(
                 prompt, output_type, self.settings.codex_cwd,
                 validate_output=lambda result: validate_node_output(result, payload),
+                bundled_skills=bundled_skills,
             )
-        return await self.runner.run(prompt, output_type, self.settings.codex_cwd)
+        return await self.runner.run(
+            prompt,
+            output_type,
+            self.settings.codex_cwd,
+            bundled_skills=bundled_skills,
+        )

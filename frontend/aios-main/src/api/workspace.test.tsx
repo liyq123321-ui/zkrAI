@@ -111,7 +111,7 @@ beforeEach(() => {
   });
   vi.stubGlobal('fetch',fetchSpy);
 });
-afterEach(() => {cleanup();localStorage.clear();vi.unstubAllGlobals();vi.restoreAllMocks();vi.useRealTimers();});
+afterEach(() => {cleanup();localStorage.clear();delete window.GraphViewer;vi.unstubAllGlobals();vi.restoreAllMocks();vi.useRealTimers();});
 
 function commandStatusRequestCount(): number {
   return fetchSpy.mock.calls.filter(([input, options]) =>
@@ -1343,6 +1343,13 @@ describe('workspace regression', () => {
   });
 });
 
+it('uses the current PRD version as the count without downloading every historical XML payload', async () => {
+  renderPanel();
+
+  expect(await screen.findByText(/1 个版本/)).toBeTruthy();
+  expect(getRequestCount('/prd/root-1/versions')).toBe(0);
+});
+
 it('shows the complete rendered PRD alongside a diff that includes removed lines', async () => {
   renderPanel();
   fireEvent.click(screen.getByRole('button',{name:'并排查看'}));
@@ -1373,4 +1380,91 @@ it('shows an unchanged PRD as white commentable full-document diff rows', async 
   expect(firstLine.className).toContain('bg-white');
   fireEvent.click(firstLine);
   expect(screen.getByPlaceholderText('给第 1 行添加批注')).toBeTruthy();
+});
+
+it('round-trips a draw.io save into a polled PRD revision and clears the draft on success', async () => {
+  const diagram = {
+    diagram_id:'data-model', title:'核心数据模型', after_section:'core_objects' as const,
+    anchor:'firstflight-er-data-model-deadbeef',
+    drawio_xml:'<mxfile><diagram><mxGraphModel><root/></mxGraphModel></diagram></mxfile>',
+  };
+  const diagramLink = `[ER 图：核心数据模型](#${diagram.anchor})`;
+  const diagramDocument = {...doc,content:`# 需求说明\n\n${diagramLink}`,er_diagrams:[diagram]};
+  resourceOverrides = {
+    '/prd/root-1':diagramDocument,
+    '/prd/root-1/versions':[diagramDocument],
+    '/prd/root-1/diff':{wi:'root-1',version:1,filename:doc.filename,commit_sha:'abc123',patch:`@@ -0,0 +1,3 @@\n+# 需求说明\n+\n+${diagramLink}\n`},
+    '/prd/root-1/diagrams/data-model/revisions':{task_id:'diagram-task-1',base_version:1,no_change:false},
+    '/tasks/diagram-task-1':{task_id:'diagram-task-1',wi:'root-1',status:'done',base_version:1,new_version:2,new_commit_sha:'def456',error:null},
+  };
+  window.GraphViewer = { createViewerForElement: (element) => { element.textContent = 'rendered graph'; } };
+  const popup = { closed:false, postMessage:vi.fn(), close:vi.fn() } as unknown as Window;
+  vi.spyOn(window,'open').mockReturnValue(popup);
+  vi.spyOn(window,'prompt').mockReturnValue('调整订单关系');
+  renderPanel();
+  fireEvent.click(screen.getByRole('button',{name:'正文'}));
+  fireEvent.click(await screen.findByRole('button',{name:'在 draw.io 中编辑'}));
+  window.dispatchEvent(new MessageEvent('message',{origin:'https://embed.diagrams.net',source:popup,data:JSON.stringify({event:'init'})}));
+  const revisedXml = diagram.drawio_xml.replace('<root/>','<root><mxCell id="0"/></root>');
+  window.dispatchEvent(new MessageEvent('message',{origin:'https://embed.diagrams.net',source:popup,data:JSON.stringify({event:'save',xml:revisedXml})}));
+
+  await waitFor(() => expect(fetchSpy.mock.calls.some(([input,options]) =>
+    options?.method === 'POST' && new URL(String(input)).pathname === '/prd/root-1/diagrams/data-model/revisions'
+  )).toBe(true));
+  const revisionCall = fetchSpy.mock.calls.find(([input,options]) =>
+    options?.method === 'POST' && new URL(String(input)).pathname === '/prd/root-1/diagrams/data-model/revisions'
+  );
+  expect(JSON.parse(String(revisionCall?.[1]?.body))).toEqual({
+    base_version:1, base_commit_sha:'abc123', drawio_xml:revisedXml, change_summary:'调整订单关系',
+  });
+  await waitFor(() => expect(localStorage.getItem('firstflight.prd-task.root-1')).toBe('diagram-task-1'));
+  await waitFor(() => expect(screen.queryByText(/尚未确认写入新版 PRD/)).toBeNull(),{timeout:2_000});
+  expect(popup.postMessage).toHaveBeenCalledWith(JSON.stringify({action:'exit'}),'https://embed.diagrams.net');
+});
+
+it('retains and restores the exact draw.io draft after a stale-version conflict', async () => {
+  const diagram = {
+    diagram_id:'data-model', title:'核心数据模型', after_section:'core_objects' as const,
+    anchor:'firstflight-er-data-model-deadbeef',
+    drawio_xml:'<mxfile><diagram><mxGraphModel><root/></mxGraphModel></diagram></mxfile>',
+  };
+  const diagramLink = `[ER 图：核心数据模型](#${diagram.anchor})`;
+  const diagramDocument = {...doc,content:`# 需求说明\n\n${diagramLink}`,er_diagrams:[diagram]};
+  resourceOverrides = {
+    '/prd/root-1':diagramDocument,
+    '/prd/root-1/versions':[diagramDocument],
+  };
+  resourceOverrideSequences['/prd/root-1/diagrams/data-model/revisions'] = [
+    new Response(JSON.stringify({detail:{code:'PRD_CONTENT_CONFLICT',message:'stale'}}),{status:409}),
+    new Response(JSON.stringify({detail:{code:'PRD_CONTENT_CONFLICT',message:'still stale'}}),{status:409}),
+  ];
+  window.GraphViewer = { createViewerForElement: (element) => { element.textContent = 'rendered graph'; } };
+  const popup = { closed:false, postMessage:vi.fn(), close:vi.fn() } as unknown as Window;
+  vi.spyOn(window,'open').mockReturnValue(popup);
+  vi.spyOn(window,'prompt').mockReturnValue('调整实体布局');
+  const view = renderPanel();
+  fireEvent.click(screen.getByRole('button',{name:'正文'}));
+  fireEvent.click(await screen.findByRole('button',{name:'在 draw.io 中编辑'}));
+  const revisedXml = diagram.drawio_xml.replace('<root/>','<root><mxCell id="0"/></root>');
+  window.dispatchEvent(new MessageEvent('message',{origin:'https://embed.diagrams.net',source:popup,data:JSON.stringify({event:'save',xml:revisedXml})}));
+
+  expect(await screen.findByText(/ER 图基于旧版 PRD/)).toBeTruthy();
+  expect(screen.getByRole('button',{name:'重试提交 ER 图草稿'})).toBeTruthy();
+  expect(screen.getByRole('button',{name:'下载 ER 图草稿'})).toBeTruthy();
+  expect(popup.postMessage).not.toHaveBeenCalledWith(JSON.stringify({action:'exit'}),'https://embed.diagrams.net');
+  expect(Object.keys(localStorage).some((key) => key.startsWith('firstflight.drawio-draft.'))).toBe(true);
+
+  fireEvent.click(screen.getByRole('button',{name:'重试提交 ER 图草稿'}));
+  await waitFor(() => expect(fetchSpy.mock.calls.filter(([input,options]) =>
+    options?.method === 'POST' && new URL(String(input)).pathname === '/prd/root-1/diagrams/data-model/revisions'
+  )).toHaveLength(2));
+  expect(window.prompt).toHaveBeenCalledTimes(1);
+  const revisionBodies = fetchSpy.mock.calls
+    .filter(([input,options]) => options?.method === 'POST' && new URL(String(input)).pathname === '/prd/root-1/diagrams/data-model/revisions')
+    .map(([,options]) => JSON.parse(String(options?.body)));
+  expect(revisionBodies.map((body) => body.change_summary)).toEqual(['调整实体布局','调整实体布局']);
+
+  view.unmount();
+  renderPanel();
+  expect(await screen.findByText(/尚未确认写入新版 PRD/)).toBeTruthy();
 });

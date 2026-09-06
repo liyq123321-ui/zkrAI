@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { PrdCommentableLinesDto } from './dto';
+import type { PrdCommentableLinesDto, PrdErDiagramDto } from './dto';
+import { DrawioErDiagram } from './DrawioErDiagram';
 
 type DiffRow = { text: string; line: number | null; kind: 'context' | 'addition' | 'deletion' | 'header' };
 export function diffRows(patch: string): DiffRow[] {
@@ -27,14 +28,17 @@ export function unchangedDiffRows(content: string): DiffRow[] {
   }));
 }
 
-export function PrdDocumentViews({ content, version, patch, commentable, ready, selectedLine, onSelectLine }: {
+export function PrdDocumentViews({ content, diagrams = [], version, patch, commentable, ready, selectedLine, onSelectLine, onEditDiagram }: {
   content: string; version: number; patch: string | null; commentable: PrdCommentableLinesDto | null;
+  diagrams?: PrdErDiagramDto[];
   ready: boolean; selectedLine: number | null; onSelectLine: (line: number) => void;
+  onEditDiagram?: (diagram: PrdErDiagramDto) => void;
 }) {
   const [mode, setMode] = useState<'split' | 'document' | 'diff'>('diff');
   const allowed = new Set(commentable?.lines.map((line) => line.line) ?? []);
   const unchanged = patch === '';
   const rows = patch === null ? [] : unchanged ? unchangedDiffRows(content) : diffRows(patch);
+  const diagramsByAnchor = new Map(diagrams.map((diagram) => [`#${diagram.anchor}`, diagram]));
   return <div className="mb-5">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
       <div className="flex gap-1 rounded-lg bg-slate-950 p-1" aria-label="阅读方式">
@@ -46,7 +50,15 @@ export function PrdDocumentViews({ content, version, patch, commentable, ready, 
       {mode !== 'diff' && <section aria-label="PRD 正文" className="min-w-0 rounded-xl border border-slate-700 bg-slate-950">
         <h3 className="border-b border-slate-800 px-4 py-3 text-sm font-medium">PRD 正文 · 完整文档</h3>
         <div className="max-h-[60vh] overflow-auto break-words px-5 py-4 text-sm leading-7 text-slate-200 [&_h1]:mb-4 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mb-3 [&_h2]:mt-6 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:font-semibold [&_p]:my-3 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_table]:w-full [&_th]:border [&_th]:border-slate-700 [&_th]:p-2 [&_td]:border [&_td]:border-slate-700 [&_td]:p-2 [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-slate-900 [&_pre]:p-3 [&_code]:text-cyan-200 [&_blockquote]:border-l-2 [&_blockquote]:border-slate-600 [&_blockquote]:pl-3">
-          <Markdown remarkPlugins={[remarkGfm]} skipHtml disallowedElements={['img']} components={{a:({node,...props}) => <a {...props} className="text-cyan-300 underline" target="_blank" rel="noreferrer" />}}>{content}</Markdown>
+          <Markdown remarkPlugins={[remarkGfm]} skipHtml disallowedElements={['img']} components={{
+            p: ({ node, children }) => {
+              const only = node?.children.length === 1 ? node.children[0] : null;
+              const href = only && 'properties' in only ? String(only.properties?.href ?? '') : '';
+              const diagram = diagramsByAnchor.get(href);
+              return diagram ? <DrawioErDiagram diagram={diagram} onEdit={onEditDiagram} /> : <p>{children}</p>;
+            },
+            a: ({node,...props}) => <a {...props} className="text-cyan-300 underline" target="_blank" rel="noreferrer" />,
+          }}>{content}</Markdown>
         </div>
       </section>}
       {mode !== 'document' && <section aria-label="PRD Diff" className="min-w-0 rounded-xl border border-slate-700 bg-slate-950">

@@ -58,7 +58,9 @@ export CODEX_INACTIVITY_TIMEOUT_SECONDS='<seconds>'
 `CODEX_TIMEOUT_SECONDS` 限制一次 Codex 调用的总时长（默认 2,000 秒）；
 `CODEX_INACTIVITY_TIMEOUT_SECONDS` 限制连续收不到 Codex JSONL 事件的时长；默认跟随总调用上限（2,000 秒），避免误杀长时间无流式正文的正常结构化推理，也可在部署环境显式调小。后者用于终止已经失去活动迹象的子进程；等待期间服务每 30 秒更新一次安全的后台等待进度，不暴露模型正文。
 
-结构化 Agent 调用在一次性的中立临时工作目录中运行，并固定使用 `--ignore-user-config`。每次调用还会创建仅复制 `auth.json` 的临时 `CODEX_HOME`，不加载用户级 `AGENTS.md`、记忆、技能或偏好；节点提示和业务证据只由服务显式传入，避免元指令污染 PRD、任务名称或交付物合同。模型可继续通过 `CODEX_MODEL` 环境变量显式指定。
+结构化 Agent 调用在一次性的中立临时工作目录中运行，并固定使用 `--ignore-user-config`。每次调用还会创建仅复制 `auth.json` 的临时 `CODEX_HOME`，不加载用户级 `AGENTS.md`、记忆、技能或偏好；唯一例外是 PRD 初次生成和批注修订节点会复制仓库内完整性校验通过的固定 `drawio-skill`。Reviewer、拆分及其他节点仍不加载该 skill。节点提示和业务证据只由服务显式传入，避免元指令污染 PRD、任务名称或交付物合同。未设置 `CODEX_MODEL` 时不传 `--model`，由每台机器本地 Codex 的默认模型决定；部署也可通过该环境变量显式指定覆盖值。
+
+`drawio-skill` 固定到 `Agents365-ai/drawio-skill@65f5fa0505f43d8af104d00c6087cb02c8c0e2f3`（3.2.1，MIT）；来源、Git tree 和规范化目录 SHA-256 在 `skills/drawio-skill-source.json`。升级时必须替换完整 `skills/drawio-skill`、更新来源元数据和许可证，并运行 Agent 隔离与完整性测试。ER XML 使用 `defusedxml` 解析，并限制体积、页面、实体、关系、标签和链接等安全边界。
 
 本服务没有单独的 health endpoint；可用 `POST /sessions` 或读取已有 Session 验证服务可用性。
 
@@ -98,12 +100,17 @@ Gitea 中的 `docs/prd/{wi}/v{n}.md` 和 Gitea review comment thread 是 PRD 文
 | `GET /prd/{wi}` | 获取当前已绑定 PRD 版本。 |
 | `GET /prd/{wi}/v/{number}` | 获取指定 PRD 版本。 |
 | `GET /prd/{wi}/versions` | 列出已绑定的 PRD 版本。 |
+| `POST /prd/{wi}/diagrams/{diagram_id}/revisions` | 保存外部 draw.io 编辑结果；校验 base version/commit 后接受一个新的审核发布任务。 |
 | `GET /prd/{wi}/comments` | 从 Gitea 刷新并读取评论线程。 |
 | `POST /prd/{wi}/comments` | 新增行内评论：`actor_id`、`line`、`text` 和可选 `anchor`。 |
 | `POST /prd/{wi}/comments/{comment_id}/reply` | 人工回复：`actor_id`、`text`、`author_type: "human"`。 |
 | `POST /prd/{wi}/comments/{comment_id}/resolve` | 解决或恢复评论：`actor_id`、`resolved`。 |
 | `POST /prd/{wi}/reviews/publish` | 冻结未解决评论并接受一次下一版发布任务：`actor_id`。 |
 | `GET /tasks/{task_id}` | 查询发布任务的 `pending`、`processing`、`done` 或 `error` 状态。 |
+
+`GET /prd/{wi}`、历史版本和版本列表的每份文档都包含绑定到该不可变版本的 `er_diagrams`；历史无图数据返回空列表。每项包含图 ID、标题、章节、哈希锚点和经过校验的 draw.io XML。Markdown 与 `/diff` 永不包含 XML，只包含图名和锚点链接。
+
+图编辑请求包含 `base_version`、`base_commit_sha`、`drawio_xml` 和非空 `change_summary`。只有 final approver、project manager 或 root owner 可提交。相同规范化 XML 返回 `no_change: true` 且不创建版本；有效变化冻结到现有 `ReviewTask` 恢复账本，创建 `HUMAN_DRAWIO_EDIT` 来源的 `n+1` Spec，重新执行 RULE + AGENT 自动审核，再发布 Gitea PRD 文件。旧 base 返回 `409 PRD_CONTENT_CONFLICT`，非法或不安全 XML 返回 `422 INVALID_DRAWIO_DIAGRAM`，二者都不会部分覆盖当前版本。
 
 新建评论的 `line` 是 PRD 新文件源行号；Gitea 的 `new_position` 也要求这个源行号，而不是 hunk 内偏移。服务先用分页读取的 changed-file patch 验证该 `path + line` 是 context/addition 行，再把请求行号原样发送。删除行、越界、未展示行或歧义返回 `422 COMMENT_LINE_NOT_IN_DIFF`，不会改用相邻行。
 

@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from app.agents.codex import AgentOutputError
+from app.agents.output_validation import OutputConsistencyError, validate_node_output
 from app.services.decomposition_service import validate_breakdown
 from app.services.spec_review import run_rule_review
 from tests.helpers.scripted_codex import gateway_with_outputs
@@ -40,6 +41,213 @@ async def test_generated_spec_repairs_unknown_reference_and_other_gaps_together(
     assert "MISSING_ACCEPTANCE_COVERAGE" in prompts[1]
     assert "UNVERIFIABLE_ACCEPTANCE" in prompts[1]
     assert "deliverable-001" in prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_generated_spec_repairs_invalid_drawio_xml(tmp_path, monkeypatch, valid_spec):
+    diagram = {
+        "diagram_id": "data-model",
+        "title": "Core data model",
+        "after_section": "core_objects",
+        "drawio_xml": (
+            '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+            '<mxCell id="project" value="Project" style="shape=table;html=1;" vertex="1" parent="1">'
+            '<mxGeometry width="180" height="100" as="geometry"/></mxCell>'
+            '<mxCell id="session" value="Session" style="shape=table;html=1;" vertex="1" parent="1">'
+            '<mxGeometry x="240" width="180" height="100" as="geometry"/></mxCell>'
+            '<mxCell id="owns" value="owns" edge="1" parent="1" source="project" target="session">'
+            '<mxGeometry relative="1" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>'
+        ),
+    }
+    good_payload = valid_spec.model_dump(mode="json")
+    good_payload["er_diagrams"] = [diagram]
+    good = type(valid_spec).model_validate(good_payload)
+    bad_payload = good.model_dump(mode="json")
+    bad_payload["er_diagrams"][0]["drawio_xml"] = "<mxfile><diagram>compressed</diagram></mxfile>"
+    gateway, prompts = gateway_with_outputs(
+        tmp_path,
+        monkeypatch,
+        [json.dumps(bad_payload), good],
+    )
+
+    result = await gateway.generate_spec({"input_refs": ["artifact:brief-1"]})
+
+    assert result.er_diagrams[0].diagram_id == "data-model"
+    assert len(prompts) == 2
+    assert "uncompressed" in prompts[1]
+
+
+def test_new_agent_er_table_fields_are_normalized_into_horizontal_cell_children(valid_spec):
+    diagram = {
+        "diagram_id": "data-model",
+        "title": "Core data model",
+        "after_section": "core_objects",
+        "drawio_xml": (
+            '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+            '<mxCell id="project" value="Project" style="shape=table;html=1;" vertex="1" parent="1">'
+            '<mxGeometry width="180" height="100" as="geometry"/></mxCell>'
+            '<mxCell id="session" value="Session" style="shape=table;html=1;" vertex="1" parent="1">'
+            '<mxGeometry x="240" width="180" height="100" as="geometry"/></mxCell>'
+            '<mxCell id="project-name-row" value="Project name" style="shape=tableRow;html=1;" vertex="1" parent="project">'
+            '<mxGeometry y="30" width="180" height="30" as="geometry"/></mxCell>'
+            '<mxCell id="owns" value="owns" edge="1" parent="1" source="project" target="session">'
+            '<mxGeometry relative="1" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>'
+        ),
+    }
+    payload = valid_spec.model_dump(mode="json")
+    payload["er_diagrams"] = [diagram]
+    generated = type(valid_spec).model_validate(payload)
+
+    validate_node_output(generated, {"input_refs": generated.source_refs})
+
+    normalized = generated.er_diagrams[0].drawio_xml
+    assert 'id="project-name-row" value=""' in normalized
+    assert 'id="project-name-row-cell" value="Project name"' in normalized
+    assert 'shape=partialRectangle;html=1;whiteSpace=wrap;' in normalized
+    assert 'parent="project-name-row"' in normalized
+
+
+def test_new_agent_er_table_rows_accept_the_canonical_horizontal_cell(valid_spec):
+    xml_prefix = (
+        '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+        '<mxCell id="project" value="Project" style="shape=table;html=1;" vertex="1" parent="1">'
+        '<mxGeometry width="180" height="100" as="geometry"/></mxCell>'
+        '<mxCell id="session" value="Session" style="shape=table;html=1;" vertex="1" parent="1">'
+        '<mxGeometry x="240" width="180" height="100" as="geometry"/></mxCell>'
+    )
+    xml_suffix = (
+        '<mxCell id="owns" value="owns" edge="1" parent="1" source="project" target="session">'
+        '<mxGeometry relative="1" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>'
+    )
+    row = (
+        '<mxCell id="project-name-row" value="" style="shape=tableRow;horizontal=0;" vertex="1" parent="project">'
+        '<mxGeometry y="30" width="180" height="30" as="geometry"/></mxCell>'
+    )
+    cell = (
+        '<mxCell id="project-name-cell" value="Project name" '
+        'style="shape=partialRectangle;html=1;whiteSpace=wrap;" vertex="1" parent="project-name-row">'
+        '<mxGeometry width="180" height="30" as="geometry"/></mxCell>'
+    )
+
+    def generated(xml: str):
+        payload = valid_spec.model_dump(mode="json")
+        payload["er_diagrams"] = [{
+            "diagram_id": "data-model", "title": "Core data model", "after_section": "core_objects", "drawio_xml": xml,
+        }]
+        return type(valid_spec).model_validate(payload)
+
+    valid = generated(xml_prefix + row + cell + xml_suffix)
+    validate_node_output(valid, {"input_refs": valid.source_refs})
+
+
+def test_new_agent_er_normalizes_relative_one_by_one_field_cells_to_the_row_size(valid_spec):
+    """A 1×1 relative child is present in the accessibility tree but invisible in draw.io."""
+    xml_prefix = (
+        '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+        '<mxCell id="project" value="Project" style="shape=table;html=1;" vertex="1" parent="1">'
+        '<mxGeometry width="180" height="100" as="geometry"/></mxCell>'
+        '<mxCell id="session" value="Session" style="shape=table;html=1;" vertex="1" parent="1">'
+        '<mxGeometry x="240" width="180" height="100" as="geometry"/></mxCell>'
+    )
+    row = (
+        '<mxCell id="project-name-row" value="" style="shape=tableRow;horizontal=0;" vertex="1" parent="project">'
+        '<mxGeometry y="30" width="180" height="30" as="geometry"/></mxCell>'
+        '<mxCell id="project-name-cell" value="Project name" '
+        'style="shape=partialRectangle;html=1;whiteSpace=wrap;" vertex="1" parent="project-name-row">'
+        '<mxGeometry width="1" height="1" relative="1" as="geometry"/></mxCell>'
+    )
+    xml_suffix = (
+        '<mxCell id="owns" value="owns" edge="1" parent="1" source="project" target="session">'
+        '<mxGeometry relative="1" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>'
+    )
+    payload = valid_spec.model_dump(mode="json")
+    payload["er_diagrams"] = [{
+        "diagram_id": "data-model", "title": "Core data model", "after_section": "core_objects",
+        "drawio_xml": xml_prefix + row + xml_suffix,
+    }]
+    generated = type(valid_spec).model_validate(payload)
+
+    validate_node_output(generated, {"input_refs": generated.source_refs})
+
+    normalized = generated.er_diagrams[0].drawio_xml
+    assert '<mxGeometry width="180" height="30" as="geometry"' in normalized
+    assert 'id="project-name-cell"' in normalized
+    assert 'relative="1"' not in normalized.split('id="project-name-cell"', 1)[1].split('</mxCell>', 1)[0]
+
+
+def test_new_agent_er_accepts_multiple_field_cells_and_normalizes_each_geometry(valid_spec):
+    """Extra field-layout cells must not block an otherwise renderable ER diagram."""
+    xml_prefix = (
+        '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+        '<mxCell id="project" value="Project" style="shape=table;html=1;" vertex="1" parent="1">'
+        '<mxGeometry width="180" height="100" as="geometry"/></mxCell>'
+        '<mxCell id="session" value="Session" style="shape=table;html=1;" vertex="1" parent="1">'
+        '<mxGeometry x="240" width="180" height="100" as="geometry"/></mxCell>'
+    )
+    row_and_cells = (
+        '<mxCell id="project-name-row" value="" style="shape=tableRow;horizontal=0;" vertex="1" parent="project">'
+        '<mxGeometry y="30" width="180" height="30" as="geometry"/></mxCell>'
+        '<mxCell id="project-name" value="Project name" '
+        'style="shape=partialRectangle;html=1;whiteSpace=wrap;" vertex="1" parent="project-name-row">'
+        '<mxGeometry width="1" height="1" relative="1" as="geometry"/></mxCell>'
+        '<mxCell id="project-code" value="Project code" '
+        'style="shape=partialRectangle;html=1;whiteSpace=wrap;" vertex="1" parent="project-name-row">'
+        '<mxGeometry width="1" height="1" relative="1" as="geometry"/></mxCell>'
+        '<mxCell id="project-layout-marker" value="" style="shape=label;" vertex="1" parent="project-name-row">'
+        '<mxGeometry width="1" height="1" relative="1" as="geometry"/></mxCell>'
+    )
+    xml_suffix = (
+        '<mxCell id="owns" value="owns" edge="1" parent="1" source="project" target="session">'
+        '<mxGeometry relative="1" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>'
+    )
+    payload = valid_spec.model_dump(mode="json")
+    payload["er_diagrams"] = [{
+        "diagram_id": "data-model", "title": "Core data model", "after_section": "core_objects",
+        "drawio_xml": xml_prefix + row_and_cells + xml_suffix,
+    }]
+    generated = type(valid_spec).model_validate(payload)
+
+    validate_node_output(generated, {"input_refs": generated.source_refs})
+
+    normalized = generated.er_diagrams[0].drawio_xml
+    for field_id in ("project-name", "project-code"):
+        field = normalized.split(f'id="{field_id}"', 1)[1].split("</mxCell>", 1)[0]
+        assert 'width="180" height="30"' in field
+        assert 'relative="1"' not in field
+
+
+def test_new_agent_er_removes_empty_table_layout_rows_from_the_rendered_table(valid_spec):
+    """Blank layout rows must not create a visible extra field row."""
+    xml_prefix = (
+        '<mxfile><diagram><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>'
+        '<mxCell id="project" value="Project" style="shape=table;html=1;" vertex="1" parent="1">'
+        '<mxGeometry width="180" height="100" as="geometry"/></mxCell>'
+        '<mxCell id="session" value="Session" style="shape=table;html=1;" vertex="1" parent="1">'
+        '<mxGeometry x="240" width="180" height="100" as="geometry"/></mxCell>'
+    )
+    row = (
+        '<mxCell id="project-name-row" value="Project name" style="shape=tableRow;html=1;" vertex="1" parent="project">'
+        '<mxGeometry y="30" width="180" height="30" as="geometry"/></mxCell>'
+        '<mxCell id="project-layout-row" value="" style="shape=tableRow;html=1;" vertex="1" parent="project">'
+        '<mxGeometry y="60" width="180" height="30" as="geometry"/></mxCell>'
+    )
+    xml_suffix = (
+        '<mxCell id="owns" value="owns" edge="1" parent="1" source="project" target="session">'
+        '<mxGeometry relative="1" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>'
+    )
+    payload = valid_spec.model_dump(mode="json")
+    payload["er_diagrams"] = [{
+        "diagram_id": "data-model", "title": "Core data model", "after_section": "core_objects",
+        "drawio_xml": xml_prefix + row + xml_suffix,
+    }]
+    generated = type(valid_spec).model_validate(payload)
+
+    validate_node_output(generated, {"input_refs": generated.source_refs})
+
+    normalized = generated.er_diagrams[0].drawio_xml
+    assert 'id="project-name-row-cell" value="Project name"' in normalized
+    assert 'id="project-layout-row"' not in normalized
+    assert '<mxGeometry width="180" height="60" as="geometry"' in normalized
 
 
 @pytest.mark.asyncio

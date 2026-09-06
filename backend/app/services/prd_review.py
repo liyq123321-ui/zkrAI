@@ -14,6 +14,7 @@ from typing import Callable
 from sqlalchemy import asc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from pydantic import ValidationError
 
 from app.database.models import (
     CommentIndex,
@@ -23,7 +24,7 @@ from app.database.models import (
     SpecVersion,
     WorkItem,
 )
-from app.domain.types import SpecStatus, WorkItemKind
+from app.domain.types import ProjectSpecPayload, SpecStatus, WorkItemKind
 from app.schemas.prd_review import (
     CommentCreateRequest,
     CommentReplyRequest,
@@ -33,9 +34,11 @@ from app.schemas.prd_review import (
     PrdCommentableLinesRead,
     PrdCommentReplyRead,
     PrdDocumentRead,
+    PrdErDiagramRead,
     PrdDiffRead,
 )
 from app.services.gitea import GiteaClient, GiteaError, GiteaThread
+from app.services.drawio_diagrams import diagram_anchor, normalize_agent_table_layout
 
 
 class PrdServiceError(RuntimeError):
@@ -306,6 +309,16 @@ class PrdReviewService:
             wi = root.id
         return await self.ensure_current_binding(wi)
 
+    async def diagram_revision_base(
+        self, wi: str, actor_id: str
+    ) -> tuple[PrdVersion, PrdDocumentRead]:
+        """Return one reviewer-authorized, externally verified diagram edit base."""
+
+        binding, guard = await self._write_preflight(wi, actor_id)
+        document = await self._preflight_binding(binding)
+        self._assert_write_guard(wi, actor_id, guard)
+        return binding, document
+
     async def publication_threads(
         self,
         wi: str,
@@ -493,6 +506,7 @@ class PrdReviewService:
             ):
                 raise PrdContentConflict("PRD binding has no matching root Spec")
             self._validate_binding(binding, binding.wi, spec)
+            diagrams = self._bound_diagrams(binding, spec)
         external = await self._gitea.get_file(
             binding.filename,
             self._required_commit(binding),
@@ -512,7 +526,35 @@ class PrdReviewService:
             commit_sha=binding.commit_sha,
             content=content,
             change_summary=binding.change_summary,
+            er_diagrams=diagrams,
         )
+
+    @staticmethod
+    def _bound_diagrams(binding: PrdVersion, spec: SpecVersion) -> list[PrdErDiagramRead]:
+        """Map only validated diagrams from the immutable Spec bound to this PRD version."""
+
+        if (
+            not isinstance(spec.content, dict)
+            or not spec.content.get("er_diagrams")
+        ):
+            return []
+        structured_hash = _structured_hash(spec.content)
+        if spec.content_hash != structured_hash or binding.spec_content_hash != structured_hash:
+            raise PrdContentConflict("PRD diagram content conflicts with its Spec version")
+        try:
+            payload = ProjectSpecPayload.model_validate(spec.content)
+        except ValidationError as error:
+            raise PrdContentConflict("PRD diagram content is invalid") from error
+        return [
+            PrdErDiagramRead(
+                diagram_id=diagram.diagram_id,
+                title=diagram.title,
+                after_section=diagram.after_section,
+                anchor=diagram_anchor(diagram),
+                drawio_xml=normalize_agent_table_layout(diagram.drawio_xml),
+            )
+            for diagram in payload.er_diagrams
+        ]
 
     async def _authoritative_thread(
         self, wi: str, binding: PrdVersion, comment_id: int

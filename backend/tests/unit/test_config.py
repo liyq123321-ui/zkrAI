@@ -43,6 +43,13 @@ def test_settings_can_allow_codex_outside_git_repository(monkeypatch):
     assert settings.codex_model == "gpt-5.6-luna"
 
 
+def test_settings_leave_codex_model_unset_for_local_codex_default(monkeypatch):
+    monkeypatch.setattr(config_module, "load_dotenv", lambda _path, *, override: None)
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+
+    assert Settings.from_env().codex_model is None
+
+
 def test_settings_load_gitea_review_configuration_from_environment(monkeypatch):
     """A deployment can configure Gitea without changing Codex settings."""
 

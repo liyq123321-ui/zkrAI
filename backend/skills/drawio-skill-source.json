@@ -1,0 +1,10 @@
+{
+  "name": "drawio-skill",
+  "version": "3.2.1",
+  "source": "https://github.com/Agents365-ai/drawio-skill",
+  "source_path": "skills/drawio-skill",
+  "commit": "65f5fa0505f43d8af104d00c6087cb02c8c0e2f3",
+  "source_tree": "fd93a2962a5e9a21d5914ec7cd5a6f3802d59580",
+  "license": "MIT",
+  "tree_sha256": "dc5389b3f29fa99dc7c4bb2068de09035486aa188c388ea981244c12539d4ee1"
+}

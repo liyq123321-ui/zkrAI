@@ -6,6 +6,7 @@ import type {
   PrdDiffDto,
   PublishReviewAcceptedDto,
   ReviewTaskDto,
+  ReviewTaskAcceptedDto,
 } from './dto';
 
 export const getLatestPrd = (wi: string, signal?: AbortSignal) =>
@@ -58,3 +59,18 @@ export const getReviewTask = (taskId: string, signal?: AbortSignal) =>
 
 export const getPrdDiff = (wi: string, signal?: AbortSignal) =>
   apiClient.request<PrdDiffDto>(`/prd/${wi}/diff`, { signal });
+
+export const publishDiagramRevision = (
+  wi: string,
+  diagramId: string,
+  input: {
+    base_version: number;
+    base_commit_sha: string;
+    drawio_xml: string;
+    change_summary: string;
+  },
+  signal?: AbortSignal,
+) => apiClient.request<ReviewTaskAcceptedDto>(
+  `/prd/${wi}/diagrams/${diagramId}/revisions`,
+  { method: 'POST', body: input, signal },
+);

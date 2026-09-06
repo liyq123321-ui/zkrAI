@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Download, Loader2, MessageSquarePlus, RefreshCw, Send } from 'lucide-react';
-import type { PrdCommentDto, PrdCommentableLinesDto, PrdDocumentDto, ReviewTaskDto, SessionStateDto, SpecVersionDto, PrdDiffDto } from './dto';
+import type { PrdCommentDto, PrdCommentableLinesDto, PrdDocumentDto, PrdErDiagramDto, ReviewTaskDto, SessionStateDto, SpecVersionDto, PrdDiffDto } from './dto';
 import { normalizeNetworkError } from './errors';
 import {
   createPrdComment,
@@ -9,11 +9,21 @@ import {
   getPrdDiff,
   getReviewTask,
   listPrdComments,
-  listPrdVersions,
   publishPrdReview,
+  publishDiagramRevision,
   replyPrdComment,
   resolvePrdComment,
 } from './prd';
+import {
+  DrawioPopupBlockedError,
+  clearDrawioDraft,
+  drawioDraftKey,
+  loadDrawioDrafts,
+  openDrawioEditorSession,
+  saveDrawioDraft,
+  type DrawioDraft,
+  type DrawioEditorSession,
+} from './drawioEmbed';
 import { PrdDocumentViews } from './PrdDocumentViews';
 import { ReviewFindings } from './ReviewFindings';
 import { nextPrdConfirmationStep, reviewTaskRecoveryAction } from './workflowUi';
@@ -22,6 +32,7 @@ type Draft = { id: string; line: number; text: string; anchor: string; status: '
 type ReviewData = { document: PrdDocumentDto | null; commentable: PrdCommentableLinesDto | null; diff: PrdDiffDto | null; comments: PrdCommentDto[]; commentsAvailable: boolean; versionCount: number };
 
 const taskKey = (wi: string) => `firstflight.prd-task.${wi}`;
+const diagramTaskDraftKey = (wi: string) => `firstflight.drawio-task-draft.${wi}`;
 const failure = (reason: unknown) => {
   const error = normalizeNetworkError(reason);
   if (error.code === 'GITEA_UNAUTHORIZED') {
@@ -60,14 +71,16 @@ export function PrdReviewPanel({
   const [reviewReady, setReviewReady] = useState(false);
   const [fallbackConfirmed, setFallbackConfirmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [diagramDraft, setDiagramDraft] = useState<DrawioDraft | null>(() => loadDrawioDrafts(wi)[0] ?? null);
+  const editorSession = useRef<DrawioEditorSession | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setReviewReady(false);
     setFallbackConfirmed(false);
     setError(null);
-    const [document, commentable, comments, versions, diff] = await Promise.allSettled([
+    const [document, commentable, comments, diff] = await Promise.allSettled([
       getLatestPrd(wi, signal), getCommentableLines(wi, signal),
-      listPrdComments(wi, signal), listPrdVersions(wi, signal), getPrdDiff(wi, signal),
+      listPrdComments(wi, signal), getPrdDiff(wi, signal),
     ]);
     if (signal?.aborted) return;
     const next = {
@@ -75,11 +88,11 @@ export function PrdReviewPanel({
       commentable: commentable.status === 'fulfilled' ? commentable.value : null,
       comments: comments.status === 'fulfilled' ? comments.value : [],
       commentsAvailable: comments.status === 'fulfilled',
-      versionCount: versions.status === 'fulfilled' ? versions.value.length : 0,
+      versionCount: document.status === 'fulfilled' ? document.value.version : 0,
       diff: diff.status === 'fulfilled' ? diff.value : null,
     };
     setData(next);
-    const failures = [document, commentable, comments, versions, diff].filter((result) => result.status === 'rejected');
+    const failures = [document, commentable, comments, diff].filter((result) => result.status === 'rejected');
     if (failures.length) {
       setError(`批注或审核数据暂不可用，正文仍可阅读。${failure(failures[0].reason)}`);
     } else if (next.document?.version !== next.commentable?.version
@@ -106,6 +119,10 @@ export function PrdReviewPanel({
           const recovery = reviewTaskRecoveryAction(next.status);
           if (recovery === 'refresh') {
             localStorage.removeItem(taskKey(wi));
+            const draftKey = localStorage.getItem(diagramTaskDraftKey(wi));
+            if (draftKey) clearDrawioDraft(draftKey);
+            localStorage.removeItem(diagramTaskDraftKey(wi));
+            setDiagramDraft(loadDrawioDrafts(wi)[0] ?? null);
             await load(controller.signal);
             await onResourcesChanged?.();
           } else if (recovery === 'error') {
@@ -117,6 +134,14 @@ export function PrdReviewPanel({
     }
     return () => controller.abort();
   }, [load, onResourcesChanged, wi]);
+
+  useEffect(() => {
+    setDiagramDraft(loadDrawioDrafts(wi)[0] ?? null);
+    return () => {
+      editorSession.current?.dispose();
+      editorSession.current = null;
+    };
+  }, [wi]);
 
   useEffect(() => {
     if (!task || !['pending', 'processing'].includes(task.status)) return;
@@ -133,6 +158,10 @@ export function PrdReviewPanel({
           attempt += 1;
           if (next.status === 'done') {
             localStorage.removeItem(taskKey(wi));
+            const draftKey = localStorage.getItem(diagramTaskDraftKey(wi));
+            if (draftKey) clearDrawioDraft(draftKey);
+            localStorage.removeItem(diagramTaskDraftKey(wi));
+            setDiagramDraft(loadDrawioDrafts(wi)[0] ?? null);
             await load(controller.signal);
             await onResourcesChanged?.();
           } else if (next.status === 'error') {
@@ -235,6 +264,98 @@ export function PrdReviewPanel({
     finally { setBusy(false); }
   }
 
+  async function submitDiagramDraft(draft: DrawioDraft, draftKey: string): Promise<boolean> {
+    const changeSummary = draft.changeSummary?.trim()
+      || window.prompt('请说明这次 ER 图修改（保存后会创建新版 PRD）')?.trim();
+    if (!changeSummary) {
+      setError('ER 图草稿已保留；提交前需要填写修改说明。');
+      setDiagramDraft(draft);
+      return false;
+    }
+    const submissionDraft = draft.changeSummary === changeSummary
+      ? draft
+      : { ...draft, changeSummary };
+    try {
+      saveDrawioDraft(submissionDraft);
+      setDiagramDraft(submissionDraft);
+    } catch {
+      setError('无法持久化 ER 图修改说明；为避免产生不可恢复的版本，尚未提交。');
+      return false;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const accepted = await publishDiagramRevision(wi, draft.diagramId, {
+        base_version: submissionDraft.baseVersion,
+        base_commit_sha: submissionDraft.baseCommitSha,
+        drawio_xml: submissionDraft.xml,
+        change_summary: changeSummary,
+      });
+      if (accepted.no_change) {
+        clearDrawioDraft(draftKey);
+        localStorage.removeItem(diagramTaskDraftKey(wi));
+        setDiagramDraft(loadDrawioDrafts(wi)[0] ?? null);
+        await load();
+        return true;
+      }
+      localStorage.setItem(taskKey(wi), accepted.task_id);
+      localStorage.setItem(diagramTaskDraftKey(wi), draftKey);
+      setTask({ task_id: accepted.task_id, wi, status: 'pending', base_version: accepted.base_version, new_version: null, new_commit_sha: null, error: null });
+      setDiagramDraft(submissionDraft);
+      return true;
+    } catch (reason) {
+      const normalized = normalizeNetworkError(reason);
+      setError(
+        normalized.code === 'PRD_CONTENT_CONFLICT'
+          ? 'ER 图基于旧版 PRD，未覆盖当前版本；草稿已保留，可下载或刷新后重新比较。'
+          : `${failure(reason)}；ER 图草稿已保留。`,
+      );
+      setDiagramDraft(submissionDraft);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openDiagramEditor(diagram: PrdErDiagramDto) {
+    const document = data?.document;
+    if (!document?.commit_sha || !reviewReady || busy || workflowBusy || reviewTaskActive) {
+      setError('当前 PRD 版本尚未准备好，暂时不能打开 draw.io 编辑。');
+      return;
+    }
+    editorSession.current?.dispose();
+    try {
+      editorSession.current = openDrawioEditorSession({
+        wi,
+        diagramId: diagram.diagram_id,
+        baseVersion: document.version,
+        baseCommitSha: document.commit_sha,
+        xml: diagram.drawio_xml,
+        onDraft: (draft) => setDiagramDraft(draft),
+        onSave: submitDiagramDraft,
+        onError: () => setError('draw.io 编辑会话保存失败；如已生成草稿，可在下方重试或下载。'),
+        onCloseWithoutSave: () => setError('draw.io 编辑窗口已关闭，没有提交新版本。'),
+      });
+    } catch (reason) {
+      setError(
+        reason instanceof DrawioPopupBlockedError
+          ? '浏览器阻止了 draw.io 编辑窗口，请允许弹窗后重试。'
+          : '无法打开 draw.io 编辑窗口。',
+      );
+    }
+  }
+
+  function downloadDiagramDraft() {
+    if (!diagramDraft) return;
+    const blob = new Blob([diagramDraft.xml], { type: 'application/vnd.jgraph.mxfile+xml;charset=utf-8' });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = href;
+    link.download = `${diagramDraft.diagramId}-draft.drawio`;
+    link.click();
+    URL.revokeObjectURL(href);
+  }
+
   async function confirmAndDecompose() {
     if (confirmationStep !== 'approve' && confirmationStep !== 'convert_to_work_item') return;
     if (!reviewReady && !fallbackConfirmed) {
@@ -276,9 +397,10 @@ export function PrdReviewPanel({
         </div>
       </div>
       {error && <div role="alert" className="mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-200"><p>{error}</p><button type="button" onClick={() => load()} className="mt-2 rounded border border-amber-500/40 px-3 py-1">重试加载</button></div>}
+      {diagramDraft && <div className="mb-4 rounded-lg border border-violet-500/30 bg-violet-500/10 p-3 text-sm text-violet-100"><p>有一份尚未确认写入新版 PRD 的 ER 图草稿：{diagramDraft.diagramId}（基于 v{diagramDraft.baseVersion}）。</p><div className="mt-2 flex flex-wrap gap-2"><button type="button" disabled={busy || reviewTaskActive} onClick={() => void submitDiagramDraft(diagramDraft, drawioDraftKey(diagramDraft))} className="rounded border border-violet-400/40 px-2 py-1 text-xs disabled:opacity-40">重试提交 ER 图草稿</button><button type="button" onClick={downloadDiagramDraft} className="rounded border border-violet-400/40 px-2 py-1 text-xs">下载 ER 图草稿</button></div></div>}
       {task && <div className="mb-4 flex items-center gap-2 rounded-lg bg-cyan-500/10 p-3 text-sm text-cyan-200">{['pending', 'processing'].includes(task.status) && <Loader2 className="h-4 w-4 animate-spin" />}发布任务：{task.status}{task.new_version ? ` · 已生成 v${task.new_version}` : ''}</div>}
 
-      <PrdDocumentViews content={data?.document?.content ?? fallbackSpec.markdown} version={data?.document?.version ?? fallbackSpec.revision} patch={data?.diff?.patch ?? null} commentable={data?.commentable ?? null} ready={reviewReady && !busy && !workflowBusy && !reviewTaskActive} selectedLine={selectedLine} onSelectLine={setSelectedLine} />
+      <PrdDocumentViews content={data?.document?.content ?? fallbackSpec.markdown} diagrams={data?.document?.er_diagrams ?? []} version={data?.document?.version ?? fallbackSpec.revision} patch={data?.diff?.patch ?? null} commentable={data?.commentable ?? null} ready={reviewReady && !busy && !workflowBusy && !reviewTaskActive} selectedLine={selectedLine} onSelectLine={setSelectedLine} onEditDiagram={data?.document?.commit_sha ? openDiagramEditor : undefined} />
       {selectedLine !== null && reviewReady && <div className="mb-4 flex gap-2"><input value={draftText} onChange={(event) => setDraftText(event.target.value)} placeholder={`给第 ${selectedLine} 行添加批注`} className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm" /><button aria-label="暂存批注" onClick={addDraft} className="rounded-lg bg-cyan-500 px-3 text-slate-950"><MessageSquarePlus className="h-4 w-4" /></button></div>}
       {sessionState.review_findings.length > 0 && <details className="mb-4 rounded-xl border border-amber-500/20 p-4"><summary className="cursor-pointer text-sm text-amber-200">审核发现 · {sessionState.review_findings.length} 项（点击展开）</summary><div className="mt-3"><ReviewFindings findings={sessionState.review_findings} /></div></details>}
       <div className="mb-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">

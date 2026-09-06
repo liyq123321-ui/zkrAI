@@ -13,7 +13,7 @@ firstFlight 第一阶段是一个本地运行的需求澄清、PRD 人工审核�
    - 在澄清框输入明确指令，例如“跳过澄清”“不用澄清”“直接生成 PRD”。
 4. 跳过后，Agent 使用保守且合理的假设补齐模糊地带，并在 PRD 中列出重要假设供人工修改。
    如果已有 PRD 且审核再次要求澄清，可以点击“提交澄清”下方的“跳过澄清，确认当前 PRD 并拆分子任务”。该按钮会记录人工确认，直接按当前 PRD 拆分子任务；不会生成新版 PRD。若拆解失败，已确认的 PRD 会保留，可以继续重试拆解。
-5. 点击主 WorkItem 卡片打开 PRD；可在有效 Gitea diff 行添加批注、回复或解决批注。
+5. 点击主 WorkItem 卡片打开 PRD；正文会在有数据关系证据时显示可拖动、缩放的 ER 图，Diff 只显示图名链接；也可在有效 Gitea diff 行添加批注、回复或解决批注。
 6. 有未解决批注时，确认操作会发布本轮审核并异步生成新版 PRD；没有批注时，确认操作会批准当前 PRD。
 7. PRD 批准后，系统自动拆解子 WorkItem 与 Agent Spec。点击子卡片即可查看该角色收到的任务规格。
 
@@ -36,6 +36,19 @@ firstFlight 第一阶段是一个本地运行的需求澄清、PRD 人工审核�
 草稿和员工选择按 Session、WorkItem 分开暂存于页面内存。关闭详情再打开仍会保留；刷新页面后草稿清空、负责人恢复后端原值。员工名单集中在 `frontend/aios-main/src/api/employeeDirectory.ts`，后续可替换为员工数据库接口返回的数据。
 
 详细范围与验收见[子 WorkItem 对话入口与员工选择需求](docs/superpowers/specs/2026-09-03-work-item-control-design.md)。
+
+## PRD 中的 draw.io ER 图
+
+PM Agent 只在需求证据明确包含至少两个持久化实体及其关系时生成 ER 图；证据不足时 `er_diagrams` 保持为空，不为装饰而画图。PRD 正文使用仓库内固定版本的 draw.io 查看器，可拖动画布、滚轮或按钮缩放、适应、复位、全屏和下载 `.drawio`。正文组件不直接编辑节点或关系，PRD Diff 也不加载图形或 XML，只显示类似“ER 图：订单数据模型”的带版本哈希链接。
+
+点击“在 draw.io 中编辑”会打开官方 `https://embed.diagrams.net` 编辑器。保存结果先作为浏览器本地草稿保留，再通过当前 PRD 的版本号和 commit 校验回传；有效修改会创建不可变的 `n+1` PRD，重新运行自动审核并回到人工审核/返工流程，不会自动批准或拆分任务。版本冲突、网络失败和弹窗关闭不会覆盖当前 PRD；草稿可重试或下载。外部编辑需要能访问 diagrams.net 并允许该弹窗，日常正文查看不依赖外网。
+
+供应链版本固定如下：
+
+- Agent 生成规则：`Agents365-ai/drawio-skill` 提交 `65f5fa0505f43d8af104d00c6087cb02c8c0e2f3`（skill 3.2.1，MIT），来源与目录哈希见 `backend/skills/drawio-skill-source.json`。
+- 正文查看器：draw.io core `31.4.2`（Apache-2.0），来源与文件哈希见 `frontend/aios-main/public/drawio/31.4.2/SOURCE.json`。
+
+升级任一版本时必须从新的固定提交/标签重新复制完整产物，同时更新许可证、来源元数据、SHA-256 和相关安全/渲染测试；运行时不会跟随上游分支自动下载。
 
 ## 本地启动
 
