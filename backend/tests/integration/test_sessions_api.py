@@ -3,15 +3,20 @@
 import asyncio
 import json
 from collections import deque
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
+from pydantic import ValidationError
+from sqlalchemy import event
 
 from app.agents.codex import AgentExecutionError, AgentOutputError
 from app.api.sessions import build_router as build_sessions_router
 from app.database.models import (
     AgentCall,
+    AgentSession,
     AuditEvent,
     ClarificationRequest,
     ClarificationResponse,
@@ -23,6 +28,7 @@ from app.identity import ActorResolver
 from app.schemas.workflow import CommandResult, SessionState
 from app.services.command_jobs import CommandJobCoordinator
 from app.services.decomposition_service import BreakdownValidationError, DecompositionService
+from app.services.query_service import AgentRuntimeRead, QueryService
 from main import create_app
 from tests.helpers.factories import (
     make_complete_brief,
@@ -614,6 +620,248 @@ def test_public_events_include_safe_agent_trace_without_raw_inputs_or_outputs(se
     assert trace["payload"]["phase"] == "analyze_brief"
     assert trace["payload"]["status"] == "done"
     assert secret not in events.text
+
+
+def test_agent_runtime_returns_latest_safe_status_per_started_agent(session_factory):
+    with session_factory() as db:
+        project = Project(
+            id="runtime-project",
+            session_id="runtime-session",
+            creation_request_id="runtime-request",
+            brief={"final_objective": "Runtime dashboard"},
+            final_approver="owner-1",
+            project_manager_ids=["owner-1"],
+            root_owner_ids=["owner-1"],
+        )
+        other = Project(
+            id="other-project",
+            session_id="other-session",
+            creation_request_id="other-request",
+            brief={"final_objective": "Other"},
+            final_approver="owner-1",
+            project_manager_ids=["owner-1"],
+            root_owner_ids=["owner-1"],
+        )
+        started = datetime(2026, 9, 6, 2, 0, tzinfo=timezone.utc)
+        db.add_all([
+            project,
+            other,
+            AgentSession(id="agent-running", project_id=project.id, role="PM", provider="codex", model="gpt-test", purpose="Plan work", created_at=started),
+            AgentSession(id="agent-error", project_id=project.id, role="Reviewer", provider="codex", model=None, purpose="Review work", created_at=started + timedelta(seconds=1)),
+            AgentSession(id="agent-unused", project_id=project.id, role="Unused", provider=None, model=None, purpose=None, created_at=started + timedelta(seconds=2)),
+            AgentSession(id="agent-other", project_id=other.id, role="Other", provider=None, model=None, purpose=None, created_at=started),
+            AgentCall(id="run-old", project_id=project.id, agent_session_id="agent-running", operation="analyze_brief", request={"secret": "do-not-return"}, response={"secret": "do-not-return"}, status="SUCCEEDED", started_at=started, completed_at=started + timedelta(seconds=10)),
+            AgentCall(id="run-new", project_id=project.id, agent_session_id="agent-running", operation="decompose_spec", request={"secret": "do-not-return"}, status="PENDING", started_at=started + timedelta(minutes=1)),
+            AgentCall(id="error-call", project_id=project.id, agent_session_id="agent-error", operation="review_spec", request={}, status="FAILED", error="private traceback", started_at=started + timedelta(minutes=2), completed_at=started + timedelta(minutes=3)),
+            AgentCall(id="other-call", project_id=other.id, agent_session_id="agent-other", operation="generate_spec", request={}, status="RESULT_READY", started_at=started),
+        ])
+        db.commit()
+
+    with TestClient(create_app(session_factory=session_factory)) as client:
+        response = client.get("/sessions/runtime-session/agents/runtime")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "agent_session_id": "agent-running",
+            "project_id": "runtime-project",
+            "role": "PM",
+            "provider": "codex",
+            "model": "gpt-test",
+            "purpose": "Plan work",
+            "status": "running",
+            "current_operation": "decompose_spec",
+            "current_summary": "Decomposing the approved specification",
+            "current_call_id": "run-new",
+            "started_at": "2026-09-06T02:01:00Z",
+            "completed_at": None,
+            "call_count": 2,
+        },
+        {
+            "agent_session_id": "agent-error",
+            "project_id": "runtime-project",
+            "role": "Reviewer",
+            "provider": "codex",
+            "model": None,
+            "purpose": "Review work",
+            "status": "error",
+            "current_operation": "review_spec",
+            "current_summary": "Reviewing specification quality",
+            "current_call_id": "error-call",
+            "started_at": "2026-09-06T02:02:00Z",
+            "completed_at": "2026-09-06T02:03:00Z",
+            "call_count": 1,
+        },
+    ]
+    serialized = response.text
+    assert "do-not-return" not in serialized
+    assert "private traceback" not in serialized
+    assert "agent-unused" not in serialized
+    assert "agent-other" not in serialized
+
+
+def test_agent_runtime_selects_latest_call_by_id_when_start_times_match(session_factory):
+    started = datetime(2026, 9, 6, 2, 0, tzinfo=timezone.utc)
+    with session_factory() as db:
+        db.add_all([
+            Project(
+                id="runtime-tie-project",
+                session_id="runtime-tie-session",
+                creation_request_id="runtime-tie-request",
+                brief={"final_objective": "Runtime tie-break"},
+                final_approver="owner-1",
+                project_manager_ids=["owner-1"],
+                root_owner_ids=["owner-1"],
+            ),
+            AgentSession(
+                id="agent-tied",
+                project_id="runtime-tie-project",
+                role="PM",
+                created_at=started,
+            ),
+            AgentCall(
+                id="call-a",
+                project_id="runtime-tie-project",
+                agent_session_id="agent-tied",
+                operation="analyze_brief",
+                request={},
+                status="SUCCEEDED",
+                started_at=started,
+                completed_at=started,
+            ),
+            AgentCall(
+                id="call-z",
+                project_id="runtime-tie-project",
+                agent_session_id="agent-tied",
+                operation="decompose_spec",
+                request={},
+                status="PENDING",
+                started_at=started,
+            ),
+        ])
+        db.commit()
+
+    runtime = QueryService(session_factory).agent_runtime("runtime-tie-session")
+
+    assert len(runtime) == 1
+    assert runtime[0].current_call_id == "call-z"
+    assert runtime[0].current_operation == "decompose_spec"
+    assert runtime[0].status == "running"
+    assert runtime[0].call_count == 2
+
+
+def test_agent_runtime_query_loads_only_latest_safe_scalar_call_columns(
+    session_factory, engine
+):
+    started = datetime(2026, 9, 6, 2, 0, tzinfo=timezone.utc)
+    with session_factory() as db:
+        db.add_all([
+            Project(
+                id="runtime-query-project",
+                session_id="runtime-query-session",
+                creation_request_id="runtime-query-request",
+                brief={"final_objective": "Runtime query shape"},
+                final_approver="owner-1",
+                project_manager_ids=["owner-1"],
+                root_owner_ids=["owner-1"],
+            ),
+            AgentSession(
+                id="agent-query",
+                project_id="runtime-query-project",
+                role="Reviewer",
+                created_at=started,
+            ),
+            AgentCall(
+                id="query-old",
+                project_id="runtime-query-project",
+                agent_session_id="agent-query",
+                operation="review_spec",
+                request={"secret": "request-payload"},
+                response={"secret": "response-payload"},
+                error="private-error",
+                status="FAILED",
+                started_at=started,
+                completed_at=started,
+            ),
+            AgentCall(
+                id="query-new",
+                project_id="runtime-query-project",
+                agent_session_id="agent-query",
+                operation="plan_task",
+                request={"large": "x" * 100_000},
+                response={"large": "y" * 100_000},
+                error="z" * 100_000,
+                status="PENDING",
+                started_at=started + timedelta(seconds=1),
+            ),
+        ])
+        db.commit()
+
+    statements: list[str] = []
+
+    def capture_select(_connection, _cursor, statement, _parameters, _context, _many):
+        normalized = statement.lower()
+        if normalized.lstrip().startswith("select") and "agent_calls" in normalized:
+            statements.append(normalized)
+
+    event.listen(engine, "before_cursor_execute", capture_select)
+    try:
+        runtime = QueryService(session_factory).agent_runtime("runtime-query-session")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_select)
+
+    assert runtime[0].current_call_id == "query-new"
+    assert runtime[0].call_count == 2
+    assert len(statements) == 1
+    query = statements[0]
+    assert "count(" in query
+    assert "row_number()" in query
+    assert "agent_calls.request" not in query
+    assert "agent_calls.response" not in query
+    assert "agent_calls.error" not in query
+
+
+def test_agent_runtime_status_contract_is_closed_to_public_values():
+    schema = AgentRuntimeRead.model_json_schema()
+
+    assert schema["properties"]["status"]["enum"] == [
+        "running",
+        "completed",
+        "error",
+    ]
+    with pytest.raises(ValidationError):
+        AgentRuntimeRead.model_validate({
+            "agent_session_id": "agent-1",
+            "project_id": "project-1",
+            "role": "PM",
+            "provider": None,
+            "model": None,
+            "purpose": None,
+            "status": "unknown",
+            "current_operation": "analyze_brief",
+            "current_summary": "Analyzing project brief completeness",
+            "current_call_id": "call-1",
+            "started_at": "2026-09-06T02:00:00Z",
+            "completed_at": None,
+            "call_count": 1,
+        })
+
+
+@pytest.mark.parametrize(
+    ("stored", "public"),
+    [
+        ("PENDING", "running"),
+        ("PREPARING", "running"),
+        ("RESULT_READY", "completed"),
+        ("SUCCEEDED", "completed"),
+        ("COMPLETED", "completed"),
+        ("NO_CHANGE", "completed"),
+        ("FAILED", "error"),
+        ("AMBIGUOUS", "error"),
+    ],
+)
+def test_agent_runtime_status_mapping_is_stable(stored, public):
+    assert QueryService._agent_runtime_status(stored) == public
 
 
 def test_restore_historical_spec_creates_a_new_reviewed_revision(session_factory):

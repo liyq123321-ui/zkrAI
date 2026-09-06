@@ -1,16 +1,19 @@
 """Detached, deterministic read models for workflow resources."""
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.database.models import (
     AgentSpec,
     AgentCall,
+    AgentSession,
     AuditEvent,
     Project,
     SpecReview,
@@ -27,6 +30,18 @@ from app.services.execution_graph import (
     startable_work_item_ids,
 )
 from app.services.state_projection import project_state
+
+
+AGENT_OPERATION_SUMMARIES = {
+    "analyze_brief": "Analyzing project brief completeness",
+    "generate_spec": "Generating a project specification",
+    "review_spec": "Reviewing specification quality",
+    "decompose_spec": "Decomposing the approved specification",
+    "plan_task": "Defining task implementation steps and interfaces",
+    "review_breakdown": "Reviewing work-item decomposition",
+    "rewrite_prd": "Applying authoritative PRD review comments",
+    "restore_spec": "Restoring historical specification content",
+}
 
 
 class SessionSummaryRead(BaseModel):
@@ -127,6 +142,24 @@ class AuditEventRead(BaseModel):
     actor_id: str | None
     payload: dict[str, object]
     created_at: datetime
+
+
+class AgentRuntimeRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_session_id: str
+    project_id: str
+    role: str
+    provider: str | None
+    model: str | None
+    purpose: str | None
+    status: Literal["running", "completed", "error"]
+    current_operation: str
+    current_summary: str
+    current_call_id: str
+    started_at: datetime
+    completed_at: datetime | None
+    call_count: int
 
 
 class QueryService:
@@ -285,6 +318,83 @@ class QueryService:
             public_events.sort(key=lambda item: (item.created_at, item.id))
             return public_events
 
+    def agent_runtime(self, session_id: str) -> list[AgentRuntimeRead]:
+        with self._session_factory() as db:
+            project = self._project(db, session_id)
+            ranked_calls = (
+                db.query(
+                    AgentCall.id.label("current_call_id"),
+                    AgentCall.project_id.label("project_id"),
+                    AgentCall.agent_session_id.label("agent_session_id"),
+                    AgentCall.operation.label("current_operation"),
+                    AgentCall.status.label("stored_status"),
+                    AgentCall.started_at.label("started_at"),
+                    AgentCall.completed_at.label("completed_at"),
+                    func.count(AgentCall.id).over(
+                        partition_by=AgentCall.agent_session_id
+                    ).label("call_count"),
+                    func.row_number().over(
+                        partition_by=AgentCall.agent_session_id,
+                        order_by=(AgentCall.started_at.desc(), AgentCall.id.desc()),
+                    ).label("latest_rank"),
+                )
+                .filter(AgentCall.project_id == project.id)
+                .subquery()
+            )
+            rows = (
+                db.query(
+                    AgentSession.id.label("agent_session_id"),
+                    AgentSession.project_id.label("project_id"),
+                    AgentSession.role.label("role"),
+                    AgentSession.provider.label("provider"),
+                    AgentSession.model.label("model"),
+                    AgentSession.purpose.label("purpose"),
+                    ranked_calls.c.stored_status,
+                    ranked_calls.c.current_operation,
+                    ranked_calls.c.current_call_id,
+                    ranked_calls.c.started_at,
+                    ranked_calls.c.completed_at,
+                    ranked_calls.c.call_count,
+                )
+                .join(
+                    ranked_calls,
+                    and_(
+                        ranked_calls.c.agent_session_id == AgentSession.id,
+                        ranked_calls.c.project_id == AgentSession.project_id,
+                    ),
+                )
+                .filter(
+                    AgentSession.project_id == project.id,
+                    ranked_calls.c.latest_rank == 1,
+                )
+                .order_by(AgentSession.created_at, AgentSession.id)
+                .all()
+            )
+            return [
+                AgentRuntimeRead(
+                    agent_session_id=row.agent_session_id,
+                    project_id=row.project_id,
+                    role=row.role,
+                    provider=row.provider,
+                    model=row.model,
+                    purpose=row.purpose,
+                    status=self._agent_runtime_status(row.stored_status),
+                    current_operation=row.current_operation,
+                    current_summary=self._agent_operation_summary(
+                        row.current_operation
+                    ),
+                    current_call_id=row.current_call_id,
+                    started_at=self._as_utc(row.started_at),
+                    completed_at=(
+                        self._as_utc(row.completed_at)
+                        if row.completed_at is not None
+                        else None
+                    ),
+                    call_count=row.call_count,
+                )
+                for row in rows
+            ]
+
     @staticmethod
     def _safe_hash(value: object) -> str:
         canonical = json.dumps(
@@ -296,16 +406,6 @@ class QueryService:
     def _agent_trace_read(
         cls, project: Project, call: AgentCall, sequence: int
     ) -> AuditEventRead:
-        summaries = {
-            "analyze_brief": "Analyzing project brief completeness",
-            "generate_spec": "Generating a project specification",
-            "review_spec": "Reviewing specification quality",
-            "decompose_spec": "Decomposing the approved specification",
-            "plan_task": "Defining task implementation steps and interfaces",
-            "review_breakdown": "Reviewing work-item decomposition",
-            "rewrite_prd": "Applying authoritative PRD review comments",
-            "restore_spec": "Restoring historical specification content",
-        }
         request = dict(call.request or {})
         done_statuses = {"RESULT_READY", "SUCCEEDED", "COMPLETED", "NO_CHANGE"}
         status = (
@@ -334,7 +434,7 @@ class QueryService:
                 "agent_call_id": call.id,
                 "sequence": sequence,
                 "phase": call.operation,
-                "summary": summaries.get(call.operation, "Processing an Agent stage"),
+                "summary": cls._agent_operation_summary(call.operation),
                 "input_hash": cls._safe_hash(request),
                 "output_hash": (
                     cls._safe_hash(call.response) if call.response is not None else None
@@ -347,6 +447,28 @@ class QueryService:
                 "safe_error_code": safe_error_code,
             },
             created_at=call.started_at,
+        )
+
+    @staticmethod
+    def _agent_runtime_status(
+        status: str,
+    ) -> Literal["running", "completed", "error"]:
+        if status in {"FAILED", "AMBIGUOUS"}:
+            return "error"
+        if status in {"RESULT_READY", "SUCCEEDED", "COMPLETED", "NO_CHANGE"}:
+            return "completed"
+        return "running"
+
+    @staticmethod
+    def _agent_operation_summary(operation: str) -> str:
+        return AGENT_OPERATION_SUMMARIES.get(operation, "Processing an Agent stage")
+
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        return (
+            value.replace(tzinfo=timezone.utc)
+            if value.tzinfo is None
+            else value.astimezone(timezone.utc)
         )
 
     @staticmethod

@@ -96,6 +96,9 @@ beforeEach(() => {
       ],
       '/sessions/session-1/agent-specs':[{id:'agent-spec-todo',work_item_id:'task-todo',source_spec_version_id:'spec-1',dependency_work_item_ids:[],created_at:'2026-09-03T02:47:00Z',content:{objective:'实现带权限控制的问答 API',scope:['实现 POST /questions'],exclusions:['不处理部署'],inputs:['已批准 PRD'],outputs:[{name:'问答 API',format:'JSON',required:true}],acceptance_criteria:[{requirement_ids:['FR-001'],criterion:'可以提交问题',verification_method:'API 测试',expected_result:'返回 200'}],required_skills:['FastAPI'],allowed_tools:['pytest'],allowed_paths:['backend/app/api'],test_obligations:['覆盖成功场景'],fixed_constraints:['保持接口契约'],configurable_parts:[],extension_points:[],risks:[],open_questions:[],responsible_role:'Backend Engineer',suggested_assignee:'Backend Agent'}}],
       '/sessions/session-1/events':[{id:'event-1',event_type:'AGENT_TRACE',actor_id:null,created_at:'2026-09-03T02:45:00',payload:{trace_id:'command-1',agent_call_id:'review-call-1',phase:'review_spec',status:'done',summary:'Reviewing specification quality',input_hash:'input-proof',output_hash:'output-proof',started_at:'2026-09-03T02:45:00',completed_at:'2026-09-03T02:46:00',safe_error_code:null}}],
+      '/sessions/session-1/agents/runtime':[
+        {agent_session_id:'agent-pm',project_id:'project-1',role:'PM Agent',provider:'codex',model:'gpt-test',purpose:'拆解需求',status:'running',current_operation:'decompose_spec',current_summary:'Decomposing the approved specification',current_call_id:'runtime-call-1',started_at:'2026-09-06T02:01:00Z',completed_at:null,call_count:2},
+      ],
       '/prd/root-1':doc,
       '/prd/root-1/diff':{wi:'root-1',version:1,filename:doc.filename,commit_sha:'abc123',patch:'@@ -1,2 +1,2 @@\n # 需求说明\n-旧要求\n+这是已保存的 PRD 正文。\n'},
       '/prd/root-1/versions':[doc],
@@ -187,6 +190,22 @@ describe('workspace regression', () => {
 
     expect(screen.getByRole('status', { name: 'current queued Session state' }).textContent)
       .toBe('9:COMPLETE');
+  });
+
+  it('shows live Agent status above the audit records only while the audit tab is active', async () => {
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+    expect(screen.queryByRole('region', {name:'Agent 实时运行状态'})).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', {name:'打开审计记录'}));
+    const panel = await screen.findByRole('region', {name:'Agent 实时运行状态'});
+    const auditSummary = screen.getByText('安全审计摘要');
+    expect(panel.compareDocumentPosition(auditSummary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(panel).getByText('PM Agent')).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([input]) => String(input).endsWith('/sessions/session-1/agents/runtime'))).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', {name:/Kanban Board/}));
+    expect(screen.queryByRole('region', {name:'Agent 实时运行状态'})).toBeNull();
   });
 
   it('shows separate PRD revision and decomposition controls and blocks decomposition on Agent findings', async () => {

@@ -120,6 +120,24 @@ export interface AuditEventDto {
   created_at: string;
 }
 
+export type AgentRuntimeStatus = 'running' | 'completed' | 'error';
+
+export interface AgentRuntimeDto {
+  agent_session_id: string;
+  project_id: string;
+  role: string;
+  provider: string | null;
+  model: string | null;
+  purpose: string | null;
+  status: AgentRuntimeStatus;
+  current_operation: string;
+  current_summary: string;
+  current_call_id: string;
+  started_at: string;
+  completed_at: string | null;
+  call_count: number;
+}
+
 export interface CommandResultDto {
   command_id: string;
   state: SessionStateDto;
