@@ -558,6 +558,38 @@ def test_session_catalog_lists_database_roots_without_creating_agent_runs(sessio
             assert db.query(AuditEvent).count() == event_count
 
 
+def test_work_items_returns_persisted_root_summary(session_factory):
+    with session_factory() as db:
+        db.add_all([
+            Project(
+                id="summary-project",
+                session_id="session-1",
+                creation_request_id="summary-request",
+                brief={"final_objective": "Root summary"},
+                final_approver="owner-1",
+                project_manager_ids=["owner-1"],
+                root_owner_ids=["owner-1"],
+            ),
+            WorkItem(
+                id="summary-root",
+                session_id="session-1",
+                project_id="summary-project",
+                local_key="root",
+                kind="ROOT",
+                title="知识问答助手",
+                summary="知识问答助手",
+            ),
+        ])
+        db.commit()
+
+    with TestClient(create_app(session_factory=session_factory)) as client:
+        response = client.get("/sessions/session-1/work-items")
+
+    assert response.status_code == 200
+    root = next(item for item in response.json() if item["kind"] == "ROOT")
+    assert root["summary"] == "知识问答助手"
+
+
 def test_user_can_skip_intake_clarification_and_generate_spec_with_agent_assumptions(
     session_factory,
 ):

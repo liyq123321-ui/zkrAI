@@ -457,6 +457,7 @@ def test_legacy_work_items_migrate_idempotently_and_allow_project_intake(tmp_pat
     init_database(engine)
 
     columns = {item["name"] for item in inspect(engine).get_columns("work_items")}
+    assert "summary" in columns
     assert {
         "project_id", "local_key", "kind", "executable", "objective", "scope",
         "exclusions", "inputs", "outputs", "acceptance_criteria", "required_skills",
@@ -468,9 +469,12 @@ def test_legacy_work_items_migrate_idempotently_and_allow_project_intake(tmp_pat
     assert indexes["ix_work_items_session_id"]["column_names"] == ["session_id"]
     with engine.connect() as connection:
         legacy = connection.execute(
-            text("SELECT title, description, department FROM work_items WHERE id='legacy-wi'")
+            text(
+                "SELECT title, description, department, summary "
+                "FROM work_items WHERE id='legacy-wi'"
+            )
         ).one()
-    assert legacy == ("Legacy", "keep me", "ops")
+    assert legacy == ("Legacy", "keep me", "ops", None)
 
     factory = make_session_factory(engine)
     brief = make_complete_brief()

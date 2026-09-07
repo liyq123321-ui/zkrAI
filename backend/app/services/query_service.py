@@ -104,6 +104,7 @@ class WorkItemRead(BaseModel):
     executable: bool | None
     title: str | None
     description: str | None
+    summary: str | None
     spec: str | None
     objective: str | None
     status: str | None
@@ -616,6 +617,7 @@ class QueryService:
             executable=item.executable,
             title=item.title,
             description=item.description,
+            summary=item.summary,
             spec=item.spec,
             objective=item.objective,
             status=status if status is not None else item.status,
