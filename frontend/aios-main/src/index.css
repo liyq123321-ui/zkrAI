@@ -822,6 +822,12 @@ button:disabled {
   box-shadow: 0 0 0 2px rgb(22 104 220 / 10%);
 }
 
+.ff-filter-toolbar input:focus-visible,
+.ff-filter-toolbar select:focus-visible {
+  outline: 2px solid #1668dc;
+  outline-offset: 2px;
+}
+
 .ff-field-multiline {
   min-height: 62px;
   resize: vertical;

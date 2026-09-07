@@ -1210,7 +1210,7 @@ export function ApiWorkspace() {
             />
           </div>
           <div className="ff-flow-canvas">
-            {flowVisibleWorkItems.length === 0 ? <div className="ff-flow-filter-empty">没有符合当前筛选条件的任务</div> : (
+            {flowVisibleWorkItems.length === 0 ? <div className="ff-flow-filter-empty" role="status" aria-live="polite">没有符合当前筛选条件的任务</div> : (
               <div className="ff-flow-graph">
                 {hierarchyColumns.map((column, columnIndex) => (
                   <div key={column.kind} className="ff-flow-lane">
@@ -1227,12 +1227,24 @@ export function ApiWorkspace() {
                         {item.dependency_work_item_ids.length > 0 && <em>依赖 {item.dependency_work_item_ids.length}</em>}
                       </button>
                     ))}
-                    {flowVisibleWorkItems.every((item) => item.kind !== column.kind) && <div className="ff-flow-empty">等待后端生成</div>}
+                    {flowVisibleWorkItems.every((item) => item.kind !== column.kind) && (
+                      <div className="ff-flow-empty">
+                        {displayWorkItems.some((item) => item.kind === column.kind)
+                          ? '当前筛选条件已隐藏此类节点'
+                          : '等待后端生成'}
+                      </div>
+                    )}
                   </div>
                 ))}
                 <section className="ff-flow-task-lane" aria-label="子任务 (Tasks)">
                   <header><span>3</span><div><strong>子任务 (Tasks)</strong><small>按项目与依赖深度排列</small></div></header>
-                  <TaskDependencyGraph projects={taskDagProjects} onOpenWorkItem={setSelectedWorkItemId} />
+                  <TaskDependencyGraph
+                    projects={taskDagProjects}
+                    onOpenWorkItem={setSelectedWorkItemId}
+                    emptyMessage={displayWorkItems.some((item) => item.kind === 'TASK')
+                      ? '当前筛选条件已隐藏此类节点'
+                      : '等待后端生成子任务'}
+                  />
                 </section>
               </div>
             )}
