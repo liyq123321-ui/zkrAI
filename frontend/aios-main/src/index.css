@@ -1699,6 +1699,360 @@ button:disabled {
   font-size: 10px;
 }
 
+.ff-milestone-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 7px 8px;
+  border: 1px solid #d5e1ed;
+  border-radius: 6px;
+  background: #f4f8fc;
+  color: #42627f;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.ff-milestone-summary svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+}
+
+.ff-milestone-summary.is-blocked {
+  border-color: #edc7c7;
+  background: #fff4f4;
+  color: #a63e3e;
+}
+
+.ff-milestone-summary.is-complete {
+  border-color: #c9e3d0;
+  background: #f0f9f3;
+  color: #23733d;
+}
+
+.ff-milestone-monitor {
+  color: #263244;
+}
+
+.ff-milestone-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.ff-milestone-overview > div {
+  display: flex;
+  min-height: 62px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 10px 13px;
+  border: 1px solid #d6dfe8;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(27 43 63 / 4%);
+}
+
+.ff-milestone-overview span {
+  color: #78869a;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.ff-milestone-overview strong {
+  margin-top: 4px;
+  color: #24344b;
+  font-size: 19px;
+  line-height: 1;
+}
+
+.ff-milestone-overview > .is-blocked {
+  border-color: #edc7c7;
+  background: #fff7f7;
+}
+
+.ff-milestone-overview > .is-blocked strong {
+  color: #b03e3e;
+}
+
+.ff-milestone-monitor-section {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid #cbd6e1;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.ff-milestone-monitor-section > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #dbe3eb;
+  background: #fff;
+}
+
+.ff-milestone-monitor-section > header > span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 7px;
+  background: #e8f3ec;
+  color: var(--ff-green);
+}
+
+.ff-milestone-monitor-section > header svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ff-milestone-monitor-section h2,
+.ff-milestone-monitor-section p {
+  margin: 0;
+}
+
+.ff-milestone-monitor-section h2 {
+  color: #26364b;
+  font-size: 12px;
+}
+
+.ff-milestone-monitor-section p {
+  margin-top: 3px;
+  color: #7a8798;
+  font-size: 9px;
+}
+
+.ff-milestone-graph-scroll {
+  overflow-x: auto;
+}
+
+.ff-milestone-graph {
+  position: relative;
+  display: flex;
+  min-width: 560px;
+  flex-direction: column;
+  gap: 60px;
+  padding: 20px 24px 26px;
+}
+
+.ff-milestone-edges {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ff-milestone-edge {
+  fill: none;
+  stroke: #6f91b3;
+  stroke-width: 1.7;
+  vector-effect: non-scaling-stroke;
+}
+
+.ff-milestone-edges marker path {
+  fill: #6f91b3;
+}
+
+.ff-milestone-layer {
+  position: relative;
+  z-index: 1;
+}
+
+.ff-milestone-layer-label {
+  display: block;
+  margin-bottom: 9px;
+  color: #7d8b9d;
+  font: 700 8px/1 ui-monospace, monospace;
+  letter-spacing: .08em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.ff-milestone-layer-nodes {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 22px;
+}
+
+.ff-milestone-node {
+  position: relative;
+  display: grid;
+  width: 250px;
+  min-width: 220px;
+  min-height: 72px;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #cbd7e3;
+  border-left: 3px solid #9caaba;
+  border-radius: 8px;
+  background: #fff;
+  color: #28374b;
+  text-align: left;
+  box-shadow: 0 2px 5px rgb(27 43 63 / 6%);
+}
+
+.ff-milestone-node:hover,
+.ff-milestone-node:focus-visible {
+  border-color: #6f93b8;
+  outline: none;
+  box-shadow: 0 5px 15px rgb(45 84 126 / 13%);
+  transform: translateY(-1px);
+}
+
+.ff-milestone-node.is-active {
+  border-left-color: #397fc4;
+}
+
+.ff-milestone-node.is-done {
+  border-left-color: #2c9650;
+}
+
+.ff-milestone-node.is-blocked {
+  border-color: #e2b4b4;
+  border-left-color: #c34b4b;
+  background: #fffafa;
+}
+
+.ff-milestone-node-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 8px;
+  background: #edf1f5;
+  color: #75869a;
+}
+
+.ff-milestone-node.is-active .ff-milestone-node-icon {
+  background: #e8f2fc;
+  color: #3277ba;
+}
+
+.ff-milestone-node.is-done .ff-milestone-node-icon {
+  background: #e8f5ec;
+  color: #248346;
+}
+
+.ff-milestone-node.is-blocked .ff-milestone-node-icon {
+  background: #fdeaea;
+  color: #bd4444;
+}
+
+.ff-milestone-node-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.ff-milestone-node-copy {
+  min-width: 0;
+}
+
+.ff-milestone-node-copy strong,
+.ff-milestone-node-copy small {
+  display: block;
+}
+
+.ff-milestone-node-copy strong {
+  overflow: hidden;
+  color: #26354a;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ff-milestone-node-copy small,
+.ff-milestone-node em {
+  margin-top: 4px;
+  color: #758296;
+  font: normal 8px/1.35 ui-monospace, monospace;
+}
+
+.ff-milestone-node-copy small {
+  overflow-wrap: anywhere;
+}
+
+.ff-milestone-node-status {
+  align-self: start;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: #eef1f4;
+  color: #667487;
+  font-size: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ff-milestone-node-status.is-active {
+  background: #e6f1fc;
+  color: #286cae;
+}
+
+.ff-milestone-node-status.is-done {
+  background: #e5f4e9;
+  color: #207640;
+}
+
+.ff-milestone-node-status.is-blocked {
+  background: #fbe5e5;
+  color: #aa3838;
+}
+
+.ff-milestone-node em {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  white-space: nowrap;
+}
+
+.ff-milestone-cycle-warning {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: #a34848;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.ff-milestone-cycle-warning svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ff-milestone-empty {
+  display: grid;
+  min-height: 150px;
+  place-items: center;
+  margin: 16px;
+  border: 1px dashed #c9d3dd;
+  border-radius: 8px;
+  background: #fff;
+  color: #8491a3;
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .ff-milestone-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ff-milestone-graph-scroll {
+    padding-bottom: 4px;
+  }
+}
+
 .ff-flow-node {
   position: relative;
   z-index: 1;
