@@ -29,6 +29,7 @@ import { ApiError, normalizeNetworkError } from './errors';
 import { AgentRuntimePanel } from './AgentRuntimePanel';
 import { AuditTrail } from './AuditTrail';
 import { AgentSpecDetail, type WorkItemPreview } from './AgentSpecDetail';
+import { MilestoneTaskMonitor, MilestoneTaskSummary } from './MilestoneTaskMonitor';
 import { getEmployeeOptions } from './employeeDirectory';
 import { WorkItemDialog } from './WorkItemDialog';
 import { WorkItemFilterControls } from './WorkItemFilterControls';
@@ -1163,6 +1164,12 @@ export function ApiWorkspace() {
                           {projectList.length > 1 && item.kind !== 'ROOT' && <span className="ff-card-project">项目：{projectTitle(project)}</span>}
                           <p>{item.objective || item.description || '未提供任务目标'}</p>
                           {item.parent_id && <div className="ff-parent-link">产生自：#{item.parent_id}</div>}
+                          {item.kind === 'MILESTONE' && (
+                            <MilestoneTaskSummary
+                              milestoneId={item.id}
+                              workItems={project.resources.workItems}
+                            />
+                          )}
                           <div className="ff-card-footer">
                             <span className="ff-assignee"><i>{assigneeInitial(item)}</i>{assigneeLabel(item)}</span>
                             <span className="ff-progress-label">{progress}%</span>
@@ -1266,7 +1273,15 @@ export function ApiWorkspace() {
       </main>
 
       {selectedWorkItem && (
-        <WorkItemDialog contentKey={selectedWorkItem.id} title={selectedWorkItem.kind === 'ROOT' ? 'PRD 审核' : '任务详情'} onClose={() => setSelectedWorkItemId(null)}>
+        <WorkItemDialog
+          contentKey={selectedWorkItem.id}
+          title={selectedWorkItem.kind === 'ROOT'
+            ? 'PRD 审核'
+            : selectedWorkItem.kind === 'MILESTONE'
+              ? '里程碑详情'
+              : '任务详情'}
+          onClose={() => setSelectedWorkItemId(null)}
+        >
           {selectedWorkItem.kind === 'ROOT' && selectedProject && selectedSpec && (
             <PrdReviewPanel
               key={selectedWorkItem.id + ':' + selectedSpec.id}
@@ -1285,7 +1300,15 @@ export function ApiWorkspace() {
               <p>当前任务尚未生成 PRD。</p>
             </div>
           )}
-          {selectedWorkItem.kind !== 'ROOT' && (
+          {selectedWorkItem.kind === 'MILESTONE' && (
+            <MilestoneTaskMonitor
+              key={selectedWorkItem.id}
+              milestone={selectedWorkItem}
+              workItems={selectedResources.workItems}
+              onOpenWorkItem={setSelectedWorkItemId}
+            />
+          )}
+          {selectedWorkItem.kind === 'TASK' && (
             <AgentSpecDetail
               key={previewKey(selectedWorkItem.id)}
               item={selectedWorkItem}
