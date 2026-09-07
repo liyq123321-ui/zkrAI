@@ -203,7 +203,7 @@ export function MilestoneTaskMonitor({ milestone, workItems, onOpenWorkItem }: {
                           }}
                           type="button"
                           className={`ff-milestone-node is-${statusClass}`}
-                          aria-label={`打开子任务：${task.title || task.id}`}
+                          aria-label={`打开子任务：${task.title || task.id}，状态：${workItemStatusLabel(task.status)}`}
                           onClick={() => onOpenWorkItem(task.id)}
                         >
                           <span className="ff-milestone-node-icon">

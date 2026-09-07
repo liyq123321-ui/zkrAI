@@ -397,7 +397,7 @@ describe('workspace regression', () => {
     fireEvent.click(milestoneCard);
     const milestoneDialog = await screen.findByRole('dialog',{name:'里程碑详情'});
     expect(within(milestoneDialog).getByRole('heading',{name:'子任务执行监控'})).toBeTruthy();
-    const childButton = within(milestoneDialog).getByRole('button',{name:'打开子任务：接入问答接口'});
+    const childButton = within(milestoneDialog).getByRole('button',{name:'打开子任务：接入问答接口，状态：进行中'});
 
     fireEvent.click(childButton);
     const taskDialog = await screen.findByRole('dialog',{name:'任务详情'});

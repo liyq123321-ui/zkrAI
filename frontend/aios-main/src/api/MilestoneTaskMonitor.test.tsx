@@ -85,11 +85,11 @@ describe('MilestoneTaskMonitor', () => {
     expect(container.querySelector('[data-milestone-edge="a->c"]')).toBeTruthy();
     expect(container.querySelector('[data-milestone-edge="b->c"]')).toBeTruthy();
     expect(container.querySelector('[data-milestone-edge="outside->c"]')).toBeNull();
-    expect(within(screen.getByRole('button', { name: '打开子任务：a' })).getByText('已完成')).toBeTruthy();
-    expect(within(screen.getByRole('button', { name: '打开子任务：b' })).getByText('进行中')).toBeTruthy();
-    expect(within(screen.getByRole('button', { name: '打开子任务：c' })).getByText('受阻')).toBeTruthy();
+    expect(within(screen.getByRole('button', { name: '打开子任务：a，状态：已完成' })).getByText('已完成')).toBeTruthy();
+    expect(within(screen.getByRole('button', { name: '打开子任务：b，状态：进行中' })).getByText('进行中')).toBeTruthy();
+    expect(within(screen.getByRole('button', { name: '打开子任务：c，状态：受阻' })).getByText('受阻')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: '打开子任务：c' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开子任务：c，状态：受阻' }));
     expect(onOpenWorkItem).toHaveBeenCalledWith('c');
   });
 
