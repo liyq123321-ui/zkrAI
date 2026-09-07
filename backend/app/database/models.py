@@ -212,6 +212,30 @@ class SpecReview(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
+class PrdPrototype(Base):
+    """Version-bound HTML prototype generated from one immutable Spec."""
+
+    __tablename__ = "prd_prototypes"
+    __table_args__ = (
+        UniqueConstraint("spec_version_id", name="uq_prd_prototype_spec_version"),
+    )
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, nullable=False, index=True)
+    spec_version_id = Column(String, nullable=False, unique=True, index=True)
+    generator_agent_session_id = Column(String, nullable=False)
+    generator_call_id = Column(String, nullable=False, unique=True)
+    status = Column(String, nullable=False)
+    title = Column(String, nullable=True)
+    html = Column(Text, nullable=True)
+    content_hash = Column(String(64), nullable=True)
+    generation_summary = Column(Text, nullable=True)
+    error_code = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class WorkItem(Base):
     """A legacy-compatible project root, milestone, or executable task."""
 

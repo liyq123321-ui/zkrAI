@@ -20,10 +20,11 @@ from app.database.models import (
     AuditEvent,
     ClarificationRequest,
     ClarificationResponse,
+    PrdPrototype,
     Project,
     WorkItem,
 )
-from app.domain.types import ClarificationAnalysis, ReviewVerdict, SemanticReview
+from app.domain.types import ClarificationAnalysis, HtmlPrototypePayload, ReviewVerdict, SemanticReview
 from app.identity import ActorResolver
 from app.schemas.workflow import CommandResult, SessionState
 from app.services.command_jobs import CommandJobCoordinator
@@ -97,6 +98,59 @@ def _breakdown_with_input_refs(payload):
             ]
         }
     )
+
+
+def test_create_spec_generates_version_bound_html_prototype_before_returning_review(
+    session_factory,
+):
+    prototype = HtmlPrototypePayload(
+        title="Generated review prototype",
+        html="<!doctype html><html><body><button>Submit</button></body></html>",
+        generation_summary="Covered the primary submission flow.",
+    )
+    agent = ScriptedAgentGateway(
+        analyze_results=deque([
+            ClarificationAnalysis(ready_for_spec=True, questions=[], assumptions=[])
+        ]),
+        generate_results=deque([make_valid_spec()]),
+        review_results=deque([make_passing_semantic_review()]),
+        prototype_results=deque([prototype]),
+    )
+
+    with TestClient(
+        create_app(agent_gateway=agent, session_factory=session_factory)
+    ) as client:
+        created = client.post(
+            "/sessions",
+            json={
+                "request_id": "prototype-after-prd",
+                "actor_id": "approver-1",
+                "brief": make_complete_brief().model_dump(mode="json"),
+            },
+        ).json()
+        response = client.post(
+            f"/sessions/{created['session_id']}/commands",
+            json={
+                "command_id": "generate-prd-and-prototype",
+                "action": "create_spec",
+                "expected_state_version": created["state_version"],
+                "actor_id": "approver-1",
+                "payload": {},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"]["current_spec_status"] == "HUMAN_REVIEW"
+    assert [operation for operation, _ in agent.calls] == [
+        "analyze_brief",
+        "generate_spec",
+        "review_spec",
+        "generate_prd_prototype",
+    ]
+    with session_factory() as db:
+        stored = db.query(PrdPrototype).one()
+        assert stored.spec_version_id == response.json()["state"]["current_spec_version_id"]
+        assert stored.html == prototype.html
 
 
 def test_command_job_openapi_contract_distinguishes_sync_and_async_responses(

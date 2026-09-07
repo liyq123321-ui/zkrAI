@@ -85,6 +85,17 @@ class PrdErDiagramRead(BaseModel):
     drawio_xml: str = Field(min_length=1, max_length=1_048_576)
 
 
+class PrdPrototypeRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ready", "failed"]
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    content_url: str | None = Field(default=None, min_length=1, max_length=4096)
+    generation_summary: str | None = Field(default=None, min_length=1, max_length=4000)
+    error_code: str | None = Field(default=None, min_length=1, max_length=128)
+    error_message: str | None = Field(default=None, min_length=1, max_length=500)
+
+
 class PrdDocumentRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -96,6 +107,7 @@ class PrdDocumentRead(BaseModel):
     content: str = Field(min_length=1)
     change_summary: str | None = Field(default=None, min_length=1, max_length=8000)
     er_diagrams: list[PrdErDiagramRead] = Field(default_factory=list, max_length=8)
+    prototype: PrdPrototypeRead | None = None
 
     _normalize_identifiers = _plain_text_validator("wi", max_length=255)
     _normalize_filename = _plain_text_validator("filename", max_length=4096)

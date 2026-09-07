@@ -21,6 +21,7 @@ from app.agents.output_validation import OutputConsistencyError, merge_breakdown
 from app.domain.types import (
     BaseWorkBreakdown,
     ClarificationAnalysis,
+    HtmlPrototypePayload,
     PrdRewriteOutput,
     ProjectSpecPayload,
     SemanticReview,
@@ -35,6 +36,12 @@ BUNDLED_SKILL_ROOT = Path(__file__).resolve().parents[2] / "skills"
 PRD_DRAWIO_NODES = frozenset({"pm_generate_spec", "pm_rewrite_prd"})
 logger = logging.getLogger(__name__)
 _CODEX_PROGRESS_HEARTBEAT_SECONDS = 30.0
+_BUNDLED_SKILL_TEXT_FILENAMES = frozenset({"LICENSE", "NOTICE"})
+_BUNDLED_SKILL_TEXT_SUFFIXES = frozenset({
+    ".cfg", ".css", ".html", ".ini", ".js", ".json", ".md", ".py",
+    ".sh", ".svg", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml",
+    ".yml",
+})
 
 
 class AgentExecutionError(RuntimeError):
@@ -45,8 +52,24 @@ class AgentOutputError(RuntimeError):
     """Codex completed but did not produce contract-valid output."""
 
 
+def _bundled_skill_file_bytes(path: Path) -> bytes:
+    """Return cross-platform canonical bytes for trusted text files."""
+
+    data = path.read_bytes()
+    if (
+        path.name not in _BUNDLED_SKILL_TEXT_FILENAMES
+        and path.suffix.lower() not in _BUNDLED_SKILL_TEXT_SUFFIXES
+    ):
+        return data
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AgentExecutionError("bundled skill integrity check failed") from error
+    return text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+
+
 def _bundled_skill_digest(source: Path) -> str:
-    """Hash sorted relative paths and file bytes using the checked-in format."""
+    """Hash sorted paths and canonical text bytes using the checked-in format."""
 
     entries: list[str] = []
     for path in sorted(
@@ -56,7 +79,7 @@ def _bundled_skill_digest(source: Path) -> str:
         if path.is_symlink():
             raise AgentExecutionError("bundled skill integrity check failed")
         relative = path.relative_to(source).as_posix()
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = hashlib.sha256(_bundled_skill_file_bytes(path)).hexdigest()
         entries.append(f"{digest}  ./{relative}\n")
     return hashlib.sha256("".join(entries).encode("utf-8")).hexdigest()
 
@@ -129,6 +152,7 @@ class CodexStructuredRunner:
         self, prompt: str, output_type: type[ModelT], cwd: Path,
         *, validate_output: Callable[[ModelT], None] | None = None,
         bundled_skills: tuple[str, ...] = (),
+        use_magic_mcp: bool = False,
     ) -> ModelT:
         repair_prompt = prompt
         last_error: ValidationError | OutputConsistencyError | None = None
@@ -140,6 +164,7 @@ class CodexStructuredRunner:
                     output_type,
                     cwd,
                     bundled_skills=bundled_skills,
+                    use_magic_mcp=use_magic_mcp,
                 )
                 result = output_type.model_validate_json(output)
                 if validate_output is not None:
@@ -176,6 +201,7 @@ class CodexStructuredRunner:
         cwd: Path,
         *,
         bundled_skills: tuple[str, ...] = (),
+        use_magic_mcp: bool = False,
     ) -> str:
         with tempfile.TemporaryDirectory(prefix="codex-structured-") as directory:
             temp_dir = Path(directory)
@@ -198,9 +224,35 @@ class CodexStructuredRunner:
                 if binary.suffix.casefold() == ".py"
                 else [self.settings.codex_binary]
             )
+            magic_config: list[str] = []
+            if use_magic_mcp:
+                key_env = self.settings.magic_mcp_api_key_env
+                if not self.settings.magic_mcp_enabled:
+                    raise AgentExecutionError("Magic MCP prototype generation is disabled")
+                if not key_env or not os.getenv(key_env):
+                    raise AgentExecutionError(
+                        f"Magic MCP API key environment variable is missing: {key_env or 'unset'}"
+                    )
+                magic_config = [
+                    "-c",
+                    f"mcp_servers.magic.url={json.dumps(self.settings.magic_mcp_url)}",
+                    "-c",
+                    (
+                        "mcp_servers.magic.env_http_headers="
+                        f'{{"x-api-key"={json.dumps(key_env)}}}'
+                    ),
+                    "-c",
+                    'mcp_servers.magic.enabled_tools=["generate"]',
+                    "-c",
+                    (
+                        "mcp_servers.magic.tool_timeout_sec="
+                        f"{self.settings.magic_mcp_tool_timeout_seconds}"
+                    ),
+                ]
             command = [
                 *executable,
                 "exec",
+                *magic_config,
                 *(
                     ["--model", self.settings.codex_model]
                     if self.settings.codex_model
@@ -405,6 +457,17 @@ class CodexAgentGateway:
     async def generate_spec(self, payload: dict[str, object]) -> ProjectSpecPayload:
         return await self._run_node("pm_generate_spec", payload, ProjectSpecPayload)
 
+    @property
+    def prototype_enabled(self) -> bool:
+        return self.settings.magic_mcp_enabled
+
+    async def generate_prd_prototype(
+        self, payload: dict[str, object]
+    ) -> HtmlPrototypePayload:
+        return await self._run_node(
+            "pm_generate_prototype", payload, HtmlPrototypePayload
+        )
+
     async def review_spec(self, payload: dict[str, object]) -> SemanticReview:
         return await self._run_node("reviewer_spec", payload, SemanticReview)
 
@@ -451,15 +514,18 @@ class CodexAgentGateway:
         bundled_skills = (
             ("drawio-skill",) if node_name in PRD_DRAWIO_NODES else ()
         )
+        use_magic_mcp = node_name == "pm_generate_prototype"
         if node_name in {"pm_generate_spec", "pm_rewrite_prd", "pm_decompose", "pm_revise_breakdown", "pm_plan_task"}:
             return await self.runner.run(
                 prompt, output_type, self.settings.codex_cwd,
                 validate_output=lambda result: validate_node_output(result, payload),
                 bundled_skills=bundled_skills,
+                use_magic_mcp=use_magic_mcp,
             )
         return await self.runner.run(
             prompt,
             output_type,
             self.settings.codex_cwd,
             bundled_skills=bundled_skills,
+            use_magic_mcp=use_magic_mcp,
         )
