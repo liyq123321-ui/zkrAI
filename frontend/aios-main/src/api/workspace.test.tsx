@@ -157,6 +157,22 @@ function renderPanel(
   return render(<PrdReviewPanel wi="root-1" sessionState={sessionState} fallbackSpec={spec} onConfirmAndDecompose={onConfirmAndDecompose} />);
 }
 
+function addSecondFlowProject() {
+  sessionCatalog.push({session_id:'session-2',project_id:'project-2',root_work_item_id:'root-2',title:'客户支持助手'});
+  resourceOverrides = {
+    ...resourceOverrides,
+    '/sessions/session-2/state':{...state,session_id:'session-2',project_id:'project-2',current_spec_version_id:null},
+    '/sessions/session-2/specs':[],
+    '/sessions/session-2/work-items':[
+      {id:'root-2',kind:'ROOT',title:'客户支持助手',parent_id:null,dependency_work_item_ids:[]},
+      {id:'milestone-2',kind:'MILESTONE',title:'支持流程里程碑',parent_id:'root-2',dependency_work_item_ids:[]},
+      {id:'task-2',kind:'TASK',title:'处理客服工单',parent_id:'milestone-2',status:'todo',dependency_work_item_ids:[]},
+    ],
+    '/sessions/session-2/agent-specs':[],
+    '/sessions/session-2/events':[],
+  };
+}
+
 function QueuedTerminalReconciliationHarness() {
   const { state: currentState, updateSessionState } = useWorkspaceProjects();
   if (!currentState) return <span>loading</span>;
@@ -206,6 +222,77 @@ describe('workspace regression', () => {
 
     fireEvent.click(screen.getByRole('button', {name:/Kanban Board/}));
     expect(screen.queryByRole('region', {name:'Agent 实时运行状态'})).toBeNull();
+  });
+
+  it('keeps Kanban and task flow filters independent across tab switches', async () => {
+    addSecondFlowProject();
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    render(<ApiWorkspace />);
+
+    const kanbanSearch = await screen.findByRole('textbox', { name: '搜索工单' });
+    fireEvent.change(kanbanSearch, { target: { value: '问答' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索工单类型' }), { target: { value: 'ROOT' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索工单执行者' }), { target: { value: 'owner-1' } });
+    fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
+    let rootFilter = within(screen.getByRole('group', { name: '主任务筛选' }));
+    fireEvent.click(rootFilter.getByRole('checkbox', { name: '客户支持助手' }));
+    fireEvent.keyDown(rootFilter.getByRole('checkbox', { name: '客户支持助手' }), { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: /DAG Flow Map/ }));
+
+    const flowSearch = screen.getByRole('textbox', { name: '搜索流转图工单' });
+    expect((flowSearch as HTMLInputElement).value).toBe('');
+    expect((screen.getByRole('combobox', { name: '搜索流转图工单类型' }) as HTMLSelectElement).value).toBe('ALL');
+    expect((screen.getByRole('combobox', { name: '搜索流转图工单执行者' }) as HTMLSelectElement).value).toBe('ALL');
+    expect(screen.getByRole('button', { name: '筛选主任务' }).textContent).toContain('全部任务');
+    fireEvent.change(flowSearch, { target: { value: '检索' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索流转图工单类型' }), { target: { value: 'TASK' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索流转图工单执行者' }), { target: { value: 'AI Agent' } });
+    fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
+    rootFilter = within(screen.getByRole('group', { name: '主任务筛选' }));
+    fireEvent.click(rootFilter.getByRole('checkbox', { name: '知识问答' }));
+    fireEvent.keyDown(rootFilter.getByRole('checkbox', { name: '知识问答' }), { key: 'Escape' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Kanban Board/ }));
+    expect((screen.getByRole('textbox', { name: '搜索工单' }) as HTMLInputElement).value).toBe('问答');
+    expect((screen.getByRole('combobox', { name: '搜索工单类型' }) as HTMLSelectElement).value).toBe('ROOT');
+    expect((screen.getByRole('combobox', { name: '搜索工单执行者' }) as HTMLSelectElement).value).toBe('owner-1');
+    fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
+    rootFilter = within(screen.getByRole('group', { name: '主任务筛选' }));
+    expect((rootFilter.getByRole('checkbox', { name: '知识问答' }) as HTMLInputElement).checked).toBe(true);
+    expect((rootFilter.getByRole('checkbox', { name: '客户支持助手' }) as HTMLInputElement).checked).toBe(false);
+    fireEvent.keyDown(rootFilter.getByRole('checkbox', { name: '知识问答' }), { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: /DAG Flow Map/ }));
+    expect((screen.getByRole('textbox', { name: '搜索流转图工单' }) as HTMLInputElement).value).toBe('检索');
+    expect((screen.getByRole('combobox', { name: '搜索流转图工单类型' }) as HTMLSelectElement).value).toBe('TASK');
+    expect((screen.getByRole('combobox', { name: '搜索流转图工单执行者' }) as HTMLSelectElement).value).toBe('AI Agent');
+    fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
+    rootFilter = within(screen.getByRole('group', { name: '主任务筛选' }));
+    expect((rootFilter.getByRole('checkbox', { name: '知识问答' }) as HTMLInputElement).checked).toBe(false);
+    expect((rootFilter.getByRole('checkbox', { name: '客户支持助手' }) as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('normalizes invalid agents in both filter states after available agents change', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    render(<ApiWorkspace />);
+
+    await screen.findByRole('button', { name: /实现问答 API/ });
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索工单' }), { target: { value: '问答' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索工单执行者' }), { target: { value: 'Backend Agent' } });
+    fireEvent.click(screen.getByRole('button', { name: /DAG Flow Map/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索流转图工单' }), { target: { value: '检索' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索流转图工单执行者' }), { target: { value: 'AI Agent' } });
+
+    resourceOverrides['/sessions/session-1/work-items'] = [
+      { id: 'root-1', parent_id: null, kind: 'ROOT', title: '知识问答', suggested_assignee: 'owner-1', dependency_work_item_ids: [] },
+    ];
+    fireEvent.click(screen.getByRole('button', { name: /Kanban Board/ }));
+    fireEvent.click(screen.getByRole('button', { name: '刷新看板' }));
+
+    await waitFor(() => expect((screen.getByRole('combobox', { name: '搜索工单执行者' }) as HTMLSelectElement).value).toBe('ALL'));
+    expect((screen.getByRole('textbox', { name: '搜索工单' }) as HTMLInputElement).value).toBe('问答');
+    fireEvent.click(screen.getByRole('button', { name: /DAG Flow Map/ }));
+    expect((screen.getByRole('combobox', { name: '搜索流转图工单执行者' }) as HTMLSelectElement).value).toBe('ALL');
+    expect((screen.getByRole('textbox', { name: '搜索流转图工单' }) as HTMLInputElement).value).toBe('检索');
   });
 
   it('shows separate PRD revision and decomposition controls and blocks decomposition on Agent findings', async () => {
@@ -665,6 +752,62 @@ describe('workspace regression', () => {
     fireEvent.click(within(graph).getByRole('button',{name:/构建检索流程/}));
     const dialog = await screen.findByRole('dialog',{name:'任务详情'});
     expect(within(dialog).getByRole('heading',{name:'构建检索流程'})).toBeTruthy();
+  });
+
+  it('filters flow nodes by root, kind, agent, and search and shows an empty result', async () => {
+    addSecondFlowProject();
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /DAG Flow Map/ }));
+
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索流转图工单类型' }), { target: { value: 'TASK' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索流转图工单执行者' }), { target: { value: 'AI Agent' } });
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索流转图工单' }), { target: { value: '检索' } });
+
+    expect(screen.getByRole('button', { name: /构建检索流程/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /实现问答 API/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /知识问答.*Owner/ })).toBeNull();
+    expect(screen.getByText('1 NODES')).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索流转图工单' }), { target: { value: '不存在的工单' } });
+    expect(screen.getByRole('status').textContent).toBe('没有符合当前筛选条件的任务');
+  });
+
+  it('distinguishes backend-empty lanes from lanes hidden by flow filters', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /DAG Flow Map/ }));
+
+    const rootLane = screen.getByText('项目需求 (Root)', { selector: '.ff-flow-lane > header' }).closest<HTMLElement>('.ff-flow-lane')!;
+    const milestoneLane = screen.getByText('里程碑 (Milestones)', { selector: '.ff-flow-lane > header' }).closest<HTMLElement>('.ff-flow-lane')!;
+    expect(within(milestoneLane).getByText('等待后端生成')).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索流转图工单类型' }), { target: { value: 'TASK' } });
+    expect(within(rootLane).getByText('当前筛选条件已隐藏此类节点')).toBeTruthy();
+    expect(within(milestoneLane).getByText('等待后端生成')).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('combobox', { name: '搜索流转图工单类型' }), { target: { value: 'ROOT' } });
+    expect(within(screen.getByRole('region', { name: '子任务 (Tasks)' })).getByText('当前筛选条件已隐藏此类节点')).toBeTruthy();
+  });
+
+  it('filters the flow map to selected roots', async () => {
+    addSecondFlowProject();
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: /DAG Flow Map/ }));
+    await screen.findByText('客户支持助手', { selector: '.ff-flow-node strong' });
+
+    fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
+    const filter = within(screen.getByRole('group', { name: '主任务筛选' }));
+    fireEvent.click(filter.getByRole('checkbox', { name: '知识问答' }));
+
+    expect(screen.queryByRole('button', { name: /知识问答.*Owner/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /实现问答 API/ })).toBeNull();
+    expect(screen.queryByRole('region', { name: '知识问答任务依赖图' })).toBeNull();
+    expect(screen.getByRole('button', { name: /客户支持助手/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /支持流程里程碑/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /处理客服工单/ })).toBeTruthy();
+    expect(screen.getByRole('region', { name: '客户支持助手任务依赖图' })).toBeTruthy();
   });
 
   it('expands audit evidence and the review output associated with that event', async () => {

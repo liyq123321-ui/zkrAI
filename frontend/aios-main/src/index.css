@@ -800,8 +800,8 @@ button:disabled {
 }
 
 .ff-field-control,
-.ff-board-toolbar input,
-.ff-board-toolbar select {
+.ff-filter-toolbar input,
+.ff-filter-toolbar select {
   width: 100%;
   border: 1px solid #c8d2dd;
   border-radius: 5px;
@@ -816,10 +816,16 @@ button:disabled {
 }
 
 .ff-field-control:focus,
-.ff-board-toolbar input:focus,
-.ff-board-toolbar select:focus {
+.ff-filter-toolbar input:focus,
+.ff-filter-toolbar select:focus {
   border-color: #6c9ce2;
   box-shadow: 0 0 0 2px rgb(22 104 220 / 10%);
+}
+
+.ff-filter-toolbar input:focus-visible,
+.ff-filter-toolbar select:focus-visible {
+  outline: 2px solid #1668dc;
+  outline-offset: 2px;
 }
 
 .ff-field-multiline {
@@ -1029,7 +1035,7 @@ button:disabled {
   display: flex;
 }
 
-.ff-board-toolbar {
+.ff-filter-toolbar {
   display: flex;
   flex-wrap: wrap;
   min-height: 56px;
@@ -1473,6 +1479,17 @@ button:disabled {
   padding: 34px;
   background-image: radial-gradient(#cfd8e2 0.8px, transparent 0.8px);
   background-size: 16px 16px;
+}
+
+.ff-flow-filter-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  border: 1px dashed #cbd5df;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 88%);
+  color: var(--ff-muted);
+  font-size: 11px;
 }
 
 .ff-flow-graph {

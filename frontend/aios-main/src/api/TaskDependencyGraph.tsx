@@ -141,11 +141,12 @@ function TaskProjectSwimlane({ project, onOpenWorkItem }: {
   );
 }
 
-export function TaskDependencyGraph({ projects, onOpenWorkItem }: {
+export function TaskDependencyGraph({ projects, onOpenWorkItem, emptyMessage = '等待后端生成子任务' }: {
   projects: TaskDagProject[];
   onOpenWorkItem: (workItemId: string) => void;
+  emptyMessage?: string;
 }) {
-  if (projects.length === 0) return <div className="ff-task-dag-empty">等待后端生成子任务</div>;
+  if (projects.length === 0) return <div className="ff-task-dag-empty">{emptyMessage}</div>;
   return (
     <section className="ff-task-dag" aria-label="子任务依赖图">
       {projects.map((project) => (

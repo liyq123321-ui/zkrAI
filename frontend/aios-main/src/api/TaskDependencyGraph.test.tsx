@@ -59,4 +59,18 @@ describe('TaskDependencyGraph', () => {
     fireEvent.click(within(projectA).getByRole('button', { name: /任务 b/ }));
     expect(onOpenWorkItem).toHaveBeenCalledWith('b');
   });
+
+  it('does not draw an edge when its dependency endpoint is filtered out', () => {
+    const { container } = render(<TaskDependencyGraph projects={[{
+      id: 'project-1', title: '知识问答', tasks: [{
+        id: 'task-running', kind: 'TASK', title: '构建检索流程', parent_id: 'root-1',
+        dependency_work_item_ids: ['task-hidden'], graph_depth: 1,
+        description: null, objective: null, scope: [], exclusions: [], outputs: null,
+        acceptance_criteria: null, required_skills: null, responsible_role: null, suggested_assignee: null,
+      }],
+    }]} onOpenWorkItem={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: /构建检索流程/ })).toBeTruthy();
+    expect(container.querySelector('[data-dependency-edge="task-hidden->task-running"]')).toBeNull();
+  });
 });
