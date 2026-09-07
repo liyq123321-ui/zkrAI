@@ -35,6 +35,7 @@ from app.services.state_projection import project_state
 AGENT_OPERATION_SUMMARIES = {
     "analyze_brief": "Analyzing project brief completeness",
     "generate_spec": "Generating a project specification",
+    "generate_prd_prototype": "Generating an interactive HTML prototype",
     "review_spec": "Reviewing specification quality",
     "decompose_spec": "Decomposing the approved specification",
     "plan_task": "Defining task implementation steps and interfaces",

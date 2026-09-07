@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
-from app.database.models import PrdVersion, Project, ReviewTask, SpecVersion, WorkItem
+from app.database.models import PrdPrototype, PrdVersion, Project, ReviewTask, SpecVersion, WorkItem
 from app.domain.types import (
     PrdRewriteOutput,
     ProjectPhase,
@@ -281,15 +281,52 @@ def test_document_endpoints_return_only_the_prd_document_contract(prd_api_client
         "content",
         "change_summary",
         "er_diagrams",
+        "prototype",
     }
     assert latest.status_code == 200
     assert latest.json()["content"] == "# PRD\n\nA first version.\n"
     assert latest.json()["er_diagrams"] == []
+    assert latest.json()["prototype"] is None
     assert set(latest.json()) == expected_fields
     assert specific.status_code == 200
     assert specific.json() == latest.json()
     assert versions.status_code == 200
     assert versions.json() == [latest.json()]
+
+
+def test_document_exposes_versioned_sandboxed_html_prototype(
+    prd_api_client, session_factory
+):
+    client, root, _ = prd_api_client
+    html = "<!doctype html><html><body><button>保存</button></body></html>"
+    with session_factory() as db:
+        db.add(
+            PrdPrototype(
+                id="prototype-api-v1",
+                project_id="project-prd-api",
+                spec_version_id="spec-prd-api-1",
+                generator_agent_session_id="prototype-agent",
+                generator_call_id="prototype-call",
+                status="ready",
+                title="PRD HTML prototype",
+                html=html,
+                content_hash=hashlib.sha256(html.encode()).hexdigest(),
+                generation_summary="Generated the main interaction.",
+            )
+        )
+        db.commit()
+
+    document = client.get(f"/prd/{root.id}")
+    prototype = document.json()["prototype"]
+    assert prototype["status"] == "ready"
+    assert prototype["content_url"] == f"/prd/{root.id}/v/1/prototype"
+
+    response = client.get(prototype["content_url"])
+    assert response.status_code == 200
+    assert response.text == html
+    assert response.headers["content-type"].startswith("text/html")
+    assert "sandbox allow-scripts allow-forms" in response.headers["content-security-policy"]
+    assert "connect-src 'none'" in response.headers["content-security-policy"]
 
 
 def test_openapi_exposes_diagram_reads_and_revision_endpoint(prd_api_client):
@@ -300,6 +337,9 @@ def test_openapi_exposes_diagram_reads_and_revision_endpoint(prd_api_client):
     assert "/prd/{wi}/diagrams/{diagram_id}/revisions" in schema["paths"]
     assert "er_diagrams" in schema["components"]["schemas"]["PrdDocumentRead"]["properties"]
     assert "PrdErDiagramRead" in schema["components"]["schemas"]
+    assert "/prd/{wi}/v/{number}/prototype" in schema["paths"]
+    assert "prototype" in schema["components"]["schemas"]["PrdDocumentRead"]["properties"]
+    assert "PrdPrototypeRead" in schema["components"]["schemas"]
 
 
 def test_document_endpoints_bind_diagrams_to_each_immutable_version(

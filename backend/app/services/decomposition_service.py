@@ -29,6 +29,7 @@ from app.services.task_specifications import ImplementationPlanError, requiremen
 
 
 _DECOMPOSITION_CONTRACT_VERSION = 5
+_MAX_SEMANTIC_REVIEW_ATTEMPTS = 5
 
 
 class BreakdownValidationError(ValueError):
@@ -125,6 +126,31 @@ def _now() -> datetime:
 def _canonical_hash(value: object) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _review_fingerprint(review: SemanticReview) -> str:
+    """Identify equivalent semantic feedback independent of finding order."""
+
+    findings = sorted(
+        (
+            {
+                "code": finding.code.strip(),
+                "severity": finding.severity.strip().upper(),
+                "spec_path": finding.spec_path.strip(),
+                "message": finding.message.strip(),
+                "suggested_resolution": finding.suggested_resolution.strip(),
+                "blocks_progress": finding.blocks_progress,
+            }
+            for finding in review.findings
+        ),
+        key=lambda finding: (
+            finding["code"],
+            finding["spec_path"],
+            finding["message"],
+            finding["suggested_resolution"],
+        ),
+    )
+    return _canonical_hash({"verdict": review.verdict.value, "findings": findings})
 
 
 def _trimmed(value: object) -> str:
@@ -451,16 +477,23 @@ class DecompositionService:
             seed = self._latest_rejected_review(db, project_id, snapshot, command_id, input_hash)
 
         previous, first_round, prior_call_ids = seed or (None, 0, [])
-        if first_round > 2:
+        seen_review_fingerprints: set[str] = set()
+        if previous:
+            seen_review_fingerprints.add(
+                _review_fingerprint(
+                    SemanticReview.model_validate(previous["review_feedback"])
+                )
+            )
+        if first_round >= _MAX_SEMANTIC_REVIEW_ATTEMPTS:
             review = SemanticReview.model_validate(previous["review_feedback"])
             raise SemanticReviewRejected(BreakdownValidationError(
                 "SEMANTIC_REVIEW_BLOCKED", self._review_implicated_path(review),
                 "Semantic revision budget exhausted for this command",
             ), prior_call_ids)
 
-        # Initial proposal plus at most two semantic revisions. A persisted rejection
-        # already supplies the initial proposal, so retry revises it directly.
-        for repair_round in range(first_round, 3):
+        # Continue bounded repair while the reviewer reports meaningfully different
+        # blockers. A persisted rejection already supplies the initial proposal.
+        for repair_round in range(first_round, _MAX_SEMANTIC_REVIEW_ATTEMPTS):
             if repair_round == 0 and previous is None:
                 report_agent_progress(
                     "base_decomposition",
@@ -506,7 +539,14 @@ class DecompositionService:
                     reviewer_call_id,
                 )
 
-            will_repair = repair_round < 2 and self._can_repair_review(review)
+            review_fingerprint = _review_fingerprint(review)
+            repeated_review = review_fingerprint in seen_review_fingerprints
+            seen_review_fingerprints.add(review_fingerprint)
+            will_repair = (
+                repair_round + 1 < _MAX_SEMANTIC_REVIEW_ATTEMPTS
+                and self._can_repair_review(review)
+                and not repeated_review
+            )
             with self._session_factory() as db:
                 project = self._project(db, project_id)
                 db.add(AuditEvent(
@@ -515,7 +555,9 @@ class DecompositionService:
                     payload={
                         "spec_version_id": snapshot.id, "command_id": command_id,
                         "agent_call_ids": [call_id, *plan_call_ids, reviewer_call_id], "repair_round": repair_round,
-                        "will_repair": will_repair, "review": review.model_dump(mode="json"),
+                        "will_repair": will_repair,
+                        "stop_reason": "repeated_review" if repeated_review else None,
+                        "review": review.model_dump(mode="json"),
                     },
                 ))
                 db.commit()
@@ -537,6 +579,7 @@ class DecompositionService:
                     plan_call_ids=plan_call_ids,
                     reviewer_call_id=reviewer_call_id,
                     completed_round=repair_round,
+                    seen_review_fingerprints=seen_review_fingerprints,
                     command_id=command_id,
                     input_hash=input_hash,
                 )
@@ -606,17 +649,49 @@ class DecompositionService:
                 # starts from exact base/task checkpoints instead of revising the
                 # task tree in response to plan-only findings.
                 return None
+            repeated_review = False
+            if same_attempt:
+                fingerprint = _review_fingerprint(review)
+                for earlier in calls:
+                    if earlier.id == call.id or earlier.status != "RESULT_READY":
+                        continue
+                    earlier_request = earlier.request
+                    if (
+                        earlier_request.get("command_id") != command_id
+                        or earlier_request.get("input_hash") != input_hash
+                        or earlier_request.get("source_spec_version_id") != snapshot.id
+                        or earlier_request.get("source_spec_content_hash")
+                        != snapshot.content_hash
+                    ):
+                        continue
+                    try:
+                        earlier_review = SemanticReview.model_validate(
+                            earlier.response
+                        )
+                    except ValueError:
+                        continue
+                    if _review_fingerprint(earlier_review) == fingerprint:
+                        repeated_review = True
+                        break
             completed_round = request.get("repair_round", 0) if same_attempt else 0
-            if type(completed_round) is not int or not 0 <= completed_round <= 2:
+            if (
+                type(completed_round) is not int
+                or not 0 <= completed_round < _MAX_SEMANTIC_REVIEW_ATTEMPTS
+            ):
                 raise DecompositionNotAllowed("invalid persisted semantic repair round")
             evidence_ids = [call.id]
             if same_attempt and request.get("pm_agent_call_id"):
                 evidence_ids.insert(0, request["pm_agent_call_id"])
+            next_round = (
+                _MAX_SEMANTIC_REVIEW_ATTEMPTS
+                if repeated_review
+                else completed_round + 1
+            )
             return {
                 "previous_breakdown": breakdown.model_dump(mode="json"),
                 "review_feedback": review.model_dump(mode="json"),
                 "previous_review_call_id": call.id,
-            }, completed_round + 1, evidence_ids
+            }, next_round, evidence_ids
         return None
 
     def _assert_snapshot_current(self, db: Session, project_id: str, snapshot: ApprovedSpecSnapshot) -> None:
@@ -777,6 +852,7 @@ class DecompositionService:
         plan_call_ids: list[str],
         reviewer_call_id: str,
         completed_round: int,
+        seen_review_fingerprints: set[str],
         command_id: str | None,
         input_hash: str | None,
     ) -> PreparedDecomposition:
@@ -798,7 +874,9 @@ class DecompositionService:
                 base_call.request.get("checkpoint_source_call_id") or base_call.id
             )
 
-        for repair_round in range(completed_round + 1, 3):
+        for repair_round in range(
+            completed_round + 1, _MAX_SEMANTIC_REVIEW_ATTEMPTS
+        ):
             targets = self._plan_repair_targets(breakdown, review)
             previous_plans = {
                 task.work_item_key: task.implementation_plan
@@ -865,7 +943,14 @@ class DecompositionService:
                     tuple(current_plan_ids),
                     reviewer_call_id,
                 )
-            will_repair = repair_round < 2 and self._can_repair_review(review)
+            review_fingerprint = _review_fingerprint(review)
+            repeated_review = review_fingerprint in seen_review_fingerprints
+            seen_review_fingerprints.add(review_fingerprint)
+            will_repair = (
+                repair_round + 1 < _MAX_SEMANTIC_REVIEW_ATTEMPTS
+                and self._can_repair_review(review)
+                and not repeated_review
+            )
             with self._session_factory() as db:
                 project = self._project(db, project_id)
                 db.add(AuditEvent(
@@ -880,6 +965,9 @@ class DecompositionService:
                         ],
                         "repair_round": repair_round,
                         "will_repair": will_repair,
+                        "stop_reason": (
+                            "repeated_review" if repeated_review else None
+                        ),
                         "review": review.model_dump(mode="json"),
                     },
                 ))

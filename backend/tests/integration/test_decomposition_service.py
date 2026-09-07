@@ -760,7 +760,7 @@ async def test_semantic_reviewer_blocks_without_persisting_breakdown_rows(
         findings=[ReviewFinding(code="EXCLUSION_CONTRADICTION", severity="BLOCKER", spec_path="agent_specs[t-api].fixed_constraints[0]", message="Excluded scope was reintroduced", suggested_resolution="Remove it", blocks_progress=True)],
     )
     agent = ScriptedAgentGateway(
-        decompose_results=deque([valid_breakdown] * 3), review_breakdown_results=deque([blocked] * 3)
+        decompose_results=deque([valid_breakdown] * 2), review_breakdown_results=deque([blocked] * 2)
     )
 
     with pytest.raises(BreakdownValidationError, match=r"SEMANTIC_REVIEW_BLOCKED \[t-api\]"):
@@ -769,8 +769,8 @@ async def test_semantic_reviewer_blocks_without_persisting_breakdown_rows(
     with session_factory() as db:
         assert db.query(WorkItem).filter_by(project_id=project.id).count() == 0
         assert db.query(AgentSpec).filter_by(project_id=project.id).count() == 0
-        assert db.query(AgentCall).filter_by(project_id=project.id, operation="decompose_spec", status="RESULT_READY").count() == 3
-        assert db.query(AgentCall).filter_by(project_id=project.id, operation="review_breakdown", status="RESULT_READY").count() == 3
+        assert db.query(AgentCall).filter_by(project_id=project.id, operation="decompose_spec", status="RESULT_READY").count() == 2
+        assert db.query(AgentCall).filter_by(project_id=project.id, operation="review_breakdown", status="RESULT_READY").count() == 2
 
 
 @pytest.mark.asyncio
@@ -859,13 +859,13 @@ async def test_passing_verdict_with_blocker_finding_is_semantically_rejected(
         verdict=ReviewVerdict.PASS,
         findings=[ReviewFinding(code="BOUNDARY_CONTRADICTION", severity="BLOCKER", spec_path="agent_specs[t-api].fixed_constraints[0]", message="Blocked", suggested_resolution="Remove", blocks_progress=False)],
     )
-    agent = ScriptedAgentGateway(decompose_results=deque([valid_breakdown] * 3), review_breakdown_results=deque([contradictory] * 3))
+    agent = ScriptedAgentGateway(decompose_results=deque([valid_breakdown] * 2), review_breakdown_results=deque([contradictory] * 2))
 
     with pytest.raises(BreakdownValidationError, match=r"SEMANTIC_REVIEW_BLOCKED \[t-api\]"):
         await DecompositionService(session_factory, agent).convert(project.id)
 
     with session_factory() as db:
-        assert db.query(AgentCall).filter_by(project_id=project.id, operation="review_breakdown", status="RESULT_READY").count() == 3
+        assert db.query(AgentCall).filter_by(project_id=project.id, operation="review_breakdown", status="RESULT_READY").count() == 2
 
 
 @pytest.mark.asyncio

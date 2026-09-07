@@ -1,0 +1,2 @@
+backend/skills/drawio-skill/** text eol=lf
+backend/skills/drawio-skill/**/*.gz binary -eol

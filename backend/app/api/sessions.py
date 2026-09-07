@@ -35,6 +35,7 @@ from app.services.query_service import (
 )
 from app.services.spec_service import SpecService
 from app.services.prd_review import PrdReviewService
+from app.services.prd_prototype import PrdPrototypeService
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ def build_router(
     actor_resolver: ActorResolver,
     prd_review_service: PrdReviewService | None = None,
     command_jobs: CommandJobCoordinator | None = None,
+    prototype_service: PrdPrototypeService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/sessions", tags=["sessions"])
     projects = ProjectService(session_factory, agent_gateway)
@@ -137,6 +139,28 @@ def build_router(
                     headers={"Location": accepted.status_url},
                 )
             result = await commands.execute(session_id, request_body)
+            if (
+                prototype_service is not None
+                and request_body.action
+                in {
+                    CommandAction.CREATE_SPEC,
+                    CommandAction.REVISE,
+                    CommandAction.RESTORE_SPEC_VERSION,
+                }
+                and result.state.current_spec_status
+                in {"HUMAN_REVIEW", "REWORK", "NEED_CLARIFICATION"}
+            ):
+                try:
+                    await prototype_service.ensure_for_project(
+                        result.state.project_id
+                    )
+                except Exception:
+                    # Prototype generation is a derived review aid. The frozen
+                    # PRD remains authoritative and must stay reviewable.
+                    logger.exception(
+                        "Could not generate PRD HTML prototype",
+                        extra={"project_id": result.state.project_id},
+                    )
             if (
                 prd_review_service is not None
                 and request_body.action in {CommandAction.CREATE_SPEC, CommandAction.REVISE}

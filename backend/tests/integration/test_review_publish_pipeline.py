@@ -12,6 +12,7 @@ from app.database.models import (
     AuditEvent,
     ClarificationRequest,
     CommandAttempt,
+    PrdPrototype,
     PrdVersion,
     ProcessedCommand,
     Project,
@@ -21,6 +22,7 @@ from app.database.models import (
     WorkItem,
 )
 from app.domain.types import (
+    HtmlPrototypePayload,
     PrdRewriteOutput,
     ProjectPhase,
     ReviewKind,
@@ -307,6 +309,13 @@ async def test_auto_resolve_findings_publishes_without_gitea_comments(
             )
         ]),
         review_results=deque([passing_semantic_review]),
+        prototype_results=deque([
+            HtmlPrototypePayload(
+                title="Revised PRD prototype",
+                html="<!doctype html><html><body>Revised flow</body></html>",
+                generation_summary="Updated the primary flow.",
+            )
+        ]),
     )
     coordinator = ReviewPublishCoordinator(session_factory, gitea, agent)
 
@@ -329,6 +338,9 @@ async def test_auto_resolve_findings_publishes_without_gitea_comments(
         stored = db.get(ReviewTask, task.id)
         assert stored.auto_resolve_findings is True
         assert stored.finding_snapshot == [finding]
+        prototype = db.query(PrdPrototype).one()
+        assert prototype.spec_version_id == stored.new_spec_version_id
+        assert prototype.status == "ready"
 
 
 @pytest.mark.asyncio

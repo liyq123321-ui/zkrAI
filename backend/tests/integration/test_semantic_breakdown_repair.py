@@ -85,6 +85,94 @@ async def test_staged_review_repairs_only_the_implicated_task_plan(
 
 
 @pytest.mark.asyncio
+async def test_staged_review_keeps_repairing_while_findings_change(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+    passing_semantic_review,
+):
+    """A converging plan may use more than the former three-review budget."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+
+    def rejection(code: str) -> SemanticReview:
+        return SemanticReview(verdict=ReviewVerdict.REJECT, findings=[
+            ReviewFinding(
+                code=code,
+                severity="BLOCKER",
+                spec_path="agent_specs[t-api].implementation_plan.interfaces[0]",
+                message=f"The t-api plan still has {code}.",
+                suggested_resolution="Regenerate only the t-api plan.",
+                blocks_progress=True,
+            )
+        ])
+
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            _plan_for(base.agent_specs[0]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+        ]),
+        review_breakdown_results=deque([
+            rejection("FIRST_CONTRACT_MISMATCH"),
+            rejection("SECOND_CONTRACT_MISMATCH"),
+            rejection("THIRD_CONTRACT_MISMATCH"),
+            passing_semantic_review,
+        ]),
+    )
+
+    specs = await DecompositionService(session_factory, agent).convert(project.id)
+
+    assert len(specs) == 2
+    operations = [operation for operation, _ in agent.calls]
+    assert operations.count("decompose_spec") == 1
+    assert operations.count("plan_task") == 5
+    assert operations.count("review_breakdown") == 4
+
+
+@pytest.mark.asyncio
+async def test_staged_review_stops_when_feedback_repeats_without_progress(
+    session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
+):
+    """An unchanged blocker is non-converging and must not consume every round."""
+
+    project = _approved_project(db_session, complete_brief, valid_spec)
+    base = valid_breakdown.model_copy(deep=True)
+    for task in base.agent_specs:
+        task.implementation_plan = None
+    repeated = SemanticReview(verdict=ReviewVerdict.REJECT, findings=[
+        ReviewFinding(
+            code="UNCHANGED_CONTRACT_MISMATCH",
+            severity="BLOCKER",
+            spec_path="agent_specs[t-api].implementation_plan.interfaces[0]",
+            message="The same t-api contract mismatch remains.",
+            suggested_resolution="Regenerate only the t-api plan.",
+            blocks_progress=True,
+        )
+    ])
+    agent = ScriptedAgentGateway(
+        decompose_results=deque([base]),
+        plan_results=deque([
+            _plan_for(base.agent_specs[0]),
+            _plan_for(base.agent_specs[1]),
+            _plan_for(base.agent_specs[1]),
+        ]),
+        review_breakdown_results=deque([repeated, repeated]),
+    )
+
+    with pytest.raises(SemanticReviewRejected):
+        await DecompositionService(session_factory, agent).convert(project.id)
+
+    operations = [operation for operation, _ in agent.calls]
+    assert operations.count("plan_task") == 3
+    assert operations.count("review_breakdown") == 2
+
+
+@pytest.mark.asyncio
 async def test_upstream_plan_repair_cascades_to_dependents_with_repaired_contract(
     session_factory, db_session, complete_brief, valid_spec, valid_breakdown,
     passing_semantic_review,
@@ -312,6 +400,9 @@ async def test_new_command_resumes_exhausted_plan_review_from_checkpoints(
             blocks_progress=True,
         )
     ])
+    revised_rejection = rejected.model_copy(deep=True)
+    revised_rejection.findings[0].code = "PLAN_CONTRACT_MISMATCH_V2"
+    revised_rejection.findings[0].message = "A different task plan mismatch remains."
     agent = ScriptedAgentGateway(
         decompose_results=deque([base]),
         plan_results=deque([
@@ -319,10 +410,9 @@ async def test_new_command_resumes_exhausted_plan_review_from_checkpoints(
             _plan_for(base.agent_specs[1]),
             _plan_for(base.agent_specs[1]),
             _plan_for(base.agent_specs[1]),
-            _plan_for(base.agent_specs[1]),
         ]),
         review_breakdown_results=deque([
-            rejected, rejected, rejected, rejected, passing_semantic_review,
+            rejected, rejected, revised_rejection, passing_semantic_review,
         ]),
     )
     commands = command_service(session_factory, agent)
@@ -344,8 +434,8 @@ async def test_new_command_resumes_exhausted_plan_review_from_checkpoints(
     assert recovered.state.phase == "AGENT_SPECS_READY"
     operations = [operation for operation, _ in agent.calls]
     assert operations.count("decompose_spec") == 1
-    assert operations.count("plan_task") == 5
-    assert operations.count("review_breakdown") == 5
+    assert operations.count("plan_task") == 4
+    assert operations.count("review_breakdown") == 4
 
 
 @pytest.mark.asyncio
@@ -464,13 +554,13 @@ async def test_repair_exhaustion_preserves_all_reviews_without_partial_work(
     with pytest.raises(SemanticReviewRejected):
         await DecompositionService(session_factory, agent).convert(project.id)
 
-    assert len(agent.calls) == 6
+    assert len(agent.calls) == 4
     with session_factory() as db:
         assert db.get(Project, project.id).state_version == 7
         assert db.query(AgentSpec).count() == 0
         assert db.query(WorkItem).count() == 0
-        assert db.query(AgentCall).count() == 6
-        assert db.query(AuditEvent).filter_by(event_type="DECOMPOSITION_REVIEW_REJECTED").count() == 3
+        assert db.query(AgentCall).count() == 4
+        assert db.query(AuditEvent).filter_by(event_type="DECOMPOSITION_REVIEW_REJECTED").count() == 2
 
 
 @pytest.mark.asyncio
@@ -632,7 +722,7 @@ async def test_resuming_same_command_retains_exhausted_semantic_budget(
             "source_spec_content_hash": "d" * 64, "approved_spec": valid_spec.model_dump(mode="json"),
             "input_refs": ["artifact:brief-1"],
             "canonical_breakdown": valid_breakdown.model_dump(mode="json"),
-            "command_id": "same-command", "input_hash": "same-input", "repair_round": 2,
+            "command_id": "same-command", "input_hash": "same-input", "repair_round": 4,
             "decomposition_contract_version": 5,
         }, response=source_review().model_dump(mode="json")))
     db_session.commit()
@@ -696,5 +786,5 @@ async def test_other_command_cannot_hide_exhausted_repair_budget(
     with pytest.raises(CommandHandlerRejected):
         await commands.execute(project.session_id, request("A"))
 
-    assert calls_before_retry == 10
+    assert calls_before_retry == 6
     assert len(agent.calls) == calls_before_retry

@@ -1,6 +1,7 @@
 """Stable HTTP boundary for Gitea-backed PRD review."""
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.prd_review import (
@@ -155,6 +156,31 @@ def build_router(
     async def prd_version(wi: str, number: int) -> PrdDocumentRead:
         try:
             return await service.version(wi, number)
+        except Exception as error:
+            raise _http_error(error) from error
+
+    @router.get(
+        "/prd/{wi}/v/{number}/prototype",
+        response_class=HTMLResponse,
+        responses={status.HTTP_200_OK: {"content": {"text/html": {}}}},
+    )
+    async def prd_prototype(wi: str, number: int) -> HTMLResponse:
+        try:
+            html = await service.prototype_html(wi, number)
+            return HTMLResponse(
+                html,
+                headers={
+                    "Content-Security-Policy": (
+                        "sandbox allow-scripts allow-forms; default-src 'none'; "
+                        "style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+                        "img-src data:; font-src data:; connect-src 'none'; "
+                        "form-action 'none'; base-uri 'none'"
+                    ),
+                    "X-Content-Type-Options": "nosniff",
+                    "Referrer-Policy": "no-referrer",
+                    "Cache-Control": "private, max-age=31536000, immutable",
+                },
+            )
         except Exception as error:
             raise _http_error(error) from error
 

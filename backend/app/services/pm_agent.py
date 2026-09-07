@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
@@ -38,6 +39,9 @@ from app.domain.types import (
 from app.schemas.prd_review import DiagramRevisionRequest, ReviewTaskRead
 from app.schemas.workflow import SessionCommandRequest
 from app.services.gitea import GiteaReply, GiteaThread
+
+
+logger = logging.getLogger(__name__)
 
 
 class NoUnresolvedComments(ValueError):
@@ -856,12 +860,19 @@ class ReviewPublishCoordinator:
         session_factory: Callable[[], Session],
         gitea,
         agent: AgentGateway,
+        *,
+        prototype_service=None,
     ) -> None:
         from app.services.prd_review import PrdReviewService
 
         self._session_factory = session_factory
         self._gitea = gitea
         self._agent = agent
+        if prototype_service is None:
+            from app.services.prd_prototype import PrdPrototypeService
+
+            prototype_service = PrdPrototypeService(session_factory, agent)
+        self._prototypes = prototype_service
         self._reviews = PrdReviewService(session_factory, gitea)
         from app.services.diagram_revision import DiagramRevisionService
 
@@ -1392,6 +1403,7 @@ class ReviewPublishCoordinator:
             diagram_revision = is_diagram_revision_task(task)
         if diagram_revision:
             await self._diagram_revisions.materialize_and_review(task_id)
+            await self._ensure_current_prototype(task_id)
             await self._publish_file(task_id)
             self._project_version(task_id)
             return
@@ -1405,9 +1417,30 @@ class ReviewPublishCoordinator:
             },
         )
         await commands.execute(session_id, request)
+        await self._ensure_current_prototype(task_id)
         await self._publish_file(task_id)
         self._project_version(task_id)
         await self._publish_replies(task_id)
+
+    async def _ensure_current_prototype(self, task_id: str) -> None:
+        """Generate a review aid without making PRD publication depend on it."""
+
+        with self._session_factory() as db:
+            task = db.get(ReviewTask, task_id)
+            item = db.get(WorkItem, task.wi) if task is not None else None
+            project_id = item.project_id if item is not None else None
+        if project_id is None:
+            return
+        try:
+            await self._prototypes.ensure_for_project(project_id)
+        except Exception:
+            # The prototype service records normal Agent/MCP failures. Keep
+            # publication recoverable if an unexpected auxiliary error occurs.
+            logger.exception(
+                "Could not generate PRD HTML prototype during review publication",
+                extra={"project_id": project_id, "review_task_id": task_id},
+            )
+            return
 
     async def _assert_external_base(self, task_id: str) -> None:
         """Reject a branch that drifted beyond the last durable task receipt."""
