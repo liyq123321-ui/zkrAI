@@ -403,6 +403,31 @@ describe('workspace regression', () => {
     expect((screen.getByRole('textbox',{name:'给子 Agent 的指令'}) as HTMLTextAreaElement).value).toBe('保留检索任务草稿');
   });
 
+  it('shows milestone child status and opens monitored task details', async () => {
+    resourceOverrides['/sessions/session-1/work-items'] = [
+      {id:'root-1',parent_id:null,kind:'ROOT',title:'知识问答',objective:'回答问题',status:'in_progress',suggested_assignee:'owner-1',dependency_work_item_ids:[]},
+      {id:'milestone-1',parent_id:'root-1',kind:'MILESTONE',title:'检索能力交付',objective:'完成检索链路',status:'in_progress',suggested_assignee:'PM Agent',dependency_work_item_ids:[]},
+      {id:'milestone-task-a',parent_id:'milestone-1',kind:'TASK',title:'实现向量检索',status:'completed',suggested_assignee:'AI Agent',dependency_work_item_ids:[]},
+      {id:'milestone-task-b',parent_id:'milestone-1',kind:'TASK',title:'接入问答接口',status:'in_progress',suggested_assignee:'Backend Agent',dependency_work_item_ids:['milestone-task-a']},
+      {id:'other-task',parent_id:'other-milestone',kind:'TASK',title:'其他里程碑任务',status:'blocked',dependency_work_item_ids:[]},
+    ];
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+
+    const milestoneCard = await screen.findByRole('button',{name:/检索能力交付.*查看规划详情/});
+    expect(within(milestoneCard).getByText('2 个子任务 · 1 进行中')).toBeTruthy();
+
+    fireEvent.click(milestoneCard);
+    const milestoneDialog = await screen.findByRole('dialog',{name:'里程碑详情'});
+    expect(within(milestoneDialog).getByRole('heading',{name:'子任务执行监控'})).toBeTruthy();
+    const childButton = within(milestoneDialog).getByRole('button',{name:'打开子任务：接入问答接口，状态：进行中'});
+
+    fireEvent.click(childButton);
+    const taskDialog = await screen.findByRole('dialog',{name:'任务详情'});
+    expect(within(taskDialog).getByRole('heading',{name:'接入问答接口'})).toBeTruthy();
+    expect(within(taskDialog).queryByRole('heading',{name:'子任务执行监控'})).toBeNull();
+  });
+
   it('loads all database projects without browser history and filters selected roots with their descendants', async () => {
     sessionCatalog.push({session_id:'session-2',project_id:'project-2',root_work_item_id:'root-2',title:'客户支持助手'});
     resourceOverrides = {
