@@ -208,6 +208,24 @@ describe('workspace regression', () => {
     expect(screen.queryByRole('region', {name:'Agent 实时运行状态'})).toBeNull();
   });
 
+  it('keeps Kanban and task flow filters independent across tab switches', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    render(<ApiWorkspace />);
+
+    const kanbanSearch = await screen.findByRole('textbox', { name: '搜索工单' });
+    fireEvent.change(kanbanSearch, { target: { value: '问答' } });
+    fireEvent.click(screen.getByRole('button', { name: /DAG Flow Map/ }));
+
+    const flowSearch = screen.getByRole('textbox', { name: '搜索流转图工单' });
+    expect((flowSearch as HTMLInputElement).value).toBe('');
+    fireEvent.change(flowSearch, { target: { value: '检索' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Kanban Board/ }));
+    expect((screen.getByRole('textbox', { name: '搜索工单' }) as HTMLInputElement).value).toBe('问答');
+    fireEvent.click(screen.getByRole('button', { name: /DAG Flow Map/ }));
+    expect((screen.getByRole('textbox', { name: '搜索流转图工单' }) as HTMLInputElement).value).toBe('检索');
+  });
+
   it('shows separate PRD revision and decomposition controls and blocks decomposition on Agent findings', async () => {
     const enterDecomposition = vi.fn(async () => undefined);
     renderPanel(enterDecomposition);

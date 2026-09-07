@@ -12,7 +12,6 @@ import {
   Loader2,
   Plus,
   RefreshCw,
-  Search,
   Server,
   Settings,
   ShieldCheck,
@@ -32,7 +31,7 @@ import { AuditTrail } from './AuditTrail';
 import { AgentSpecDetail, type WorkItemPreview } from './AgentSpecDetail';
 import { getEmployeeOptions } from './employeeDirectory';
 import { WorkItemDialog } from './WorkItemDialog';
-import { RootTaskFilter } from './RootTaskFilter';
+import { WorkItemFilterControls } from './WorkItemFilterControls';
 import { TaskDependencyGraph, type TaskDagProject } from './TaskDependencyGraph';
 import { emptyResources, projectSpec, projectTitle, useWorkspaceProjects, type ResourceBundle } from './useWorkspaceProjects';
 import { auditTitle, displayLabel, displayTime, progressDescription } from './presentation';
@@ -54,6 +53,7 @@ import {
   workItemStatusLabel,
   type WorkItemLane,
 } from './workflowUi';
+import { defaultWorkItemFilters, filterWorkItems, type WorkItemFilterState } from './workItemFilters';
 
 const actionLabels: Record<CommandAction, string> = {
   message: '提交澄清',
@@ -207,10 +207,8 @@ export function ApiWorkspace() {
   const [observingDecomposition, setObservingDecomposition] = useState(false);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('kanban');
   const [chatOpen, setChatOpen] = useState(true);
-  const [search, setSearch] = useState('');
-  const [kindFilter, setKindFilter] = useState<'ALL' | NonNullable<WorkItemDto['kind']>>('ALL');
-  const [agentFilter, setAgentFilter] = useState('ALL');
-  const [selectedRootIds, setSelectedRootIds] = useState<string[] | null>(null);
+  const [kanbanFilters, setKanbanFilters] = useState(defaultWorkItemFilters);
+  const [flowFilters, setFlowFilters] = useState(defaultWorkItemFilters);
   const pendingCommandIds = useRef(new Map<string, string>());
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const decompositionLifecycles = useRef(new Set<AbortController>());
@@ -293,21 +291,21 @@ export function ApiWorkspace() {
   ];
 
   const historicalSpecs = resources.specs.filter((spec) => spec.id !== state?.current_spec_version_id);
-  const availableAgents = Array.from(new Set(displayWorkItems.map(assigneeLabel))).sort();
-  const query = search.trim().toLowerCase();
-  const visibleWorkItems = displayWorkItems.filter((item) => {
-    if (selectedRootIds !== null) {
-      const project = workItemProjects.get(item.id);
-      const rootId = project?.resources.workItems.find((root) => root.kind === 'ROOT')?.id;
-      if (!rootId || !selectedRootIds.includes(rootId)) return false;
-    }
-    if (kindFilter !== 'ALL' && item.kind !== kindFilter) return false;
-    if (agentFilter !== 'ALL' && assigneeLabel(item) !== agentFilter) return false;
-    if (!query) return true;
-    return [item.id, item.title, item.objective, item.description, assigneeLabel(item)]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(query));
-  });
+  const availableAgents = useMemo(() => Array.from(new Set(displayWorkItems.map(assigneeLabel))).sort(), [displayWorkItems]);
+  const filterRoots = useMemo(() => catalog.flatMap((project) =>
+    project.root_work_item_id ? [{ id: project.root_work_item_id, title: project.title }] : []), [catalog]);
+  const rootIdByWorkItem = useMemo(() => new Map(displayWorkItems.map((item) => [
+    item.id,
+    workItemProjects.get(item.id)?.resources.workItems.find((root) => root.kind === 'ROOT')?.id ?? '',
+  ])), [displayWorkItems, workItemProjects]);
+  const visibleWorkItems = useMemo(() => filterWorkItems(displayWorkItems, kanbanFilters, rootIdByWorkItem, assigneeLabel), [displayWorkItems, kanbanFilters, rootIdByWorkItem]);
+
+  useEffect(() => {
+    const keepValidAgent = (current: WorkItemFilterState) => current.agent === 'ALL' || availableAgents.includes(current.agent)
+      ? current : { ...current, agent: 'ALL' };
+    setKanbanFilters(keepValidAgent);
+    setFlowFilters(keepValidAgent);
+  }, [availableAgents]);
   const taskDagProjects = useMemo<TaskDagProject[]>(() => projectList.map((project) => ({
     id: project.state.session_id,
     title: projectTitle(project),
@@ -1086,32 +1084,14 @@ export function ApiWorkspace() {
         </header>
 
         <section className={activeTab === 'kanban' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'kanban'}>
-          <div className="ff-board-toolbar">
-            <label className="ff-search-box">
-              <Search aria-hidden="true" />
-              <input aria-label="搜索工单" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索工单 ID、标题或 Agent…" />
-            </label>
-            <RootTaskFilter
-              roots={catalog.flatMap((project) => project.root_work_item_id ? [{ id: project.root_work_item_id, title: project.title }] : [])}
-              selectedIds={selectedRootIds}
-              onChange={setSelectedRootIds}
+          <div className="ff-board-toolbar ff-filter-toolbar">
+            <WorkItemFilterControls
+              value={kanbanFilters}
+              roots={filterRoots}
+              agents={availableAgents}
+              searchLabel="搜索工单"
+              onChange={setKanbanFilters}
             />
-            <label className="ff-filter-label">
-              类型：
-              <select aria-label="工单类型" value={kindFilter} onChange={(event) => setKindFilter(event.target.value as typeof kindFilter)}>
-                <option value="ALL">全部类型</option>
-                <option value="ROOT">项目需求</option>
-                <option value="MILESTONE">里程碑</option>
-                <option value="TASK">子任务</option>
-              </select>
-            </label>
-            <label className="ff-filter-label">
-              执行者：
-              <select aria-label="执行者" value={agentFilter} onChange={(event) => setAgentFilter(event.target.value)}>
-                <option value="ALL">所有 Agent</option>
-                {availableAgents.map((agent) => <option key={agent}>{agent}</option>)}
-              </select>
-            </label>
             <div className="ff-toolbar-spacer" />
             {currentSpec && <button onClick={downloadCurrentPrd} className="ff-download-button"><FileText aria-hidden="true" />下载 PRD.md</button>}
             <span className="ff-board-project-count">共 {catalog.length} 个项目</span>
@@ -1213,6 +1193,15 @@ export function ApiWorkspace() {
             <div><h2>任务依赖流转图</h2><p>根据后端返回的 WorkItem 层级和依赖关系展示，只读，不在浏览器中修改状态。</p></div>
             <span>{allResources.workItems.length} NODES</span>
           </div>
+          <div className="ff-filter-toolbar ff-flow-filter-toolbar">
+            <WorkItemFilterControls
+              value={flowFilters}
+              roots={filterRoots}
+              agents={availableAgents}
+              searchLabel="搜索流转图工单"
+              onChange={setFlowFilters}
+            />
+          </div>
           <div className="ff-flow-canvas">
             <div className="ff-flow-graph">
               {hierarchyColumns.map((column, columnIndex) => (
@@ -1288,7 +1277,7 @@ export function ApiWorkspace() {
               onPreviewChange={(patch) => {
                 const key = previewKey(selectedWorkItem.id);
                 setWorkItemPreviews((previous) => ({ ...previous, [key]: { draft: '', ...previous[key], ...patch } }));
-                if (patch.assigneeId !== undefined) setAgentFilter('ALL');
+                if (patch.assigneeId !== undefined) setKanbanFilters((current) => ({ ...current, agent: 'ALL' }));
               }}
             />
           )}
