@@ -294,11 +294,18 @@ export function ApiWorkspace() {
   const availableAgents = useMemo(() => Array.from(new Set(displayWorkItems.map(assigneeLabel))).sort(), [displayWorkItems]);
   const filterRoots = useMemo(() => catalog.flatMap((project) =>
     project.root_work_item_id ? [{ id: project.root_work_item_id, title: project.title }] : []), [catalog]);
-  const rootIdByWorkItem = useMemo(() => new Map(displayWorkItems.map((item) => [
-    item.id,
-    workItemProjects.get(item.id)?.resources.workItems.find((root) => root.kind === 'ROOT')?.id ?? '',
-  ])), [displayWorkItems, workItemProjects]);
-  const visibleWorkItems = useMemo(() => filterWorkItems(displayWorkItems, kanbanFilters, rootIdByWorkItem, assigneeLabel), [displayWorkItems, kanbanFilters, rootIdByWorkItem]);
+  const rootIdByItem = useMemo(() => new Map([...workItemProjects].map(([itemId, project]) => [
+    itemId,
+    project.resources.workItems.find((item) => item.kind === 'ROOT')?.id ?? '',
+  ])), [workItemProjects]);
+  const kanbanVisibleWorkItems = useMemo(
+    () => filterWorkItems(displayWorkItems, kanbanFilters, rootIdByItem, assigneeLabel),
+    [displayWorkItems, kanbanFilters, rootIdByItem],
+  );
+  const flowVisibleWorkItems = useMemo(
+    () => filterWorkItems(displayWorkItems, flowFilters, rootIdByItem, assigneeLabel),
+    [displayWorkItems, flowFilters, rootIdByItem],
+  );
 
   useEffect(() => {
     const keepValidAgent = (current: WorkItemFilterState) => current.agent === 'ALL' || availableAgents.includes(current.agent)
@@ -309,10 +316,10 @@ export function ApiWorkspace() {
   const taskDagProjects = useMemo<TaskDagProject[]>(() => projectList.map((project) => ({
     id: project.state.session_id,
     title: projectTitle(project),
-    tasks: displayWorkItems.filter((item) =>
+    tasks: flowVisibleWorkItems.filter((item) =>
       item.kind === 'TASK'
       && workItemProjects.get(item.id)?.state.session_id === project.state.session_id),
-  })), [displayWorkItems, projectList, workItemProjects]);
+  })).filter((project) => project.tasks.length > 0), [flowVisibleWorkItems, projectList, workItemProjects]);
 
   function downloadCurrentPrd() {
     if (!currentSpec) return;
@@ -1112,7 +1119,7 @@ export function ApiWorkspace() {
 
           <div className="ff-board-scroll">
             {boardColumns.map((column) => {
-              const items = visibleWorkItems.filter((item) => item.kind === column.kind
+              const items = kanbanVisibleWorkItems.filter((item) => item.kind === column.kind
                 && (!column.taskLane || workItemLane(item.status) === column.taskLane));
               return (
                 <section key={column.key} className={`ff-board-column ${column.taskLane ? `is-task-lane is-${column.taskLane}` : ''}`} aria-label={column.title}>
@@ -1191,7 +1198,7 @@ export function ApiWorkspace() {
         <section className={activeTab === 'flow' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'flow'}>
           <div className="ff-flow-toolbar">
             <div><h2>任务依赖流转图</h2><p>根据后端返回的 WorkItem 层级和依赖关系展示，只读，不在浏览器中修改状态。</p></div>
-            <span>{allResources.workItems.length} NODES</span>
+            <span>{flowVisibleWorkItems.length} NODES</span>
           </div>
           <div className="ff-filter-toolbar ff-flow-filter-toolbar">
             <WorkItemFilterControls
@@ -1203,30 +1210,32 @@ export function ApiWorkspace() {
             />
           </div>
           <div className="ff-flow-canvas">
-            <div className="ff-flow-graph">
-              {hierarchyColumns.map((column, columnIndex) => (
-                <div key={column.kind} className="ff-flow-lane">
-                  <header><span>{columnIndex + 1}</span>{column.title}</header>
-                  {displayWorkItems.filter((item) => item.kind === column.kind).map((item) => (
-                    <button
-                      key={item.id}
-                      data-wi-id={item.id}
-                      onClick={() => setSelectedWorkItemId(item.id)}
-                      className="ff-flow-node"
-                    >
-                      <span className="ff-flow-node-icon">{item.kind === 'ROOT' ? <ShieldCheck aria-hidden="true" /> : <GitFork aria-hidden="true" />}</span>
-                      <span><strong>{item.title || item.id}</strong><small>#{item.id} · {assigneeLabel(item)}</small></span>
-                      {item.dependency_work_item_ids.length > 0 && <em>依赖 {item.dependency_work_item_ids.length}</em>}
-                    </button>
-                  ))}
-                  {displayWorkItems.every((item) => item.kind !== column.kind) && <div className="ff-flow-empty">等待后端生成</div>}
-                </div>
-              ))}
-              <section className="ff-flow-task-lane" aria-label="子任务 (Tasks)">
-                <header><span>3</span><div><strong>子任务 (Tasks)</strong><small>按项目与依赖深度排列</small></div></header>
-                <TaskDependencyGraph projects={taskDagProjects} onOpenWorkItem={setSelectedWorkItemId} />
-              </section>
-            </div>
+            {flowVisibleWorkItems.length === 0 ? <div className="ff-flow-filter-empty">没有符合当前筛选条件的任务</div> : (
+              <div className="ff-flow-graph">
+                {hierarchyColumns.map((column, columnIndex) => (
+                  <div key={column.kind} className="ff-flow-lane">
+                    <header><span>{columnIndex + 1}</span>{column.title}</header>
+                    {flowVisibleWorkItems.filter((item) => item.kind === column.kind).map((item) => (
+                      <button
+                        key={item.id}
+                        data-wi-id={item.id}
+                        onClick={() => setSelectedWorkItemId(item.id)}
+                        className="ff-flow-node"
+                      >
+                        <span className="ff-flow-node-icon">{item.kind === 'ROOT' ? <ShieldCheck aria-hidden="true" /> : <GitFork aria-hidden="true" />}</span>
+                        <span><strong>{item.title || item.id}</strong><small>#{item.id} · {assigneeLabel(item)}</small></span>
+                        {item.dependency_work_item_ids.length > 0 && <em>依赖 {item.dependency_work_item_ids.length}</em>}
+                      </button>
+                    ))}
+                    {flowVisibleWorkItems.every((item) => item.kind !== column.kind) && <div className="ff-flow-empty">等待后端生成</div>}
+                  </div>
+                ))}
+                <section className="ff-flow-task-lane" aria-label="子任务 (Tasks)">
+                  <header><span>3</span><div><strong>子任务 (Tasks)</strong><small>按项目与依赖深度排列</small></div></header>
+                  <TaskDependencyGraph projects={taskDagProjects} onOpenWorkItem={setSelectedWorkItemId} />
+                </section>
+              </div>
+            )}
           </div>
         </section>
 

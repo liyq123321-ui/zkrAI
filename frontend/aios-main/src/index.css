@@ -1475,6 +1475,17 @@ button:disabled {
   background-size: 16px 16px;
 }
 
+.ff-flow-filter-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  border: 1px dashed #cbd5df;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 88%);
+  color: var(--ff-muted);
+  font-size: 11px;
+}
+
 .ff-flow-graph {
   position: relative;
   display: flex;
