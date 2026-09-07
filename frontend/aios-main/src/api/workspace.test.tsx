@@ -179,6 +179,29 @@ function QueuedTerminalReconciliationHarness() {
 }
 
 describe('workspace regression', () => {
+  it('shows the generated HTML prototype beside document and Diff views', async () => {
+    resourceOverrides['/prd/root-1'] = {
+      ...doc,
+      prototype: {
+        status: 'ready',
+        title: '知识问答交互原型',
+        content_url: '/prd/root-1/v/1/prototype',
+        generation_summary: '覆盖提问和回答流程。',
+        error_code: null,
+        error_message: null,
+      },
+    };
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('button', {name:'HTML 原型'}));
+
+    const frame = screen.getByTitle('知识问答交互原型');
+    expect(frame.getAttribute('src')).toBe('http://127.0.0.1:8088/prd/root-1/v/1/prototype');
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-forms');
+    expect(screen.getByRole('link', {name:'在新窗口打开原型'}).getAttribute('href'))
+      .toBe('http://127.0.0.1:8088/prd/root-1/v/1/prototype');
+  });
+
   it('does not let an older terminal result overwrite a newer queued Session state', async () => {
     localStorage.setItem('firstflight.active-session-id', 'session-1');
     render(<QueuedTerminalReconciliationHarness />);

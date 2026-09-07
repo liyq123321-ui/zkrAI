@@ -188,6 +188,47 @@ class ProjectSpecPayload(BaseModel):
         return self
 
 
+class HtmlPrototypePayload(BaseModel):
+    """One immutable, self-contained browser prototype derived from a PRD."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=160)
+    html: str = Field(min_length=1, max_length=1_048_576)
+    generation_summary: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("title", "generation_summary")
+    @classmethod
+    def normalize_prototype_text(cls, value: str, info) -> str:
+        maximum = 160 if info.field_name == "title" else 4000
+        return normalize_plain_text(value, max_length=maximum, field_name=info.field_name)
+
+    @field_validator("html")
+    @classmethod
+    def validate_self_contained_html(cls, value: str) -> str:
+        import re
+
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
+        lowered = normalized.casefold()
+        if "<html" not in lowered or "<body" not in lowered:
+            raise ValueError("prototype must be a complete HTML document")
+        if re.search(r"<(?:iframe|object|embed|base)\b", normalized, re.IGNORECASE):
+            raise ValueError("prototype contains a disallowed embedding element")
+        if re.search(
+            r"\b(?:src|href|action)\s*=\s*(?:['\"]\s*)?(?:https?:)?//",
+            normalized,
+            re.IGNORECASE,
+        ):
+            raise ValueError("prototype must not load external resources")
+        if re.search(
+            r"<meta\b[^>]*http-equiv\s*=\s*(['\"]?)refresh\1",
+            normalized,
+            re.IGNORECASE,
+        ):
+            raise ValueError("prototype must not redirect the browser")
+        return normalized + ("\n" if not normalized.endswith("\n") else "")
+
+
 class ReviewFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

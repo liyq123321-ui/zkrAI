@@ -26,6 +26,7 @@ from app.services.decomposition_service import DecompositionService
 from app.services.gitea import GiteaClient
 from app.services.pm_agent import ReviewPublishCoordinator
 from app.services.prd_review import PrdReviewService
+from app.services.prd_prototype import PrdPrototypeService
 
 
 def create_app(
@@ -47,9 +48,13 @@ def create_app(
     if gitea_client is None:
         gitea_client = GiteaClient(settings)
     review_service = PrdReviewService(session_factory, gitea_client)
+    prototype_service = PrdPrototypeService(session_factory, agent_gateway)
     actor_resolver = ActorResolver(settings)
     publish_coordinator = ReviewPublishCoordinator(
-        session_factory, gitea_client, agent_gateway
+        session_factory,
+        gitea_client,
+        agent_gateway,
+        prototype_service=prototype_service,
     )
     decomposition_commands = CommandService(
         session_factory,
@@ -110,6 +115,7 @@ def create_app(
             actor_resolver,
             review_service if auto_bind_prd_review else None,
             command_jobs,
+            prototype_service,
         )
     )
     application.include_router(

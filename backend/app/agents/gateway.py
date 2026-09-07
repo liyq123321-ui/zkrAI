@@ -4,6 +4,7 @@ from app.domain.implementation_plan import ImplementationPlan
 
 from app.domain.types import (
     ClarificationAnalysis,
+    HtmlPrototypePayload,
     PrdRewriteOutput,
     ProjectSpecPayload,
     SemanticReview,
@@ -17,6 +18,11 @@ class AgentGateway(Protocol):
 
     async def generate_spec(self, payload: dict[str, object]) -> ProjectSpecPayload:
         """Generate a typed Project Spec payload."""
+
+    async def generate_prd_prototype(
+        self, payload: dict[str, object]
+    ) -> HtmlPrototypePayload:
+        """Generate a standalone HTML prototype from one frozen Project Spec."""
 
     async def review_spec(self, payload: dict[str, object]) -> SemanticReview:
         """Review a Project Spec for semantic quality."""

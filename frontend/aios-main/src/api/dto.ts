@@ -183,6 +183,16 @@ export interface PrdDocumentDto {
   content: string;
   change_summary: string | null;
   er_diagrams: PrdErDiagramDto[];
+  prototype?: PrdPrototypeDto | null;
+}
+
+export interface PrdPrototypeDto {
+  status: 'ready' | 'failed';
+  title: string | null;
+  content_url: string | null;
+  generation_summary: string | null;
+  error_code: string | null;
+  error_message: string | null;
 }
 
 export interface PrdErDiagramDto {

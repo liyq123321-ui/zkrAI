@@ -133,3 +133,17 @@ def test_settings_load_codex_inactivity_timeout(monkeypatch):
     monkeypatch.setenv("CODEX_INACTIVITY_TIMEOUT_SECONDS", "123.5")
 
     assert Settings.from_env().codex_inactivity_timeout_seconds == 123.5
+
+
+def test_magic_mcp_auto_enables_only_when_server_side_key_exists(monkeypatch):
+    monkeypatch.setattr(config_module, "load_dotenv", lambda _path, *, override: None)
+    monkeypatch.setenv("MAGIC_MCP_ENABLED", "")
+    monkeypatch.setenv("MAGIC_MCP_API_KEY_ENV", "API_KEY_21ST")
+    monkeypatch.delenv("API_KEY_21ST", raising=False)
+
+    assert Settings.from_env().magic_mcp_enabled is False
+
+    monkeypatch.setenv("API_KEY_21ST", "server-side-secret")
+    settings = Settings.from_env()
+    assert settings.magic_mcp_enabled is True
+    assert settings.magic_mcp_api_key_env == "API_KEY_21ST"

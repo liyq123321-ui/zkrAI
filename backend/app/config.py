@@ -27,6 +27,10 @@ class Settings:
     identity_actor_id: str | None = None
     identity_actor_header: str = "X-FirstFlight-Actor"
     cors_allowed_origins: tuple[str, ...] = ()
+    magic_mcp_enabled: bool = False
+    magic_mcp_url: str = "https://21st.dev/api/mcp"
+    magic_mcp_api_key_env: str = "API_KEY_21ST"
+    magic_mcp_tool_timeout_seconds: int = 300
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -41,6 +45,16 @@ class Settings:
             if origin.strip()
         )
         codex_timeout_seconds = int(os.getenv("CODEX_TIMEOUT_SECONDS", "2000"))
+        magic_mcp_api_key_env = (
+            os.getenv("MAGIC_MCP_API_KEY_ENV", "API_KEY_21ST").strip()
+            or "API_KEY_21ST"
+        )
+        magic_mcp_enabled_raw = os.getenv("MAGIC_MCP_ENABLED", "").strip().lower()
+        magic_mcp_enabled = (
+            bool(os.getenv(magic_mcp_api_key_env))
+            if not magic_mcp_enabled_raw
+            else magic_mcp_enabled_raw in {"1", "true", "yes", "on"}
+        )
         return cls(
             database_url=os.getenv("DATABASE_URL", f"sqlite:///{root / 'data' / 'gateway.db'}"),
             codex_binary=os.getenv("CODEX_BINARY", "codex"),
@@ -78,4 +92,12 @@ class Settings:
                 os.getenv("FIRSTFLIGHT_ACTOR_HEADER", "X-FirstFlight-Actor"),
             ).strip(),
             cors_allowed_origins=cors_allowed_origins,
+            magic_mcp_enabled=magic_mcp_enabled,
+            magic_mcp_url=os.getenv(
+                "MAGIC_MCP_URL", "https://21st.dev/api/mcp"
+            ).strip(),
+            magic_mcp_api_key_env=magic_mcp_api_key_env,
+            magic_mcp_tool_timeout_seconds=int(
+                os.getenv("MAGIC_MCP_TOOL_TIMEOUT_SECONDS", "300")
+            ),
         )

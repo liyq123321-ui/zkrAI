@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from app.database.models import (
     CommentIndex,
+    PrdPrototype,
     PrdVersion,
     Project,
     ReviewTask,
@@ -36,6 +37,7 @@ from app.schemas.prd_review import (
     PrdDocumentRead,
     PrdErDiagramRead,
     PrdDiffRead,
+    PrdPrototypeRead,
 )
 from app.services.gitea import GiteaClient, GiteaError, GiteaThread
 from app.services.drawio_diagrams import diagram_anchor, normalize_agent_table_layout
@@ -167,6 +169,33 @@ class PrdReviewService:
                 .all()
             )
         return [await self._preflight_binding(binding) for binding in bindings]
+
+    async def prototype_html(self, wi: str, number: int) -> str:
+        """Return only a validated prototype bound to the requested PRD version."""
+
+        await self._ensure_current_binding(wi)
+        with self._session_factory() as db:
+            binding = db.get(PrdVersion, (wi, number))
+            spec = db.get(SpecVersion, binding.spec_version_id) if binding else None
+            prototype = (
+                db.query(PrdPrototype)
+                .filter_by(spec_version_id=spec.id)
+                .one_or_none()
+                if spec is not None
+                else None
+            )
+            if binding is None or spec is None or prototype is None:
+                raise PrdNotFound("PRD HTML prototype was not found")
+            if (
+                prototype.project_id != spec.project_id
+                or prototype.status != "ready"
+                or not prototype.html
+                or not prototype.content_hash
+                or hashlib.sha256(prototype.html.encode("utf-8")).hexdigest()
+                != prototype.content_hash
+            ):
+                raise PrdContentConflict("PRD HTML prototype is invalid")
+            return prototype.html
 
     async def comments(self, wi: str) -> list[PrdCommentRead]:
         binding = await self._ensure_current_binding(wi)
@@ -507,6 +536,7 @@ class PrdReviewService:
                 raise PrdContentConflict("PRD binding has no matching root Spec")
             self._validate_binding(binding, binding.wi, spec)
             diagrams = self._bound_diagrams(binding, spec)
+            prototype = self._bound_prototype(db, binding, spec)
         external = await self._gitea.get_file(
             binding.filename,
             self._required_commit(binding),
@@ -527,7 +557,43 @@ class PrdReviewService:
             content=content,
             change_summary=binding.change_summary,
             er_diagrams=diagrams,
+            prototype=prototype,
         )
+
+    @staticmethod
+    def _bound_prototype(
+        db: Session, binding: PrdVersion, spec: SpecVersion
+    ) -> PrdPrototypeRead | None:
+        prototype = (
+            db.query(PrdPrototype)
+            .filter_by(spec_version_id=spec.id)
+            .one_or_none()
+        )
+        if prototype is None:
+            return None
+        if prototype.project_id != spec.project_id:
+            raise PrdContentConflict("PRD prototype belongs to another project")
+        if prototype.status == "ready":
+            if (
+                not prototype.html
+                or not prototype.content_hash
+                or hashlib.sha256(prototype.html.encode("utf-8")).hexdigest()
+                != prototype.content_hash
+            ):
+                raise PrdContentConflict("PRD prototype content is invalid")
+            return PrdPrototypeRead(
+                status="ready",
+                title=prototype.title,
+                content_url=f"/prd/{binding.wi}/v/{binding.version}/prototype",
+                generation_summary=prototype.generation_summary,
+            )
+        if prototype.status == "failed":
+            return PrdPrototypeRead(
+                status="failed",
+                error_code=prototype.error_code or "PROTOTYPE_GENERATION_FAILED",
+                error_message=prototype.error_message or "HTML 原型生成失败。",
+            )
+        raise PrdContentConflict("PRD prototype status is invalid")
 
     @staticmethod
     def _bound_diagrams(binding: PrdVersion, spec: SpecVersion) -> list[PrdErDiagramRead]:
