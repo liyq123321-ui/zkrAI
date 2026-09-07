@@ -40,6 +40,23 @@ Human review comments and human_review_decision_history are authenticated in the
 generation snapshot but are not valid top-level source_refs. Preserve the supplied
 source_refs list; do not add comment IDs or invented URLs to it.
 
+Use the installed `$drawio-skill` for ER changes. If review evidence does not
+change entities or relationships, preserve its `diagram_id` and `drawio_xml`
+exactly. If evidence changes an entity, key, or relationship, update the affected
+diagram while preserving stable IDs where their meaning remains the same. Remove a
+diagram only when its supporting scope is removed. Describe every diagram add,
+update, or removal in `change_summary`. Never guess fields, keys, cardinality, or
+relationships that are absent from authenticated evidence.
+
+Before returning changed diagrams, read the skill's SKILL.md and required XML/ER
+references. Return complete uncompressed self-contained XML with plain-text labels
+and entity names aligned to `core_objects`. For every ER field, use an empty
+tableRow and exactly one partialRectangle child cell that owns the horizontal field
+label; the child cell must use the same absolute width and height as its tableRow
+(never use a 1×1 relative geometry); never put a label directly on a tableRow.
+Do not fetch remote assets, access the network, launch a GUI, execute commands,
+or write diagram files; return XML only in the structured JSON contract.
+
 Also repair related structural omissions in the rewritten Spec. Acceptance
 requirement_ids must refer to defined FR-NNN / NFR-NNN requirements, and every
 requirement must have verifiable acceptance coverage. If old content contains an

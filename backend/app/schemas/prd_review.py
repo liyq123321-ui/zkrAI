@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.domain.types import normalize_plain_text
+from app.domain.types import ErDiagramSection, normalize_plain_text
 
 
 def _plain_text_validator(*fields: str, max_length: int):
@@ -56,6 +56,35 @@ class PublishReviewRequest(_ActorRequest):
     auto_resolve_findings: bool = False
 
 
+class DiagramRevisionRequest(_ActorRequest):
+    base_version: int = Field(gt=0)
+    base_commit_sha: str = Field(min_length=1, max_length=128)
+    drawio_xml: str = Field(min_length=1, max_length=1_048_576)
+    change_summary: str = Field(min_length=1, max_length=8000)
+
+    _normalize_revision_text = _plain_text_validator(
+        "base_commit_sha", "change_summary", max_length=8000
+    )
+
+
+class ReviewTaskAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=255)
+    base_version: int = Field(gt=0)
+    no_change: bool = False
+
+
+class PrdErDiagramRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    diagram_id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)
+    title: str = Field(min_length=1, max_length=160)
+    after_section: ErDiagramSection
+    anchor: str = Field(pattern=r"^firstflight-er-[a-z0-9-]+-[0-9a-f]{8}$", max_length=128)
+    drawio_xml: str = Field(min_length=1, max_length=1_048_576)
+
+
 class PrdDocumentRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -66,6 +95,7 @@ class PrdDocumentRead(BaseModel):
     commit_sha: str | None = Field(default=None, min_length=1, max_length=128)
     content: str = Field(min_length=1)
     change_summary: str | None = Field(default=None, min_length=1, max_length=8000)
+    er_diagrams: list[PrdErDiagramRead] = Field(default_factory=list, max_length=8)
 
     _normalize_identifiers = _plain_text_validator("wi", max_length=255)
     _normalize_filename = _plain_text_validator("filename", max_length=4096)

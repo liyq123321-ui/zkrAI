@@ -1,6 +1,7 @@
 """HTTP contracts for the Gitea-backed PRD review surface."""
 
 import hashlib
+import json
 from collections import deque
 
 import httpx
@@ -8,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
-from app.database.models import Project, ReviewTask, SpecVersion, WorkItem
+from app.database.models import PrdVersion, Project, ReviewTask, SpecVersion, WorkItem
 from app.domain.types import (
     PrdRewriteOutput,
     ProjectPhase,
@@ -16,6 +17,8 @@ from app.domain.types import (
     SpecStatus,
     WorkItemKind,
 )
+from app.services.drawio_diagrams import diagram_anchor
+from app.services.spec_service import _render_markdown
 from app.services.gitea import (
     GiteaComment,
     GiteaCommit,
@@ -28,6 +31,36 @@ from app.services.gitea import (
 )
 from tests.helpers.fake_agent import ScriptedAgentGateway
 from main import create_app
+
+
+ER_XML_V1 = """<mxfile host="drawio"><diagram name="Data model"><mxGraphModel><root>
+<mxCell id="0"/><mxCell id="1" parent="0"/>
+<mxCell id="customer" value="Customer" style="shape=table;html=1;" vertex="1" parent="1"><mxGeometry width="180" height="100" as="geometry"/></mxCell>
+<mxCell id="order" value="Order" style="shape=table;html=1;" vertex="1" parent="1"><mxGeometry x="240" width="180" height="100" as="geometry"/></mxCell>
+<mxCell id="places" value="places" edge="1" parent="1" source="customer" target="order"><mxGeometry relative="1" as="geometry"/></mxCell>
+</root></mxGraphModel></diagram></mxfile>"""
+
+
+def _spec_with_diagram(valid_spec, xml: str):
+    return valid_spec.model_validate(
+        {
+            **valid_spec.model_dump(mode="json"),
+            "core_objects": [*valid_spec.core_objects, "Customer", "Order"],
+            "er_diagrams": [
+                {
+                    "diagram_id": "data-model",
+                    "title": "Core data model",
+                    "after_section": "core_objects",
+                    "drawio_xml": xml,
+                }
+            ],
+        }
+    )
+
+
+def _canonical_hash(value: object) -> str:
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class FakeGitea:
@@ -247,14 +280,159 @@ def test_document_endpoints_return_only_the_prd_document_contract(prd_api_client
         "commit_sha",
         "content",
         "change_summary",
+        "er_diagrams",
     }
     assert latest.status_code == 200
     assert latest.json()["content"] == "# PRD\n\nA first version.\n"
+    assert latest.json()["er_diagrams"] == []
     assert set(latest.json()) == expected_fields
     assert specific.status_code == 200
     assert specific.json() == latest.json()
     assert versions.status_code == 200
     assert versions.json() == [latest.json()]
+
+
+def test_openapi_exposes_diagram_reads_and_revision_endpoint(prd_api_client):
+    client, _, _ = prd_api_client
+
+    schema = client.get("/openapi.json").json()
+
+    assert "/prd/{wi}/diagrams/{diagram_id}/revisions" in schema["paths"]
+    assert "er_diagrams" in schema["components"]["schemas"]["PrdDocumentRead"]["properties"]
+    assert "PrdErDiagramRead" in schema["components"]["schemas"]
+
+
+def test_document_endpoints_bind_diagrams_to_each_immutable_version(
+    prd_api_client, session_factory, valid_spec
+):
+    client, root, _ = prd_api_client
+    v1 = _spec_with_diagram(valid_spec, ER_XML_V1)
+    v1_content = v1.model_dump(mode="json")
+    v1_markdown = _render_markdown(v1_content)
+    with session_factory() as db:
+        stored = db.get(SpecVersion, "spec-prd-api-1")
+        stored.content = v1_content
+        stored.markdown = v1_markdown
+        stored.content_hash = _canonical_hash(v1_content)
+        db.commit()
+
+    first = client.get(f"/prd/{root.id}")
+    assert first.status_code == 200
+
+    v2_xml = ER_XML_V1.replace('value="Order"', 'value="Purchase Order"')
+    v2 = _spec_with_diagram(valid_spec, v2_xml)
+    v2_content = v2.model_dump(mode="json")
+    v2_markdown = _render_markdown(v2_content)
+    with session_factory() as db:
+        project = db.get(Project, "project-prd-api")
+        db.add(
+            SpecVersion(
+                id="spec-prd-api-2",
+                project_id=project.id,
+                revision=2,
+                content=v2_content,
+                markdown=v2_markdown,
+                generation_source="PM_AGENT",
+                input_refs=["spec-prd-api-1"],
+                generator_agent_session_id="pm-session",
+                generator_call_id="pm-call-2",
+                parent_version_id="spec-prd-api-1",
+                change_summary="Renamed an entity.",
+                content_hash=_canonical_hash(v2_content),
+                status=SpecStatus.HUMAN_REVIEW.value,
+            )
+        )
+        project.current_spec_version_id = "spec-prd-api-2"
+        project.state_version += 1
+        db.commit()
+
+    latest = client.get(f"/prd/{root.id}")
+    historical = client.get(f"/prd/{root.id}/v/1")
+
+    assert latest.status_code == historical.status_code == 200
+    assert latest.json()["er_diagrams"] == [
+        {
+            "diagram_id": "data-model",
+            "title": "Core data model",
+            "after_section": "core_objects",
+            "anchor": diagram_anchor(v2.er_diagrams[0]),
+            "drawio_xml": v2_xml,
+        }
+    ]
+    assert historical.json()["er_diagrams"][0]["anchor"] == diagram_anchor(v1.er_diagrams[0])
+    assert historical.json()["er_diagrams"][0]["drawio_xml"] == ER_XML_V1
+    assert "mxGraphModel" not in latest.json()["content"]
+
+    diff = client.get(f"/prd/{root.id}/diff")
+    assert diff.status_code == 200
+    assert "ER 图：Core data model" in diff.json()["patch"]
+    assert "mxGraphModel" not in diff.json()["patch"]
+
+
+def test_document_read_normalizes_saved_swimlane_er_layout_without_mutating_the_version(
+    prd_api_client, session_factory, valid_spec
+):
+    client, root, _ = prd_api_client
+    fields = "".join(
+        f'<mxCell id="customer-row-{index}" value="" style="shape=tableRow;html=1;" vertex="1" parent="customer">'
+        f'<mxGeometry y="{index * 30}" width="180" height="30" as="geometry"/></mxCell>'
+        f'<mxCell id="customer-field-{index}" value="{label}" style="shape=partialRectangle;html=1;" '
+        f'vertex="1" parent="customer-row-{index}"><mxGeometry width="1" height="1" relative="1" as="geometry"/></mxCell>'
+        for index, label in enumerate(("Customer ID", "Customer name", "Customer status"), start=1)
+    )
+    saved_xml = ER_XML_V1.replace(
+        'style="shape=table;html=1;" vertex="1" parent="1"><mxGeometry width="180" height="100"',
+        'style="shape=swimlane;html=1;horizontal=0;startSize=30;" vertex="1" parent="1"><mxGeometry width="180" height="150"',
+        1,
+    ).replace("</root>", f"{fields}</root>")
+    spec = _spec_with_diagram(valid_spec, saved_xml)
+    content = spec.model_dump(mode="json")
+    with session_factory() as db:
+        stored = db.get(SpecVersion, "spec-prd-api-1")
+        stored.content = content
+        stored.markdown = _render_markdown(content)
+        stored.content_hash = _canonical_hash(content)
+        db.commit()
+
+    document = client.get(f"/prd/{root.id}")
+
+    assert document.status_code == 200
+    rendered_xml = document.json()["er_diagrams"][0]["drawio_xml"]
+    assert 'id="customer" value="Customer" style="shape=table;' in rendered_xml
+    assert '<mxGeometry width="180" height="120" as="geometry"' in rendered_xml
+    assert rendered_xml.count('parent="customer"') == 3
+    with session_factory() as db:
+        assert db.get(SpecVersion, "spec-prd-api-1").content["er_diagrams"][0]["drawio_xml"] == saved_xml
+
+
+def test_document_rejects_contract_invalid_diagram_content_even_when_hashes_match(
+    prd_api_client, session_factory, valid_spec
+):
+    client, root, _ = prd_api_client
+    document = client.get(f"/prd/{root.id}")
+    assert document.status_code == 200
+    invalid = valid_spec.model_dump(mode="json")
+    invalid["er_diagrams"] = [
+        {
+            "diagram_id": "data-model",
+            "title": "Core data model",
+            "after_section": "core_objects",
+            "drawio_xml": "<mxfile><diagram>compressed</diagram></mxfile>",
+        }
+    ]
+    invalid_hash = _canonical_hash(invalid)
+    with session_factory() as db:
+        spec = db.get(SpecVersion, "spec-prd-api-1")
+        binding = db.get(PrdVersion, (root.id, 1))
+        spec.content = invalid
+        spec.content_hash = invalid_hash
+        binding.spec_content_hash = invalid_hash
+        db.commit()
+
+    response = client.get(f"/prd/{root.id}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "PRD_CONTENT_CONFLICT"
 
 
 def test_commentable_lines_endpoint_uses_the_authoritative_pr_diff(prd_api_client):

@@ -23,7 +23,8 @@ from app.database.models import (
     SpecVersion,
     clarification_boundary_key,
 )
-from app.domain.types import ProjectPhase, ProjectSpecPayload, ReviewKind, ReviewVerdict, SemanticReview, SpecStatus
+from app.domain.types import ErDiagram, ProjectPhase, ProjectSpecPayload, ReviewKind, ReviewVerdict, SemanticReview, SpecStatus
+from app.services.drawio_diagrams import diagram_anchor, diagram_review_projection
 from app.services.spec_review import merge_review_outcome, prevents_semantic_review, run_rule_review
 
 
@@ -52,6 +53,30 @@ def _canonical_hash(value: object) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _compact_spec_diagrams(spec: dict[str, object]) -> dict[str, object]:
+    compact = dict(spec)
+    diagrams = spec.get("er_diagrams")
+    if isinstance(diagrams, list):
+        compact["er_diagrams"] = [
+            {
+                "diagram_id": diagram.diagram_id,
+                "title": diagram.title,
+                "after_section": diagram.after_section.value,
+                "semantic_projection": diagram_review_projection(diagram.drawio_xml),
+            }
+            for diagram in (ErDiagram.model_validate(item) for item in diagrams)
+        ]
+    return compact
+
+
+def _compact_generation_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
+    compact = dict(snapshot)
+    parent_spec = compact.get("parent_spec")
+    if isinstance(parent_spec, dict):
+        compact["parent_spec"] = _compact_spec_diagrams(parent_spec)
+    return compact
+
+
 def _render_markdown(content: dict[str, object]) -> str:
     """Render canonical, stable Markdown from a JSON-compatible Spec payload."""
 
@@ -77,17 +102,29 @@ def _render_markdown(content: dict[str, object]) -> str:
         ("Source References", "source_refs"),
     )
     lines = ["# Project Spec"]
+    diagrams_by_section: dict[str, list[ErDiagram]] = {}
+    for diagram in content.get("er_diagrams", []):
+        if isinstance(diagram, dict):
+            parsed = ErDiagram.model_validate(diagram)
+            diagrams_by_section.setdefault(parsed.after_section.value, []).append(parsed)
     for title, key in sections:
         lines.extend(("", f"## {title}"))
         values = content.get(key, [])
         if not values:
             lines.append("- None")
-            continue
-        for value in values:
-            if isinstance(value, dict):
-                lines.append(f"- {json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}")
-            else:
-                lines.append(f"- {value}")
+        else:
+            for value in values:
+                if isinstance(value, dict):
+                    lines.append(f"- {json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}")
+                else:
+                    lines.append(f"- {value}")
+        for diagram in diagrams_by_section.get(key, []):
+            escaped_title = (
+                diagram.title.replace("\\", "\\\\")
+                .replace("[", "\\[")
+                .replace("]", "\\]")
+            )
+            lines.extend(("", f"[ER 图：{escaped_title}](#{diagram_anchor(diagram)})"))
     return "\n".join(lines) + "\n"
 
 
@@ -773,7 +810,7 @@ class SpecService:
                 if (
                     generation_call is None
                     or generation_call.project_id != context.project_id
-                    or generation_call.operation != "generate_spec"
+                    or generation_call.operation not in {"generate_spec", "diagram_edit"}
                 ):
                     raise RuntimeError("Spec generation source snapshot is unavailable")
                 payload = self._spec_reviewer_payload(
@@ -1070,7 +1107,7 @@ class SpecService:
                 if (
                     generation_call is None
                     or generation_call.project_id != project_id
-                    or generation_call.operation != "generate_spec"
+                    or generation_call.operation not in {"generate_spec", "diagram_edit"}
                 ):
                     raise RuntimeError("Spec generation source snapshot is unavailable")
                 payload = self._spec_reviewer_payload(
@@ -1357,13 +1394,15 @@ class SpecService:
         command_id: str | None = None,
         input_hash: str | None = None,
     ) -> dict[str, object]:
+        spec_copy = json.loads(json.dumps(spec, sort_keys=True, ensure_ascii=False))
+        snapshot_copy = json.loads(
+            json.dumps(generation_source_snapshot, sort_keys=True, ensure_ascii=False)
+        )
         payload: dict[str, object] = {
-            "spec": json.loads(json.dumps(spec, sort_keys=True, ensure_ascii=False)),
+            "spec": _compact_spec_diagrams(spec_copy),
             "spec_hash": spec_hash,
             "input_refs": list(input_refs),
-            "generation_source_snapshot": json.loads(
-                json.dumps(generation_source_snapshot, sort_keys=True, ensure_ascii=False)
-            ),
+            "generation_source_snapshot": _compact_generation_snapshot(snapshot_copy),
         }
         if command_id is not None:
             payload["command_id"] = command_id

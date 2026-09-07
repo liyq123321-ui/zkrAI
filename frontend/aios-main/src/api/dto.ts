@@ -182,6 +182,15 @@ export interface PrdDocumentDto {
   commit_sha: string | null;
   content: string;
   change_summary: string | null;
+  er_diagrams: PrdErDiagramDto[];
+}
+
+export interface PrdErDiagramDto {
+  diagram_id: string;
+  title: string;
+  after_section: 'functional_requirements' | 'system_boundaries' | 'core_objects' | 'main_flows';
+  anchor: string;
+  drawio_xml: string;
 }
 
 export interface PrdCommentableLinesDto {
@@ -216,6 +225,12 @@ export interface PublishReviewAcceptedDto {
   task_id: string;
   base_version: number;
   comment_count: number;
+}
+
+export interface ReviewTaskAcceptedDto {
+  task_id: string;
+  base_version: number;
+  no_change: boolean;
 }
 
 export interface PrdDiffDto {

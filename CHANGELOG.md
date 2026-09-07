@@ -1,5 +1,14 @@
 # 修改日志
 
+## 2026-09-06 — PRD draw.io ER 图生成、正文交互与版本回写
+
+- PRD 初次生成和批注修订节点引入固定且完整性校验的 `drawio-skill`；仅在证据明确存在至少两个持久化实体及关系时生成 ER 图，Reviewer 检查图与正文语义一致性。
+- draw.io XML 随不可变 Spec 保存，并经过实体/关系结构、体积、页面、链接、脚本、HTML 和外部资源安全校验；历史 Spec 默认无图。
+- PRD 正文使用本地固定的 draw.io 31.4.2 查看器，支持拖动、缩放、适应、复位、全屏和 `.drawio` 下载；Diff 只显示图名/哈希链接，不传输或渲染 XML。
+- “在 draw.io 中编辑”通过严格 origin/window 绑定的官方 embed 协议工作；保存先保留本地草稿，再以 base version/commit 乐观并发回写为 `n+1`，重新自动审核并继续人工门禁。
+- 相同 XML 不建版本；非法、越权、旧版冲突、网络失败和发布中断均保留明确结果与可恢复证据，不自动批准、拆分或覆盖当前 PRD。
+- 供应链来源分别固定在 `backend/skills/drawio-skill-source.json` 和 `frontend/aios-main/public/drawio/31.4.2/SOURCE.json`。
+
 ## 2026-09-03 — 依赖 WorkItem 详情跳转
 
 - 任务详情的依赖关系改为显示名称与编号的可点击入口，在当前对话框打开对应 WorkItem，并将滚动和键盘焦点返回顶部。

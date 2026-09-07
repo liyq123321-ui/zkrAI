@@ -5,7 +5,7 @@ sqlalchemy
 aiosqlite
 python-dotenv
 pydantic
+defusedxml
 pytest
 pytest-asyncio
 httpx
-

@@ -35,7 +35,7 @@ from app.domain.types import (
     RewriteAction,
     WorkItemKind,
 )
-from app.schemas.prd_review import ReviewTaskRead
+from app.schemas.prd_review import DiagramRevisionRequest, ReviewTaskRead
 from app.schemas.workflow import SessionCommandRequest
 from app.services.gitea import GiteaReply, GiteaThread
 
@@ -863,6 +863,158 @@ class ReviewPublishCoordinator:
         self._gitea = gitea
         self._agent = agent
         self._reviews = PrdReviewService(session_factory, gitea)
+        from app.services.diagram_revision import DiagramRevisionService
+
+        self._diagram_revisions = DiagramRevisionService(session_factory, agent)
+
+    async def create_or_resume_diagram_revision(
+        self,
+        wi: str,
+        diagram_id: str,
+        actor_id: str,
+        request: DiagramRevisionRequest,
+    ) -> tuple[ReviewTask, bool]:
+        """Freeze one authenticated external draw.io save into the shared task ledger."""
+
+        from app.services.diagram_revision import (
+            DiagramRevisionSnapshot,
+            diagram_revision_snapshot,
+        )
+        from app.services.drawio_diagrams import (
+            normalize_drawio_xml,
+            validate_drawio_xml,
+        )
+        from app.services.prd_review import PrdContentConflict, PrdForbidden, PrdNotFound
+
+        normalized = normalize_drawio_xml(request.drawio_xml)
+        snapshot = DiagramRevisionSnapshot(
+            diagram_id=diagram_id,
+            drawio_xml=normalized,
+            change_summary=request.change_summary,
+        )
+        digest = snapshot.digest()
+        with self._session_factory() as db:
+            existing = (
+                db.query(ReviewTask)
+                .filter_by(
+                    wi=wi,
+                    base_version=request.base_version,
+                    comment_snapshot_hash=digest,
+                )
+                .one_or_none()
+            )
+            if existing is not None:
+                if (
+                    diagram_revision_snapshot(existing) != snapshot
+                    or existing.base_commit_sha != request.base_commit_sha
+                ):
+                    raise PrdContentConflict("diagram revision task snapshot conflicts")
+                if existing.initiator_actor_id != actor_id:
+                    raise PrdForbidden("only the initiating reviewer may resume this diagram revision")
+                existing_id = existing.id
+                existing_status = existing.status
+                no_change = existing.status == "done" and existing.new_spec_version_id is None
+            else:
+                existing_id = None
+                existing_status = None
+                no_change = False
+
+        if existing_id is not None:
+            self._revalidate_initiator(existing_id)
+            if existing_status == "error":
+                with self._session_factory() as db:
+                    with db.begin():
+                        task = db.get(ReviewTask, existing_id)
+                        binding = (
+                            db.get(PrdVersion, (wi, task.base_version))
+                            if task is not None
+                            else None
+                        )
+                        if task is None or binding is None:
+                            raise PrdContentConflict("diagram revision base is unavailable")
+                        self._validate_task_base(db, binding, actor_id, task.id)
+                        task = self._reset_error_task(db, task.id)
+                    return task, False
+            with self._session_factory() as db:
+                task = db.get(ReviewTask, existing_id)
+                if task is None:
+                    raise PrdContentConflict("diagram revision task disappeared")
+                return task, no_change
+
+        binding, document = await self._reviews.diagram_revision_base(wi, actor_id)
+        if (
+            binding.version != request.base_version
+            or binding.commit_sha != request.base_commit_sha
+        ):
+            raise PrdContentConflict("diagram revision base changed")
+        current = next(
+            (diagram for diagram in document.er_diagrams if diagram.diagram_id == diagram_id),
+            None,
+        )
+        if current is None:
+            raise PrdNotFound("diagram revision target was not found")
+        validate_drawio_xml(normalized)
+        no_change = normalize_drawio_xml(current.drawio_xml) == normalized
+
+        with self._session_factory() as db:
+            try:
+                with db.begin():
+                    self._validate_task_base(db, binding, actor_id)
+                    task = ReviewTask(
+                        id=_new_service_id(),
+                        wi=wi,
+                        initiator_actor_id=actor_id,
+                        status="done" if no_change else "pending",
+                        base_version=binding.version,
+                        base_commit_sha=str(binding.commit_sha),
+                        comment_ids=[],
+                        comment_snapshot=snapshot.as_list(),
+                        comment_snapshot_hash=digest,
+                        auto_resolve_findings=False,
+                        finding_snapshot=[],
+                        decision_history_snapshot=[],
+                        reply_receipts={},
+                    )
+                    db.add(task)
+                    if no_change:
+                        item = db.get(WorkItem, wi)
+                        project = db.get(Project, item.project_id) if item is not None else None
+                        if project is None:
+                            raise PrdContentConflict("diagram revision project is unavailable")
+                        xml_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+                        db.add(
+                            AuditEvent(
+                                id=_new_service_id(),
+                                project_id=project.id,
+                                session_id=project.session_id,
+                                event_type="ER_DIAGRAM_REVISION_NO_CHANGE",
+                                actor_id=actor_id,
+                                payload={
+                                    "review_task_id": task.id,
+                                    "diagram_id": diagram_id,
+                                    "diagram_hash": xml_hash,
+                                    "base_version": binding.version,
+                                },
+                            )
+                        )
+                    db.flush()
+                return task, no_change
+            except IntegrityError:
+                db.rollback()
+
+        with self._session_factory() as db:
+            task = (
+                db.query(ReviewTask)
+                .filter_by(
+                    wi=wi,
+                    base_version=request.base_version,
+                    comment_snapshot_hash=digest,
+                )
+                .one()
+            )
+            if task.initiator_actor_id != actor_id or diagram_revision_snapshot(task) != snapshot:
+                raise PrdForbidden("diagram revision task belongs to another reviewer")
+            return task, task.status == "done" and task.new_spec_version_id is None
 
     async def create_or_resume(
         self,
@@ -1038,6 +1190,10 @@ class ReviewPublishCoordinator:
                 .all()
             )
             for task in candidates:
+                from app.services.diagram_revision import is_diagram_revision_task
+
+                if is_diagram_revision_task(task):
+                    continue
                 if task.initiator_actor_id != actor_id:
                     continue
                 if bool(task.auto_resolve_findings) != auto_resolve_findings:
@@ -1151,7 +1307,7 @@ class ReviewPublishCoordinator:
             or (
                 current.status not in {"HUMAN_REVIEW", "REWORK"}
                 and not (
-                    current.status == "NEED_CLARIFICATION"
+                    current.status in {"NEED_CLARIFICATION", "AUTO_REVIEW"}
                     and current_is_partial_revision
                 )
             )
@@ -1229,6 +1385,16 @@ class ReviewPublishCoordinator:
         if checker is not None:
             await checker()
         await self._assert_external_base(task_id)
+        with self._session_factory() as db:
+            task = db.get(ReviewTask, task_id)
+            from app.services.diagram_revision import is_diagram_revision_task
+
+            diagram_revision = is_diagram_revision_task(task)
+        if diagram_revision:
+            await self._diagram_revisions.materialize_and_review(task_id)
+            await self._publish_file(task_id)
+            self._project_version(task_id)
+            return
         request, session_id = self._command_request(task_id)
         commands = CommandService(
             self._session_factory,

@@ -13,7 +13,7 @@ def gateway_with_outputs(tmp_path, monkeypatch, outputs):
     remaining = deque(outputs)
     prompts = []
 
-    async def run_once(prompt, output_type, cwd):
+    async def run_once(prompt, output_type, cwd, **kwargs):
         prompts.append(prompt)
         output = remaining.popleft()
         if isinstance(output, Exception):

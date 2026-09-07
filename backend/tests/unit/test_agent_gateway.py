@@ -16,7 +16,12 @@ from app.agents.codex import (
     build_strict_output_schema,
 )
 from app.config import Settings
-from app.domain.types import ClarificationAnalysis, PrdRewriteOutput, ProjectSpecPayload
+from app.domain.types import (
+    ClarificationAnalysis,
+    PrdRewriteOutput,
+    ProjectSpecPayload,
+    SemanticReview,
+)
 from tests.helpers.fake_agent import ScriptedAgentGateway
 
 
@@ -48,6 +53,7 @@ def _write_fake_codex(path: Path) -> Path:
         "        'auth': (codex_home / 'auth.json').read_text(encoding='utf-8') if (codex_home / 'auth.json').exists() else None,\n"
         "        'agents_exists': (codex_home / 'AGENTS.md').exists(),\n"
         "        'config_exists': (codex_home / 'config.toml').exists(),\n"
+        "        'skill_names': sorted(path.name for path in (codex_home / 'skills').iterdir()) if (codex_home / 'skills').exists() else [],\n"
         "    }), encoding='utf-8')\n"
         "if os.environ.get('FAKE_CODEX_STDOUT'):\n"
         "    print(os.environ['FAKE_CODEX_STDOUT'], flush=True)\n"
@@ -387,6 +393,29 @@ def test_structured_runner_can_skip_git_repository_check(
     assert input_log.read_text(encoding="utf-8") == prompt
 
 
+def test_structured_runner_uses_local_codex_default_when_model_is_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    monkeypatch.setenv(
+        "FAKE_CODEX_OUTPUT",
+        '{"ready_for_spec": true, "questions": [], "assumptions": ["ready"]}',
+    )
+    spawned_commands: list[tuple[object, ...]] = []
+    create_subprocess_exec = asyncio.create_subprocess_exec
+
+    async def capture_command(*args, **kwargs):
+        spawned_commands.append(args)
+        return await create_subprocess_exec(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_command)
+    runner = CodexStructuredRunner(_settings(tmp_path, executable, model=None))
+
+    asyncio.run(runner.run("Analyze this brief.", ClarificationAnalysis, tmp_path))
+
+    assert "--model" not in spawned_commands[0]
+
+
 def test_structured_runner_raises_execution_error_on_nonzero_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -560,6 +589,139 @@ def test_structured_runner_uses_auth_only_ephemeral_codex_home(
     assert runtime["auth"] == '{"token":"test"}'
     assert runtime["agents_exists"] is False
     assert runtime["config_exists"] is False
+
+
+def test_structured_runner_installs_only_requested_bundled_skill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A missing or overly broad skill copy would contaminate typed PRD generation."""
+
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    env_log = tmp_path / "codex-env.json"
+    monkeypatch.setenv("FAKE_CODEX_ENV_LOG", str(env_log))
+    monkeypatch.setenv(
+        "FAKE_CODEX_OUTPUT",
+        '{"ready_for_spec":true,"questions":[],"assumptions":[]}',
+    )
+
+    asyncio.run(
+        CodexStructuredRunner(_settings(tmp_path, executable)).run(
+            "Generate a typed result.",
+            ClarificationAnalysis,
+            tmp_path,
+            bundled_skills=("drawio-skill",),
+        )
+    )
+
+    runtime = json.loads(env_log.read_text(encoding="utf-8"))
+    assert runtime["skill_names"] == ["drawio-skill"]
+    assert runtime["agents_exists"] is False
+    assert runtime["config_exists"] is False
+
+
+@pytest.mark.asyncio
+async def test_only_prd_generation_nodes_receive_drawio_skill(tmp_path, valid_spec):
+    """Giving review nodes the skill would weaken the isolated node contract."""
+
+    class RecordingRunner:
+        def __init__(self):
+            self.calls: list[tuple[type, tuple[str, ...]]] = []
+
+        async def run(self, prompt, output_type, cwd, **kwargs):
+            self.calls.append((output_type, kwargs.get("bundled_skills", ())))
+            if output_type is ProjectSpecPayload:
+                return valid_spec
+            return output_type.model_validate({"verdict": "PASS", "findings": []})
+
+    runner = RecordingRunner()
+    gateway = CodexAgentGateway(
+        runner=runner,
+        settings=_settings(tmp_path, tmp_path / "unused-codex"),
+    )
+
+    await gateway.generate_spec({"input_refs": ["artifact:brief-1"]})
+    await gateway.review_spec({"spec": valid_spec.model_dump(mode="json")})
+
+    assert runner.calls == [
+        (ProjectSpecPayload, ("drawio-skill",)),
+        (SemanticReview, ()),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prd_nodes_require_evidence_driven_drawio_behavior(tmp_path, valid_spec):
+    class RecordingRunner:
+        def __init__(self):
+            self.calls: list[tuple[str, type, tuple[str, ...]]] = []
+
+        async def run(self, prompt, output_type, cwd, **kwargs):
+            self.calls.append((prompt, output_type, kwargs.get("bundled_skills", ())))
+            if output_type is ProjectSpecPayload:
+                return valid_spec
+            if output_type is PrdRewriteOutput:
+                return PrdRewriteOutput(
+                    spec=valid_spec,
+                    responses=[],
+                    change_summary="Preserved the current specification.",
+                )
+            return output_type.model_validate({"verdict": "PASS", "findings": []})
+
+    runner = RecordingRunner()
+    gateway = CodexAgentGateway(
+        runner=runner,
+        settings=_settings(tmp_path, tmp_path / "unused-codex"),
+    )
+
+    await gateway.generate_spec({"input_refs": ["artifact:brief-1"]})
+    await gateway.rewrite_prd({"spec": {"content": valid_spec.model_dump(mode="json")}, "comments": []})
+    await gateway.review_spec({"spec": valid_spec.model_dump(mode="json")})
+
+    generation, rewrite, review = runner.calls
+    generation_prompt = " ".join(generation[0].split())
+    rewrite_prompt = " ".join(rewrite[0].split())
+    review_prompt = " ".join(review[0].split())
+    assert generation[2] == rewrite[2] == ("drawio-skill",)
+    assert review[2] == ()
+    assert "$drawio-skill" in generation_prompt
+    assert "two or more persistent entities" in generation_prompt
+    assert "empty tableRow" in generation_prompt
+    assert "partialRectangle child cell" in generation_prompt
+    assert "same absolute width and height as its tableRow" in generation_prompt
+    assert "$drawio-skill" in rewrite_prompt
+    assert "preserve its `diagram_id` and `drawio_xml`" in rewrite_prompt
+    assert "empty tableRow" in rewrite_prompt
+    assert "partialRectangle child cell" in rewrite_prompt
+    assert "same absolute width and height as its tableRow" in rewrite_prompt
+    assert "ignore layout-only" in review_prompt
+
+
+def test_structured_runner_rejects_tampered_bundled_skill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A changed vendored skill must never reach the trusted Agent runtime."""
+
+    import app.agents.codex as codex_module
+
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    skill_root = tmp_path / "skills"
+    skill = skill_root / "drawio-skill"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("unverified instructions", encoding="utf-8")
+    (skill_root / "drawio-skill-source.json").write_text(
+        json.dumps({"name": "drawio-skill", "tree_sha256": "0" * 64}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(codex_module, "BUNDLED_SKILL_ROOT", skill_root)
+
+    with pytest.raises(AgentExecutionError, match="integrity check failed"):
+        asyncio.run(
+            CodexStructuredRunner(_settings(tmp_path, executable)).run(
+                "Generate a typed result.",
+                ClarificationAnalysis,
+                tmp_path,
+                bundled_skills=("drawio-skill",),
+            )
+        )
 
 
 def test_structured_runner_reaps_timed_out_process(

@@ -15,6 +15,10 @@ from app.domain.types import AgentSpecProposal
 from app.domain.implementation_plan import ImplementationPlan
 from app.services.task_specifications import ImplementationPlanError, validate_implementation_plan
 from app.services.spec_review import run_rule_review
+from app.services.drawio_diagrams import (
+    diagram_entity_labels,
+    normalize_agent_table_layout,
+)
 
 
 class OutputConsistencyError(ValueError):
@@ -151,6 +155,26 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
             item.model_dump(mode="json") for item in run_rule_review(spec, set(refs))
             if item.code not in {"NEEDS_HUMAN_DECISION", "UNKNOWN_RESPONSIBLE_ACTOR"}
         ]
+        declared_objects = "\n".join(spec.core_objects).casefold()
+        for index, diagram in enumerate(spec.er_diagrams):
+            normalized_xml = normalize_agent_table_layout(diagram.drawio_xml)
+            if normalized_xml != diagram.drawio_xml:
+                spec.er_diagrams[index] = diagram.model_copy(update={"drawio_xml": normalized_xml})
+                diagram = spec.er_diagrams[index]
+            unknown_entities = sorted(
+                label
+                for label in diagram_entity_labels(diagram.drawio_xml)
+                if label.casefold() not in declared_objects
+            )
+            if unknown_entities:
+                findings.append({
+                    "code": "ER_ENTITY_NOT_IN_CORE_OBJECTS",
+                    "path": f"/er_diagrams/{index}/drawio_xml",
+                    "message": (
+                        "ER diagram entities must be named in core_objects: "
+                        + ", ".join(unknown_entities)
+                    ),
+                })
         if isinstance(result, PrdRewriteOutput):
             from app.services.pm_agent import RewriteCoverageError, validate_rewrite
 

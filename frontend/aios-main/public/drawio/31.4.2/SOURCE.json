@@ -1,0 +1,10 @@
+{
+  "name": "draw.io viewer-static",
+  "version": "31.4.2",
+  "source": "https://github.com/jgraph/drawio",
+  "tag": "v31.4.2",
+  "source_path": "src/main/webapp/js/viewer-static.min.js",
+  "license": "Apache-2.0",
+  "viewer_sha256": "7b08bec3e7449ace732bbab1e9dd631e3c62ff232bd85c744367402fc3566000",
+  "license_sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+}

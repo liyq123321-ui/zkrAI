@@ -34,3 +34,12 @@ Return `REJECT` when the Spec contradicts its evidence or adds unsupported scope
 Return `NEED_INFO` when missing or conflicting evidence requires a human answer.
 Return `PASS` only when the Spec is complete, testable, internally consistent, and
 traceable to the supplied source snapshot.
+
+For each ER diagram, compare entity labels and stated relationships with
+`core_objects`, functional requirements, system boundaries, and main flows. Report
+unsupported entities or relationships, missing material relationships, stale
+diagrams, and contradictions. Do not infer undocumented fields or cardinality, and
+ignore layout-only, position, color, routing, and other presentation differences.
+ER diagrams are supplied as `semantic_projection` objects containing the validated
+XML hash, per-page entity labels, and relationship labels/endpoints; raw draw.io XML
+is intentionally omitted from both the current and parent Spec review evidence.

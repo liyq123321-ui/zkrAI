@@ -1,6 +1,115 @@
 {
   "components": {
     "schemas": {
+      "AgentRuntimeRead": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_session_id": {
+            "title": "Agent Session Id",
+            "type": "string"
+          },
+          "call_count": {
+            "title": "Call Count",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "current_call_id": {
+            "title": "Current Call Id",
+            "type": "string"
+          },
+          "current_operation": {
+            "title": "Current Operation",
+            "type": "string"
+          },
+          "current_summary": {
+            "title": "Current Summary",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "completed",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_session_id",
+          "project_id",
+          "role",
+          "provider",
+          "model",
+          "purpose",
+          "status",
+          "current_operation",
+          "current_summary",
+          "current_call_id",
+          "started_at",
+          "completed_at",
+          "call_count"
+        ],
+        "title": "AgentRuntimeRead",
+        "type": "object"
+      },
       "AgentSpecRead": {
         "additionalProperties": false,
         "properties": {
@@ -310,6 +419,40 @@
               }
             ]
           },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          },
+          "progress_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Message"
+          },
+          "progress_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Progress Stage"
+          },
           "result": {
             "anyOf": [
               {
@@ -490,6 +633,65 @@
         ],
         "title": "CommentResolveRequest",
         "type": "object"
+      },
+      "DiagramRevisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Id"
+          },
+          "base_commit_sha": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Base Commit Sha",
+            "type": "string"
+          },
+          "base_version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Base Version",
+            "type": "integer"
+          },
+          "change_summary": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Change Summary",
+            "type": "string"
+          },
+          "drawio_xml": {
+            "maxLength": 1048576,
+            "minLength": 1,
+            "title": "Drawio Xml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_version",
+          "base_commit_sha",
+          "drawio_xml",
+          "change_summary"
+        ],
+        "title": "DiagramRevisionRequest",
+        "type": "object"
+      },
+      "ErDiagramSection": {
+        "enum": [
+          "functional_requirements",
+          "system_boundaries",
+          "core_objects",
+          "main_flows"
+        ],
+        "title": "ErDiagramSection",
+        "type": "string"
       },
       "HTTPValidationError": {
         "properties": {
@@ -742,6 +944,14 @@
             "title": "Content",
             "type": "string"
           },
+          "er_diagrams": {
+            "items": {
+              "$ref": "#/components/schemas/PrdErDiagramRead"
+            },
+            "maxItems": 8,
+            "title": "Er Diagrams",
+            "type": "array"
+          },
           "filename": {
             "maxLength": 4096,
             "minLength": 1,
@@ -773,6 +983,47 @@
           "content"
         ],
         "title": "PrdDocumentRead",
+        "type": "object"
+      },
+      "PrdErDiagramRead": {
+        "additionalProperties": false,
+        "properties": {
+          "after_section": {
+            "$ref": "#/components/schemas/ErDiagramSection"
+          },
+          "anchor": {
+            "maxLength": 128,
+            "pattern": "^firstflight-er-[a-z0-9-]+-[0-9a-f]{8}$",
+            "title": "Anchor",
+            "type": "string"
+          },
+          "diagram_id": {
+            "maxLength": 80,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "title": "Diagram Id",
+            "type": "string"
+          },
+          "drawio_xml": {
+            "maxLength": 1048576,
+            "minLength": 1,
+            "title": "Drawio Xml",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "diagram_id",
+          "title",
+          "after_section",
+          "anchor",
+          "drawio_xml"
+        ],
+        "title": "PrdErDiagramRead",
         "type": "object"
       },
       "ProjectBrief": {
@@ -1049,6 +1300,33 @@
           "created_at"
         ],
         "title": "ReviewRead",
+        "type": "object"
+      },
+      "ReviewTaskAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "base_version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Base Version",
+            "type": "integer"
+          },
+          "no_change": {
+            "default": false,
+            "title": "No Change",
+            "type": "boolean"
+          },
+          "task_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "base_version"
+        ],
+        "title": "ReviewTaskAccepted",
         "type": "object"
       },
       "ReviewTaskRead": {
@@ -2166,6 +2444,67 @@
         ]
       }
     },
+    "/prd/{wi}/diagrams/{diagram_id}/revisions": {
+      "post": {
+        "operationId": "revise_diagram_prd__wi__diagrams__diagram_id__revisions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wi",
+            "required": true,
+            "schema": {
+              "title": "Wi",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "diagram_id",
+            "required": true,
+            "schema": {
+              "title": "Diagram Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiagramRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewTaskAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revise Diagram",
+        "tags": [
+          "prd-review"
+        ]
+      }
+    },
     "/prd/{wi}/diff": {
       "get": {
         "operationId": "prd_diff_prd__wi__diff_get",
@@ -2513,6 +2852,52 @@
           }
         },
         "summary": "Get Agent Spec",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/sessions/{session_id}/agents/runtime": {
+      "get": {
+        "operationId": "list_agent_runtime_sessions__session_id__agents_runtime_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentRuntimeRead"
+                  },
+                  "title": "Response List Agent Runtime Sessions  Session Id  Agents Runtime Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Agent Runtime",
         "tags": [
           "sessions"
         ]

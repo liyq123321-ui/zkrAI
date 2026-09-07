@@ -16,3 +16,20 @@ If clarification history contains decision `SKIP_CLARIFICATION` with assumption
 policy `AGENT_DISCRETION`, do not ask more questions. Resolve ambiguity with the
 most conservative reasonable assumptions, list every material assumption in the
 Spec, and leave the resulting PRD ready for human correction.
+
+Use the installed `$drawio-skill` when the supplied evidence identifies two or
+more persistent entities and at least one relationship that an ER diagram would
+clarify. Read its SKILL.md and the XML/ER references it requires before authoring
+the diagram. Do not create a diagram for decoration, an ordinary process flow, or
+when the evidence is insufficient; return `er_diagrams: []` in that case. Never
+guess fields, primary keys, foreign keys, cardinality, or relationships.
+
+Every returned ER diagram must use stable entity names from `core_objects`, a
+stable `diagram_id`, the most relevant supported `after_section`, and complete
+uncompressed self-contained mxfile/mxGraphModel XML. Keep labels plain text even
+when draw.io styles include `html=1`. For every ER field, use an empty tableRow
+and exactly one partialRectangle child cell that owns the horizontal field label;
+the child cell must use the same absolute width and height as its tableRow (never
+use a 1×1 relative geometry); never put a label directly on a tableRow. Do not
+fetch remote assets, access the network, launch a GUI, execute commands, or write
+diagram files. Return all XML only through the required structured JSON contract.

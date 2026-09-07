@@ -83,6 +83,13 @@ class RewriteAction(StrEnum):
     NEEDS_HUMAN_CONFIRMATION = "NEEDS_HUMAN_CONFIRMATION"
 
 
+class ErDiagramSection(StrEnum):
+    FUNCTIONAL_REQUIREMENTS = "functional_requirements"
+    SYSTEM_BOUNDARIES = "system_boundaries"
+    CORE_OBJECTS = "core_objects"
+    MAIN_FLOWS = "main_flows"
+
+
 class WorkItemKind(StrEnum):
     ROOT = "ROOT"
     MILESTONE = "MILESTONE"
@@ -115,6 +122,33 @@ class OpenQuestion(BaseModel):
     accepted_consequence: str | None = None
 
 
+class ErDiagram(BaseModel):
+    """A safe draw.io ER diagram embedded at a stable PRD section boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    diagram_id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)
+    title: str = Field(min_length=1, max_length=160)
+    after_section: ErDiagramSection
+    drawio_xml: str = Field(min_length=1, max_length=1_048_576)
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        if "\r" in value or "\n" in value:
+            raise ValueError("title must not contain line breaks")
+        return normalize_plain_text(value, max_length=160, field_name="title")
+
+    @field_validator("drawio_xml")
+    @classmethod
+    def validate_xml(cls, value: str) -> str:
+        from app.services.drawio_diagrams import normalize_drawio_xml, validate_drawio_xml
+
+        normalized = normalize_drawio_xml(value)
+        validate_drawio_xml(normalized)
+        return normalized
+
+
 class ProjectSpecPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -137,6 +171,21 @@ class ProjectSpecPayload(BaseModel):
     assumptions: list[str]
     open_questions: list[OpenQuestion]
     source_refs: list[str] = Field(min_length=1)
+    er_diagrams: list[ErDiagram] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_unique_diagram_ids(self):
+        from app.services.drawio_diagrams import MAX_TOTAL_XML_BYTES
+
+        diagram_ids = [diagram.diagram_id for diagram in self.er_diagrams]
+        if len(diagram_ids) != len(set(diagram_ids)):
+            raise ValueError("er_diagrams must use unique diagram_id values")
+        titles = [diagram.title.casefold() for diagram in self.er_diagrams]
+        if len(titles) != len(set(titles)):
+            raise ValueError("er_diagrams must use unique titles")
+        if sum(len(diagram.drawio_xml.encode("utf-8")) for diagram in self.er_diagrams) > MAX_TOTAL_XML_BYTES:
+            raise ValueError("er_diagrams exceed the combined 2 MiB XML limit")
+        return self
 
 
 class ReviewFinding(BaseModel):

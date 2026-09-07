@@ -7,12 +7,14 @@ from app.schemas.prd_review import (
     CommentCreateRequest,
     CommentReplyRequest,
     CommentResolveRequest,
+    DiagramRevisionRequest,
     PrdCommentRead,
     PrdCommentableLinesRead,
     PrdDocumentRead,
     PrdDiffRead,
     PublishReviewRequest,
     ReviewTaskRead,
+    ReviewTaskAccepted,
 )
 from app.identity import ActorResolver
 from app.services.gitea import CommentLineNotInDiff, GiteaError
@@ -29,6 +31,7 @@ from app.services.prd_review import (
     PrdServiceError,
     PrdReviewService,
 )
+from app.services.drawio_diagrams import InvalidDrawioDiagram
 
 
 class PublishReviewAccepted(BaseModel):
@@ -84,6 +87,12 @@ def _http_error(error: Exception) -> HTTPException:
         code, message, code_status = (
             "COMMENT_LINE_NOT_IN_DIFF",
             "The requested comment line is not available in the PR diff.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    elif isinstance(error, InvalidDrawioDiagram):
+        code, message, code_status = (
+            "INVALID_DRAWIO_DIAGRAM",
+            "The draw.io diagram is invalid or unsafe.",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
     elif isinstance(error, GiteaError):
@@ -245,6 +254,34 @@ def build_router(
                 task_id=task.id,
                 base_version=task.base_version,
                 comment_count=len(task.comment_ids),
+            )
+        except Exception as error:
+            raise _http_error(error) from error
+
+    @router.post(
+        "/prd/{wi}/diagrams/{diagram_id}/revisions",
+        response_model=ReviewTaskAccepted,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def revise_diagram(
+        wi: str,
+        diagram_id: str,
+        request_body: DiagramRevisionRequest,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ) -> ReviewTaskAccepted:
+        actor_id = actor_resolver.resolve(request, request_body.actor_id)
+        request_body = request_body.model_copy(update={"actor_id": actor_id})
+        try:
+            task, no_change = await coordinator.create_or_resume_diagram_revision(
+                wi, diagram_id, actor_id, request_body
+            )
+            if not no_change:
+                background_tasks.add_task(coordinator.run, task.id)
+            return ReviewTaskAccepted(
+                task_id=task.id,
+                base_version=task.base_version,
+                no_change=no_change,
             )
         except Exception as error:
             raise _http_error(error) from error
