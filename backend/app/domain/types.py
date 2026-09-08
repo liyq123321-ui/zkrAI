@@ -275,6 +275,7 @@ class ProjectBriefUpdates(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    summary: str | None = None
     motivation: str | None = Field(default=None, min_length=1)
     final_objective: str | None = Field(default=None, min_length=1)
     known_scope: list[str] | None = None
@@ -293,8 +294,26 @@ class ProjectBriefUpdates(BaseModel):
             raise ValueError("Brief text must not be blank")
         return value.strip()
 
+    @field_validator("summary", mode="before")
+    @classmethod
+    def normalize_summary(cls, value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if (
+            not normalized
+            or "\n" in normalized
+            or "\r" in normalized
+            or len(normalized) > 20
+        ):
+            return None
+        return normalized
+
     def apply_to(self, brief: dict[str, object]) -> dict[str, object]:
-        return {**brief, **self.model_dump(mode="json", exclude_none=True)}
+        return {
+            **brief,
+            **self.model_dump(mode="json", exclude_none=True, exclude={"summary"}),
+        }
 
 
 class ClarificationAnalysis(BaseModel):

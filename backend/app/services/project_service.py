@@ -318,6 +318,8 @@ class ProjectService:
                 )
                 uow.add_clarification_response(response)
                 uow.update_project_brief(analysis.brief_updates)
+                if analysis.brief_updates.summary is not None:
+                    uow.update_root_summary(analysis.brief_updates.summary)
                 created_ids = [response.id]
                 if analysis.ready_for_spec:
                     if context.state.current_spec_status is SpecStatus.NEED_CLARIFICATION:
@@ -564,6 +566,15 @@ class ProjectService:
             agent_call.response = analysis.model_dump(mode="json")
             agent_call.completed_at = _now()
             project.brief = analysis.brief_updates.apply_to(project.brief)
+            if analysis.brief_updates.summary is not None:
+                root = (
+                    db.query(WorkItem)
+                    .filter_by(project_id=project_id, local_key="root", kind="ROOT")
+                    .one_or_none()
+                )
+                if root is None:
+                    raise RuntimeError("project ROOT WorkItem disappeared during analysis")
+                root.summary = analysis.brief_updates.summary
             if analysis.ready_for_spec:
                 current_spec = self._current_spec(db, project)
                 if current_spec is not None and current_spec.status == SpecStatus.NEED_CLARIFICATION.value:
@@ -613,7 +624,9 @@ class ProjectService:
                         "agent_call_id": agent_call.id,
                         "ready_for_spec": analysis.ready_for_spec,
                         "brief_updated_fields": sorted(
-                            analysis.brief_updates.model_dump(exclude_none=True)
+                            analysis.brief_updates.model_dump(
+                                exclude_none=True, exclude={"summary"}
+                            )
                         ),
                     },
                 )

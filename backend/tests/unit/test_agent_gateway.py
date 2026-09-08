@@ -219,6 +219,42 @@ def test_output_schema_requires_nullable_nested_fields_for_strict_mode():
 
 
 @pytest.mark.asyncio
+async def test_pm_analysis_contract_requests_a_bounded_project_summary(tmp_path):
+    """Without the schema and objective constraint the existing PM call cannot name ROOT cards."""
+
+    class RecordingRunner:
+        def __init__(self):
+            self.prompt = ""
+            self.schema = {}
+
+        async def run(self, prompt, output_type, cwd, **kwargs):
+            self.prompt = prompt
+            self.schema = build_strict_output_schema(output_type)
+            return output_type.model_validate(
+                {
+                    "ready_for_spec": True,
+                    "questions": [],
+                    "assumptions": [],
+                    "brief_updates": {"summary": "本地温度换算器"},
+                }
+            )
+
+    runner = RecordingRunner()
+    gateway = CodexAgentGateway(
+        runner=runner,
+        settings=_settings(tmp_path, tmp_path / "unused-codex"),
+    )
+
+    result = await gateway.analyze_brief({"brief": {"final_objective": "Convert temperatures"}})
+
+    updates_schema = runner.schema["$defs"]["ProjectBriefUpdates"]
+    assert "summary" in updates_schema["properties"]
+    assert result.brief_updates.summary == "本地温度换算器"
+    objective = runner.prompt.split("# Required output contract", 1)[0]
+    assert "no longer than 20 Unicode characters" in " ".join(objective.split())
+
+
+@pytest.mark.asyncio
 async def test_spec_reviewer_is_instructed_to_compare_spec_with_source_snapshot(tmp_path):
     """Passing evidence without an explicit comparison objective would not perform provenance review."""
 
