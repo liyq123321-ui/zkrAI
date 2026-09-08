@@ -30,3 +30,7 @@ platform permissions.
 Assess readiness against the resulting merged Brief, not the stale input Brief.
 Ask only about genuinely unresolved business decisions or missing evidence, not
 whether the application has performed the writeback that it applies on completion.
+
+Always return brief_updates.summary as a concise, single-line project name derived
+only from the confirmed brief. It must be non-empty and no longer than 20 Unicode
+characters. Refresh it when a confirmed objective change makes the old name stale.

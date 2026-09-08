@@ -93,6 +93,7 @@ class ActionScopedUnitOfWork:
     def __init__(self, session: Session, project_id: str, action: CommandAction) -> None:
         self.__session, self.__project_id, self.__action = session, project_id, action
         self.__review_task_ids: set[str] = set()
+        self.__root_summary_updates: dict[str, str] = {}
 
     def add_spec_version(self, version: SpecVersion) -> None:
         if self.__action not in {
@@ -119,6 +120,24 @@ class ActionScopedUnitOfWork:
         if project is None:
             raise ValueError("Brief project is unavailable")
         project.brief = updates.apply_to(project.brief)
+
+    def update_root_summary(self, summary: str) -> None:
+        """Update only the presentation name of this project's canonical ROOT."""
+        if self.__action is not CommandAction.MESSAGE:
+            raise ValueError("ROOT summary updates are outside this action scope")
+        root = (
+            self.__session.query(WorkItem)
+            .filter_by(
+                project_id=self.__project_id,
+                local_key="root",
+                kind="ROOT",
+            )
+            .one_or_none()
+        )
+        if root is None:
+            raise ValueError("Project ROOT WorkItem is unavailable")
+        root.summary = summary
+        self.__root_summary_updates[root.id] = summary
 
     def add_clarification_request(self, request: ClarificationRequest) -> None:
         if self.__action not in {
@@ -358,6 +377,10 @@ class ActionScopedUnitOfWork:
     @property
     def _review_task_ids(self) -> frozenset[str]:
         return frozenset(self.__review_task_ids)
+
+    @property
+    def _root_summary_updates(self) -> Mapping[str, str]:
+        return dict(self.__root_summary_updates)
 
     def __mark_staged_call_succeeded(
         self, call_id: str, operation: str, allowed_actions: set[CommandAction]
@@ -645,6 +668,7 @@ class CommandService:
                         reserved,
                         set(prepared.agent_call_ids),
                         uow._review_task_ids,
+                        uow._root_summary_updates,
                     )
                     db.flush()
                     self._validate_result(db, project, request.action, snapshot, result)
@@ -883,7 +907,8 @@ class CommandService:
         version=self._current_spec(db,project)
         return ((project.phase,project.current_spec_version_id,project.final_approver,tuple(project.project_manager_ids or []),tuple(project.root_owner_ids or [])),version.status if version else None,set(db.new))
 
-    def _enforce_guard(self, db: Session, project: Project, guard: tuple[tuple[object,...],str|None,set[object]], reserved: int, allowed_agent_call_ids: set[str], allowed_review_task_ids: frozenset[str] = frozenset()) -> None:
+    def _enforce_guard(self, db: Session, project: Project, guard: tuple[tuple[object,...],str|None,set[object]], reserved: int, allowed_agent_call_ids: set[str], allowed_review_task_ids: frozenset[str] = frozenset(), allowed_root_summary_updates: Mapping[str, str] | None = None) -> None:
+        allowed_root_summary_updates = allowed_root_summary_updates or {}
         project_guard,spec_status,old_new=guard; version=self._current_spec(db,project)
         if project.state_version != reserved: raise ValueError("handler must not change Project.state_version")
         if (project.phase,project.current_spec_version_id,project.final_approver,tuple(project.project_manager_ids or []),tuple(project.root_owner_ids or [])) != project_guard: raise ValueError("handler must not directly mutate protected Project fields")
@@ -920,6 +945,21 @@ class CommandService:
                     and item.new_version is not None
                     and work_item is not None
                     and work_item.project_id == project.id
+                ):
+                    continue
+            if isinstance(item, WorkItem) and item.id in allowed_root_summary_updates:
+                state = inspect(item)
+                changed = {
+                    attribute.key
+                    for attribute in state.attrs
+                    if attribute.history.has_changes()
+                }
+                if (
+                    changed == {"summary"}
+                    and item.project_id == project.id
+                    and item.local_key == "root"
+                    and item.kind == "ROOT"
+                    and item.summary == allowed_root_summary_updates[item.id]
                 ):
                     continue
             raise ValueError("handler modified an existing protected row")

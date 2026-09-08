@@ -8,7 +8,7 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from app.database.database import Base, create_engine_for_url, make_session_factory
-from app.database.models import AgentCall, AgentSession, AuditEvent, CommandAttempt, ProcessedCommand, Project, SpecReview, SpecVersion
+from app.database.models import AgentCall, AgentSession, AuditEvent, CommandAttempt, ProcessedCommand, Project, SpecReview, SpecVersion, WorkItem
 from app.domain.types import CommandAction, ProjectPhase, ReviewKind, ReviewVerdict, SpecStatus
 from app.schemas.workflow import SessionCommandRequest
 from app.services.command_service import (
@@ -1051,6 +1051,52 @@ async def test_materializer_cannot_mutate_authority_other_project_or_existing_sp
             assert db.get(Project, "protected-other-project").final_approver == "other"
         if mutation == "old_spec":
             assert db.get(SpecVersion, "protected-old-spec").status == SpecStatus.NEED_CLARIFICATION.value
+
+
+@pytest.mark.asyncio
+async def test_root_summary_permission_does_not_allow_other_root_attributes_to_change(
+    session_factory, clarification_project
+):
+    """Granting summary writeback must not open the existing ROOT row to arbitrary edits."""
+    with session_factory() as db:
+        db.add(
+            WorkItem(
+                id="summary-guard-root",
+                project_id=clarification_project.id,
+                local_key="root",
+                kind="ROOT",
+                executable=False,
+                title="Original requirement",
+                objective="Original requirement",
+            )
+        )
+        db.commit()
+
+    def materialize(uow, context, prepared):
+        uow.update_root_summary("Safe summary")
+        session = uow._ActionScopedUnitOfWork__session
+        session.get(WorkItem, "summary-guard-root").title = "Replaced requirement"
+        return CommandHandlerResult(phase=ProjectPhase.SPECIFICATION)
+
+    service = CommandService(
+        session_factory,
+        handlers={CommandAction.MESSAGE: _staged(materialize)},
+    )
+    request = SessionCommandRequest(
+        command_id="guard-root-summary",
+        action=CommandAction.MESSAGE,
+        expected_state_version=2,
+        actor_id="owner",
+        message="Answer.",
+    )
+
+    with pytest.raises(ValueError, match="protected"):
+        await service.execute(clarification_project.session_id, request)
+
+    with session_factory() as db:
+        root = db.get(WorkItem, "summary-guard-root")
+        assert root.summary is None
+        assert root.title == "Original requirement"
 
 
 @pytest.mark.asyncio

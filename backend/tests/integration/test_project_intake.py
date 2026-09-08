@@ -9,6 +9,7 @@ from app.database.models import (
     AgentCall,
     AgentSession,
     Artifact,
+    AuditEvent,
     ClarificationRequest,
     ClarificationResponse,
     IntakeAnalysisClaim,
@@ -19,12 +20,15 @@ from app.database.models import (
 )
 from app.database.database import Base, create_engine_for_url, make_session_factory
 from app.domain.types import (
+    CommandAction,
     ClarificationAnalysis,
     ClarificationQuestion,
+    ProjectBriefUpdates,
     ProjectPhase,
     SpecStatus,
 )
-from app.schemas.workflow import ProjectBrief, SessionCreateRequest
+from app.schemas.workflow import ProjectBrief, SessionCommandRequest, SessionCreateRequest
+from app.services.command_service import CommandService
 from app.services.project_service import (
     ClarificationAlreadyAnswered,
     ProjectService,
@@ -61,6 +65,131 @@ def _ready_analysis() -> ClarificationAnalysis:
 
 def _request(brief, *, request_id: str = "create-1") -> SessionCreateRequest:
     return SessionCreateRequest(request_id=request_id, actor_id="owner", brief=brief)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("  本地温度换算器  ", "本地温度换算器"),
+        ("", None),
+        (123, None),
+        ("第一行\n第二行", None),
+        ("超过二十个字符的项目摘要必须被忽略不能影响项目需求创建", None),
+    ],
+)
+def test_project_summary_is_isolated_from_brief_validation(raw, expected):
+    """A malformed display name must be ignored without polluting the formal Brief."""
+    updates = ProjectBriefUpdates(summary=raw)
+
+    assert updates.summary == expected
+    assert "summary" not in updates.apply_to({"final_objective": "Original"})
+
+
+@pytest.mark.asyncio
+async def test_initial_analysis_persists_root_summary_without_replacing_requirement(
+    session_factory, complete_brief
+):
+    """Dropping the PM name or replacing the source requirement would break card identity."""
+    analysis = ClarificationAnalysis(
+        ready_for_spec=True,
+        questions=[],
+        assumptions=[],
+        brief_updates={"summary": "本地温度换算器"},
+    )
+    agent = ScriptedAgentGateway(analyze_results=deque([analysis]))
+
+    state = await ProjectService(session_factory, agent).create_session(
+        _request(complete_brief, request_id="summary-intake")
+    )
+
+    with session_factory() as db:
+        root = db.query(WorkItem).filter_by(project_id=state.project_id, kind="ROOT").one()
+        project = db.get(Project, state.project_id)
+        assert root.summary == "本地温度换算器"
+        assert root.title == complete_brief.final_objective
+        assert root.objective == complete_brief.final_objective
+        assert "summary" not in project.brief
+        audit = db.query(AuditEvent).filter_by(event_type="PM_BRIEF_ANALYZED").one()
+        assert audit.payload["brief_updated_fields"] == []
+    assert [operation for operation, _ in agent.calls] == ["analyze_brief"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_pm_summary_does_not_block_intake(
+    session_factory, complete_brief
+):
+    """A bad optional display name must not reject an otherwise valid PM result."""
+    analysis = ClarificationAnalysis(
+        ready_for_spec=True,
+        questions=[],
+        assumptions=[],
+        brief_updates={"summary": "第一行\n第二行"},
+    )
+
+    state = await ProjectService(
+        session_factory,
+        ScriptedAgentGateway(analyze_results=deque([analysis])),
+    ).create_session(_request(complete_brief, request_id="invalid-summary-intake"))
+
+    assert state.phase is ProjectPhase.SPECIFICATION
+    with session_factory() as db:
+        root = db.query(WorkItem).filter_by(project_id=state.project_id, kind="ROOT").one()
+        assert root.summary is None
+        assert root.title == complete_brief.final_objective
+
+
+@pytest.mark.asyncio
+async def test_clarification_command_atomically_refreshes_existing_root_summary(
+    session_factory, complete_brief
+):
+    """The command path must adopt the prepared PM name without a second analysis call."""
+    first = _unclear_analysis().model_copy(
+        update={"brief_updates": ProjectBriefUpdates(summary="初始温度项目")}
+    )
+    second = ClarificationAnalysis(
+        ready_for_spec=True,
+        questions=[],
+        assumptions=[],
+        brief_updates={"summary": "温度换算交付"},
+    )
+    agent = ScriptedAgentGateway(analyze_results=deque([first, second]))
+    projects = ProjectService(session_factory, agent)
+    initial = await projects.create_session(
+        _request(complete_brief, request_id="summary-clarification")
+    )
+    with session_factory() as db:
+        root_id = db.query(WorkItem.id).filter_by(
+            project_id=initial.project_id, kind="ROOT"
+        ).scalar()
+
+    result = await CommandService(
+        session_factory,
+        handlers={CommandAction.MESSAGE: projects.as_command_handler()},
+    ).execute(
+        initial.session_id,
+        SessionCommandRequest(
+            command_id="refresh-summary",
+            action=CommandAction.MESSAGE,
+            expected_state_version=initial.state_version,
+            actor_id=complete_brief.root_owner_ids[0],
+            message="The confirmed audience is operations managers.",
+        ),
+    )
+
+    assert result.state.phase is ProjectPhase.SPECIFICATION
+    with session_factory() as db:
+        root = db.get(WorkItem, root_id)
+        project = db.get(Project, initial.project_id)
+        assert root.summary == "温度换算交付"
+        assert root.title == complete_brief.final_objective
+        assert root.objective == complete_brief.final_objective
+        assert "summary" not in project.brief
+        audit = db.query(AuditEvent).filter_by(event_type="COMMAND_APPLIED").one()
+        assert audit.payload["brief_updated_fields"] == []
+    assert [operation for operation, _ in agent.calls] == [
+        "analyze_brief",
+        "analyze_brief",
+    ]
 
 
 @pytest.mark.asyncio
@@ -791,4 +920,3 @@ def test_threaded_identical_intake_races_share_project_and_pm_claim(
     finally:
         Base.metadata.drop_all(engine)
         engine.dispose()
-

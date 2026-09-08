@@ -10,6 +10,7 @@ function task(id: string, depth: number, dependencies: string[]): WorkItemDto {
     parent_id: 'root-a',
     kind: 'TASK',
     title: `任务 ${id}`,
+    summary: null,
     description: null,
     objective: null,
     status: 'todo',
@@ -63,7 +64,7 @@ describe('TaskDependencyGraph', () => {
   it('does not draw an edge when its dependency endpoint is filtered out', () => {
     const { container } = render(<TaskDependencyGraph projects={[{
       id: 'project-1', title: '知识问答', tasks: [{
-        id: 'task-running', kind: 'TASK', title: '构建检索流程', parent_id: 'root-1',
+        id: 'task-running', kind: 'TASK', title: '构建检索流程', summary: null, parent_id: 'root-1',
         dependency_work_item_ids: ['task-hidden'], graph_depth: 1,
         description: null, objective: null, scope: [], exclusions: [], outputs: null,
         acceptance_criteria: null, required_skills: null, responsible_role: null, suggested_assignee: null,

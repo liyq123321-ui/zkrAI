@@ -258,6 +258,7 @@ def _migrate_sqlite_work_items(target_engine: Engine) -> None:
         for index in schema.get_indexes("work_items")
     )
     additions = {
+        "summary": "VARCHAR",
         "project_id": "VARCHAR",
         "local_key": "VARCHAR",
         "kind": "VARCHAR",

@@ -87,6 +87,7 @@ export interface WorkItemDto {
   kind: 'ROOT' | 'MILESTONE' | 'TASK' | null;
   title: string | null;
   description: string | null;
+  summary: string | null;
   objective: string | null;
   status?: string | null;
   scope: string[] | null;

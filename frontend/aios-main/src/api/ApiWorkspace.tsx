@@ -30,6 +30,9 @@ import { AgentRuntimePanel } from './AgentRuntimePanel';
 import { AuditTrail } from './AuditTrail';
 import { AgentSpecDetail, type WorkItemPreview } from './AgentSpecDetail';
 import { MilestoneTaskMonitor, MilestoneTaskSummary } from './MilestoneTaskMonitor';
+import { CopyableWorkItemId } from './CopyableWorkItemId';
+import { RootWorkItemDetail } from './RootWorkItemDetail';
+import { validWorkItemSummary } from './workItemSummary';
 import { getEmployeeOptions } from './employeeDirectory';
 import { WorkItemDialog } from './WorkItemDialog';
 import { WorkItemFilterControls } from './WorkItemFilterControls';
@@ -210,6 +213,7 @@ export function ApiWorkspace() {
   const [chatOpen, setChatOpen] = useState(true);
   const [kanbanFilters, setKanbanFilters] = useState(defaultWorkItemFilters);
   const [flowFilters, setFlowFilters] = useState(defaultWorkItemFilters);
+  const [clipboardResult, setClipboardResult] = useState<string | null>(null);
   const pendingCommandIds = useRef(new Map<string, string>());
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const decompositionLifecycles = useRef(new Set<AbortController>());
@@ -293,8 +297,11 @@ export function ApiWorkspace() {
 
   const historicalSpecs = resources.specs.filter((spec) => spec.id !== state?.current_spec_version_id);
   const availableAgents = useMemo(() => Array.from(new Set(displayWorkItems.map(assigneeLabel))).sort(), [displayWorkItems]);
-  const filterRoots = useMemo(() => catalog.flatMap((project) =>
-    project.root_work_item_id ? [{ id: project.root_work_item_id, title: project.title }] : []), [catalog]);
+  const filterRoots = useMemo(() => projectList.flatMap((project) => {
+    const root = project.resources.workItems.find((item) => item.kind === 'ROOT');
+    const name = validWorkItemSummary(root?.summary) || root?.title || projectTitle(project);
+    return root ? [{ id: root.id, title: `${name}（${root.id}）` }] : [];
+  }), [projectList]);
   const rootIdByItem = useMemo(() => new Map([...workItemProjects].map(([itemId, project]) => [
     itemId,
     project.resources.workItems.find((item) => item.kind === 'ROOT')?.id ?? '',
@@ -1113,6 +1120,7 @@ export function ApiWorkspace() {
               {workflowProgress && <div className="ff-page-alert ff-page-alert-progress"><Loader2 className="ff-spin" aria-hidden="true" /><span>{workflowProgress}</span></div>}
             </div>
           )}
+          {clipboardResult && <div className="ff-clipboard-status" role="status" aria-live="polite">{clipboardResult}</div>}
 
           {Object.entries(loadErrors).map(([sessionId, message]) => (
             <div key={sessionId} role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{message}。可点击“刷新看板”重试。</span></div>
@@ -1141,40 +1149,39 @@ export function ApiWorkspace() {
                       return (
                         <div
                           key={item.id}
-                          className={'ff-work-card ' + (selectedWorkItemId === item.id ? 'is-selected' : '') + (disabled ? ' is-disabled' : '')}
-                          role="button"
-                          tabIndex={disabled ? -1 : 0}
-                          aria-disabled={disabled}
-                          onClick={() => { if (!disabled) setSelectedWorkItemId(item.id); }}
-                          onKeyDown={(event) => {
-                            if (disabled) return;
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              setSelectedWorkItemId(item.id);
-                            }
-                          }}
+                          className={'ff-work-card ' + (selectedWorkItemId === item.id ? 'is-selected' : '')}
                         >
                           <div className="ff-card-tags">
-                            <span className="ff-item-id">#{item.id}</span>
+                            <CopyableWorkItemId id={item.id} onResult={setClipboardResult} />
                             <span className="ff-priority">{item.kind === 'ROOT' ? 'P0' : item.kind === 'MILESTONE' ? 'P1' : 'P2'}</span>
                             {item.kind === 'TASK' && <span className={`ff-card-status is-${workItemLane(item.status)}`}>{workItemStatusLabel(item.status)}</span>}
                             <span className="ff-card-kind">{item.kind === 'ROOT' ? 'Epic' : item.kind === 'MILESTONE' ? 'Milestone' : 'Subtask'}</span>
                           </div>
-                          <h3>{item.title || item.id}</h3>
-                          {projectList.length > 1 && item.kind !== 'ROOT' && <span className="ff-card-project">项目：{projectTitle(project)}</span>}
-                          <p>{item.objective || item.description || '未提供任务目标'}</p>
-                          {item.parent_id && <div className="ff-parent-link">产生自：#{item.parent_id}</div>}
-                          {item.kind === 'MILESTONE' && (
-                            <MilestoneTaskSummary
-                              milestoneId={item.id}
-                              workItems={project.resources.workItems}
-                            />
-                          )}
-                          <div className="ff-card-footer">
-                            <span className="ff-assignee"><i>{assigneeInitial(item)}</i>{assigneeLabel(item)}</span>
-                            <span className="ff-progress-label">{progress}%</span>
-                          </div>
-                          <div className="ff-progress-track"><span style={{ width: progress + '%' }} /></div>
+                          <button
+                            type="button"
+                            className={`ff-work-card-main${disabled ? ' is-disabled' : ''}`}
+                            disabled={disabled}
+                            onClick={() => setSelectedWorkItemId(item.id)}
+                          >
+                            <h3>{item.kind === 'ROOT' ? validWorkItemSummary(item.summary) || item.title || item.id : item.title || item.id}</h3>
+                            {projectList.length > 1 && item.kind !== 'ROOT' && <span className="ff-card-project">项目：{projectTitle(project)}</span>}
+                            <p>{item.kind === 'ROOT'
+                              ? [item.title, item.objective || item.description].filter((value, index, values) => Boolean(value) && values.indexOf(value) === index).join(' · ') || '未提供任务目标'
+                              : item.objective || item.description || '未提供任务目标'}</p>
+                            {item.parent_id && <div className="ff-parent-link">产生自：#{item.parent_id}</div>}
+                            {item.kind === 'MILESTONE' && (
+                              <MilestoneTaskSummary
+                                milestoneId={item.id}
+                                workItems={project.resources.workItems}
+                              />
+                            )}
+                            <div className="ff-card-footer">
+                              <span className="ff-assignee"><i>{assigneeInitial(item)}</i>{assigneeLabel(item)}</span>
+                              <span className="ff-progress-label">{progress}%</span>
+                            </div>
+                            <div className="ff-progress-track"><span style={{ width: progress + '%' }} /></div>
+                            <span className="ff-card-action">{disabled ? 'PRD 生成后可打开' : presentation.cardLabel}</span>
+                          </button>
                           {(item.available_actions ?? []).length > 0 && (
                             <div className="ff-card-exec" onClick={(event) => event.stopPropagation()}>
                               {(item.available_actions ?? []).map((action) => (
@@ -1190,7 +1197,6 @@ export function ApiWorkspace() {
                               ))}
                             </div>
                           )}
-                          <span className="ff-card-action">{disabled ? 'PRD 生成后可打开' : presentation.cardLabel}</span>
                         </div>
                       );
                     })}
@@ -1276,29 +1282,30 @@ export function ApiWorkspace() {
         <WorkItemDialog
           contentKey={selectedWorkItem.id}
           title={selectedWorkItem.kind === 'ROOT'
-            ? 'PRD 审核'
+            ? '项目需求详情'
             : selectedWorkItem.kind === 'MILESTONE'
               ? '里程碑详情'
               : '任务详情'}
           onClose={() => setSelectedWorkItemId(null)}
         >
-          {selectedWorkItem.kind === 'ROOT' && selectedProject && selectedSpec && (
-            <PrdReviewPanel
-              key={selectedWorkItem.id + ':' + selectedSpec.id}
-              fallbackSpec={selectedSpec}
-              wi={selectedWorkItem.id}
-              sessionState={selectedProject.state}
-              workflowBusy={busy}
-              onConfirmAndDecompose={confirmPrdAndDecompose}
-              onResourcesChanged={refreshCurrentResources}
-            />
-          )}
-          {selectedWorkItem.kind === 'ROOT' && !selectedSpec && (
-            <div className="ff-empty-detail">
-              <h2>{selectedWorkItem.title || selectedWorkItem.id}</h2>
-              <p>{selectedWorkItem.objective || selectedWorkItem.description}</p>
-              <p>当前任务尚未生成 PRD。</p>
-            </div>
+          {selectedWorkItem.kind === 'ROOT' && (
+            <RootWorkItemDetail item={selectedWorkItem} onCopyResult={setClipboardResult}>
+              {selectedProject && selectedSpec ? (
+                <PrdReviewPanel
+                  key={selectedWorkItem.id + ':' + selectedSpec.id}
+                  fallbackSpec={selectedSpec}
+                  wi={selectedWorkItem.id}
+                  sessionState={selectedProject.state}
+                  workflowBusy={busy}
+                  onConfirmAndDecompose={confirmPrdAndDecompose}
+                  onResourcesChanged={refreshCurrentResources}
+                />
+              ) : (
+                <div className="ff-empty-detail">
+                  <p>当前任务尚未生成 PRD。</p>
+                </div>
+              )}
+            </RootWorkItemDetail>
           )}
           {selectedWorkItem.kind === 'MILESTONE' && (
             <MilestoneTaskMonitor

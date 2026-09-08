@@ -249,6 +249,7 @@ class WorkItem(Base):
     department = Column(String, nullable=True)
     title = Column(String, nullable=True)
     description = Column(Text, nullable=True)
+    summary = Column(String, nullable=True)
     spec = Column(Text, nullable=True)
     status = Column(String, nullable=True, default="todo")
 
