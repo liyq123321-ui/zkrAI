@@ -18,6 +18,7 @@
 - UUID copy writes the raw UUID without the visual `#` prefix and never opens the card.
 - Root filter options display `summary（UUID）`, falling back to `original title（UUID）`.
 - Root detail order is UUID, summary, original detail, then the existing PRD review panel.
+- A root card body opens details only when PRD exists; without PRD the body remains disabled while its sibling UUID copy control stays enabled and fully visible.
 
 ---
 
@@ -412,9 +413,9 @@ Expected: component import and dialog-name assertions fail.
 
 Render an article containing, in order: the copyable UUID, `item.summary || item.title || item.id` as the main heading, a labeled `详情` block using `item.title || item.objective || item.description || '未提供项目需求详情'`, then the child PRD content. Style the top block consistently with the Milestone detail title bar without copying its dependency-monitor layout.
 
-- [ ] **Step 4: Integrate the wrapper around both PRD states**
+- [ ] **Step 4: Integrate the wrapper for roots with PRD**
 
-Change the root dialog title to `项目需求详情`. For a present spec, put the existing `PrdReviewPanel` inside `RootWorkItemDetail`. For a missing spec, put the existing `当前任务尚未生成 PRD。` state inside the same wrapper, so the UUID, summary, and original detail are always visible.
+Change the root dialog title to `项目需求详情`. For a present spec, put the existing `PrdReviewPanel` inside `RootWorkItemDetail`. For a missing spec, keep the card body disabled and do not open a dialog; keep the UUID copy control as an enabled, fully visible sibling outside the disabled body. Add regression coverage for both states.
 
 - [ ] **Step 5: Run focused tests and verify GREEN**
 

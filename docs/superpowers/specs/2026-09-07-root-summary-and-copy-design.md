@@ -60,7 +60,7 @@ Run this command once against the current local database as part of delivery. A 
 
 ## Project Requirement Detail
 
-Opening a root card changes the modal title from `PRD 审核` to `项目需求详情`. Content appears in this order:
+Opening a root card that has PRD content changes the modal title from `PRD 审核` to `项目需求详情`. Content appears in this order:
 
 1. Copyable root UUID.
 2. Root summary as the primary heading.
@@ -68,6 +68,8 @@ Opening a root card changes the modal title from `PRD 审核` to `项目需求�
 4. The existing PRD review panel and all of its current tabs, actions, review findings, and empty/error states.
 
 This wrapper is a focused `RootWorkItemDetail` component. It receives the root work item and renders the existing `PrdReviewPanel` as its lower content rather than duplicating PRD behavior.
+
+When a root has no PRD content, its card body remains disabled and does not open a modal. The UUID copy control remains an enabled sibling control with normal visual contrast, so copying is unaffected by the disabled card body.
 
 ## Error Handling and Fallbacks
 
@@ -83,7 +85,7 @@ This wrapper is a focused `RootWorkItemDetail` component. It receives the root w
 - Project-service tests prove PM analysis persists a new summary and updates it after clarification.
 - Backfill tests prove missing-only updates, non-overwrite behavior, per-project isolation, and result reporting.
 - Query/API tests prove `summary` is returned.
-- Frontend tests prove root cards use summary, retain the full original detail, root filter labels use `summary（UUID）`, UUID activation copies without opening a card, clipboard errors report failure, and the project detail ordering precedes PRD review.
+- Frontend tests prove root cards use summary, retain the full original detail, root filter labels use `summary（UUID）`, UUID activation copies without opening a card, clipboard errors report failure, roots without PRD keep only their body disabled, and the project detail ordering precedes PRD review when PRD exists.
 - Full backend and frontend suites, TypeScript checking, and the production frontend build must pass.
 
 ## Non-goals
@@ -100,4 +102,4 @@ This wrapper is a focused `RootWorkItemDetail` component. It receives the root w
 - Root Kanban headings show summaries while full requests remain visible in card detail text and the root detail modal.
 - Every Kanban card UUID can be copied independently of card navigation.
 - Root filter entries read `summary（UUID）`.
-- Root cards open `项目需求详情` with UUID, summary, original detail, then PRD review in that order.
+- Root cards with PRD open `项目需求详情` with UUID, summary, original detail, then PRD review in that order; roots without PRD keep the card body disabled while UUID copy remains available.
