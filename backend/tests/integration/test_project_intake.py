@@ -184,6 +184,8 @@ async def test_clarification_command_atomically_refreshes_existing_root_summary(
         assert root.title == complete_brief.final_objective
         assert root.objective == complete_brief.final_objective
         assert "summary" not in project.brief
+        audit = db.query(AuditEvent).filter_by(event_type="COMMAND_APPLIED").one()
+        assert audit.payload["brief_updated_fields"] == []
     assert [operation for operation, _ in agent.calls] == [
         "analyze_brief",
         "analyze_brief",

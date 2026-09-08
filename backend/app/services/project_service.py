@@ -351,7 +351,9 @@ class ProjectService:
                     created_resource_ids=created_ids,
                     audit_payload={
                         "brief_updated_fields": sorted(
-                            analysis.brief_updates.model_dump(exclude_none=True)
+                            analysis.brief_updates.model_dump(
+                                exclude_none=True, exclude={"summary"}
+                            )
                         ),
                     },
                 )
