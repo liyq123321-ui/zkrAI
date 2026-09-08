@@ -1427,6 +1427,47 @@ button:disabled {
   background: var(--ff-green);
 }
 
+.ff-card-exec {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ff-exec-btn {
+  min-height: 24px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.ff-exec-btn.is-start_task {
+  border-color: #1695f7;
+  background: #0c8aeb;
+  color: #fff;
+  box-shadow: 0 1px 2px rgb(31 91 145 / 18%);
+}
+
+.ff-exec-btn.is-start_task:hover:not(:disabled) {
+  border-color: #1695f7;
+  background: #0c8aeb;
+}
+
+.ff-exec-btn:focus-visible {
+  outline: 2px solid rgb(74 144 217 / 35%);
+  outline-offset: 2px;
+}
+
+.ff-exec-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .ff-card-action {
   display: block;
   margin-top: 7px;
