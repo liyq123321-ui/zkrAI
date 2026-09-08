@@ -33,4 +33,18 @@ describe('filterWorkItems', () => {
       search: '向量', selectedRootIds: ['root-a'], kind: 'TASK', agent: 'AI Agent',
     }, roots, assignee).map((item) => item.id)).toEqual(['task-a']);
   });
+
+  it('searches a valid displayed ROOT summary but ignores invalid runtime summaries', () => {
+    const summaries = [
+      { ...items[0], summary: '本地温度换算器' },
+      { ...items[1], summary: '不可用\n摘要' },
+    ];
+
+    expect(filterWorkItems(summaries, {
+      ...defaultWorkItemFilters(), search: '温度换算',
+    }, roots, assignee).map((item) => item.id)).toEqual(['root-a']);
+    expect(filterWorkItems(summaries, {
+      ...defaultWorkItemFilters(), search: '不可用',
+    }, roots, assignee)).toEqual([]);
+  });
 });

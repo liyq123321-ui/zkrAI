@@ -8,7 +8,7 @@ export function CopyableWorkItemId({ id, onResult }: {
     event.stopPropagation();
   };
 
-  async function copyId(event: MouseEvent<HTMLButtonElement>) {
+  async function copyId(event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>) {
     stopCardActivation(event);
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
@@ -19,13 +19,20 @@ export function CopyableWorkItemId({ id, onResult }: {
     }
   }
 
+  function copyFromKeyboard(event: KeyboardEvent<HTMLButtonElement>) {
+    stopCardActivation(event);
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    void copyId(event);
+  }
+
   return (
     <button
       type="button"
       className="ff-item-id"
       aria-label={`复制工单 UUID：${id}`}
       onClick={(event) => void copyId(event)}
-      onKeyDown={stopCardActivation}
+      onKeyDown={copyFromKeyboard}
     >
       #{id}
     </button>

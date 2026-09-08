@@ -1281,8 +1281,28 @@ button:disabled {
   box-shadow: 0 2px 6px rgb(36 93 157 / 12%);
 }
 
-.ff-work-card:disabled {
+.ff-work-card.is-disabled {
   opacity: 0.62;
+}
+
+.ff-work-card-main {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.ff-work-card-main:not(:disabled) {
+  cursor: pointer;
+}
+
+.ff-work-card-main:focus-visible {
+  outline: 2px solid #2b78cf;
+  outline-offset: 4px;
 }
 
 .ff-card-tags {
@@ -1379,7 +1399,7 @@ button:disabled {
   line-height: 1.45;
 }
 
-.ff-work-card > p {
+.ff-work-card-main > p {
   display: -webkit-box;
   overflow: hidden;
   margin: 6px 0 0;

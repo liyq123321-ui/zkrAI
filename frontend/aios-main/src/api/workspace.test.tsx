@@ -809,6 +809,42 @@ describe('workspace regression', () => {
       .getByRole('checkbox', { name: '本地温度换算器（root-1）' })).toBeTruthy();
   });
 
+  it('falls back from an invalid runtime summary in both ROOT card and root-task filter labels', async () => {
+    resourceOverrides['/sessions/session-1/work-items'] = [
+      {id:'root-1',parent_id:null,kind:'ROOT',title:'交付一个仅在本机运行的温度换算器',summary:'未修剪的摘要 ',objective:'输入摄氏温度并换算华氏温度',status:'in_progress',dependency_work_item_ids:[]},
+    ];
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+
+    const rootLane = await screen.findByRole('region', { name: '项目需求 (Root)' });
+    expect(within(rootLane).getByRole('heading', { name: '交付一个仅在本机运行的温度换算器' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
+    expect(within(screen.getByRole('group', { name: '主任务筛选' }))
+      .getByRole('checkbox', { name: '交付一个仅在本机运行的温度换算器（root-1）' })).toBeTruthy();
+  });
+
+  it('keeps UUID copying available when the adjacent PRD card action is disabled', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    resourceOverrides['/sessions/session-1/state'] = { ...state, current_spec_version_id: null };
+    resourceOverrides['/sessions/session-1/specs'] = [];
+    resourceOverrides['/sessions/session-1/work-items'] = [
+      {id:'root-1',parent_id:null,kind:'ROOT',title:'尚未生成 PRD 的项目',summary:'待生成 PRD 项目',objective:'等待生成 PRD',status:'in_progress',dependency_work_item_ids:[]},
+    ];
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+
+    const copyId = await screen.findByRole('button', { name: '复制工单 UUID：root-1' });
+    expect((copyId as HTMLButtonElement).disabled).toBe(false);
+    expect(copyId.parentElement?.closest('button')).toBeNull();
+    expect(copyId.parentElement?.closest('[role="button"]')).toBeNull();
+    fireEvent.click(copyId);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('root-1'));
+    expect(screen.getByRole('status').textContent).toBe('已复制 UUID：root-1');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('renders task dependencies as project swimlanes in the flow map', async () => {
     localStorage.setItem('firstflight.active-session-id','session-1');
     render(<ApiWorkspace />);

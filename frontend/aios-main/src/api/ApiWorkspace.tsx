@@ -31,6 +31,7 @@ import { AuditTrail } from './AuditTrail';
 import { AgentSpecDetail, type WorkItemPreview } from './AgentSpecDetail';
 import { MilestoneTaskMonitor, MilestoneTaskSummary } from './MilestoneTaskMonitor';
 import { CopyableWorkItemId } from './CopyableWorkItemId';
+import { validWorkItemSummary } from './workItemSummary';
 import { getEmployeeOptions } from './employeeDirectory';
 import { WorkItemDialog } from './WorkItemDialog';
 import { WorkItemFilterControls } from './WorkItemFilterControls';
@@ -297,7 +298,7 @@ export function ApiWorkspace() {
   const availableAgents = useMemo(() => Array.from(new Set(displayWorkItems.map(assigneeLabel))).sort(), [displayWorkItems]);
   const filterRoots = useMemo(() => projectList.flatMap((project) => {
     const root = project.resources.workItems.find((item) => item.kind === 'ROOT');
-    const name = root?.summary || root?.title || projectTitle(project);
+    const name = validWorkItemSummary(root?.summary) || root?.title || projectTitle(project);
     return root ? [{ id: root.id, title: `${name}（${root.id}）` }] : [];
   }), [projectList]);
   const rootIdByItem = useMemo(() => new Map([...workItemProjects].map(([itemId, project]) => [
@@ -1148,17 +1149,6 @@ export function ApiWorkspace() {
                         <div
                           key={item.id}
                           className={'ff-work-card ' + (selectedWorkItemId === item.id ? 'is-selected' : '') + (disabled ? ' is-disabled' : '')}
-                          role="button"
-                          tabIndex={disabled ? -1 : 0}
-                          aria-disabled={disabled}
-                          onClick={() => { if (!disabled) setSelectedWorkItemId(item.id); }}
-                          onKeyDown={(event) => {
-                            if (disabled) return;
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              setSelectedWorkItemId(item.id);
-                            }
-                          }}
                         >
                           <div className="ff-card-tags">
                             <CopyableWorkItemId id={item.id} onResult={setClipboardResult} />
@@ -1166,23 +1156,31 @@ export function ApiWorkspace() {
                             {item.kind === 'TASK' && <span className={`ff-card-status is-${workItemLane(item.status)}`}>{workItemStatusLabel(item.status)}</span>}
                             <span className="ff-card-kind">{item.kind === 'ROOT' ? 'Epic' : item.kind === 'MILESTONE' ? 'Milestone' : 'Subtask'}</span>
                           </div>
-                          <h3>{item.kind === 'ROOT' ? item.summary || item.title || item.id : item.title || item.id}</h3>
-                          {projectList.length > 1 && item.kind !== 'ROOT' && <span className="ff-card-project">项目：{projectTitle(project)}</span>}
-                          <p>{item.kind === 'ROOT'
-                            ? [item.title, item.objective || item.description].filter((value, index, values) => Boolean(value) && values.indexOf(value) === index).join(' · ') || '未提供任务目标'
-                            : item.objective || item.description || '未提供任务目标'}</p>
-                          {item.parent_id && <div className="ff-parent-link">产生自：#{item.parent_id}</div>}
-                          {item.kind === 'MILESTONE' && (
-                            <MilestoneTaskSummary
-                              milestoneId={item.id}
-                              workItems={project.resources.workItems}
-                            />
-                          )}
-                          <div className="ff-card-footer">
-                            <span className="ff-assignee"><i>{assigneeInitial(item)}</i>{assigneeLabel(item)}</span>
-                            <span className="ff-progress-label">{progress}%</span>
-                          </div>
-                          <div className="ff-progress-track"><span style={{ width: progress + '%' }} /></div>
+                          <button
+                            type="button"
+                            className="ff-work-card-main"
+                            disabled={disabled}
+                            onClick={() => setSelectedWorkItemId(item.id)}
+                          >
+                            <h3>{item.kind === 'ROOT' ? validWorkItemSummary(item.summary) || item.title || item.id : item.title || item.id}</h3>
+                            {projectList.length > 1 && item.kind !== 'ROOT' && <span className="ff-card-project">项目：{projectTitle(project)}</span>}
+                            <p>{item.kind === 'ROOT'
+                              ? [item.title, item.objective || item.description].filter((value, index, values) => Boolean(value) && values.indexOf(value) === index).join(' · ') || '未提供任务目标'
+                              : item.objective || item.description || '未提供任务目标'}</p>
+                            {item.parent_id && <div className="ff-parent-link">产生自：#{item.parent_id}</div>}
+                            {item.kind === 'MILESTONE' && (
+                              <MilestoneTaskSummary
+                                milestoneId={item.id}
+                                workItems={project.resources.workItems}
+                              />
+                            )}
+                            <div className="ff-card-footer">
+                              <span className="ff-assignee"><i>{assigneeInitial(item)}</i>{assigneeLabel(item)}</span>
+                              <span className="ff-progress-label">{progress}%</span>
+                            </div>
+                            <div className="ff-progress-track"><span style={{ width: progress + '%' }} /></div>
+                            <span className="ff-card-action">{disabled ? 'PRD 生成后可打开' : presentation.cardLabel}</span>
+                          </button>
                           {(item.available_actions ?? []).length > 0 && (
                             <div className="ff-card-exec" onClick={(event) => event.stopPropagation()}>
                               {(item.available_actions ?? []).map((action) => (
@@ -1198,7 +1196,6 @@ export function ApiWorkspace() {
                               ))}
                             </div>
                           )}
-                          <span className="ff-card-action">{disabled ? 'PRD 生成后可打开' : presentation.cardLabel}</span>
                         </div>
                       );
                     })}

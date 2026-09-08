@@ -1,4 +1,5 @@
 import type { WorkItemDto } from './dto';
+import { validWorkItemSummary } from './workItemSummary';
 
 export type WorkItemKindFilter = 'ALL' | NonNullable<WorkItemDto['kind']>;
 
@@ -39,7 +40,7 @@ export function filterWorkItems(
 
     if (!query) return true;
 
-    return [item.id, item.title, item.objective, item.description, assignee]
+    return [item.id, item.title, validWorkItemSummary(item.summary), item.objective, item.description, assignee]
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query));
   });
