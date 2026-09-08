@@ -836,7 +836,11 @@ describe('workspace regression', () => {
 
     const copyId = await screen.findByRole('button', { name: '复制工单 UUID：root-1' });
     const rootCard = screen.getByRole('button', { name: /待生成 PRD 项目.*PRD 生成后可打开/ });
+    const cardContainer = rootCard.closest('.ff-work-card');
+    expect(cardContainer).not.toBeNull();
     expect((rootCard as HTMLButtonElement).disabled).toBe(true);
+    expect(cardContainer!.classList.contains('is-disabled')).toBe(false);
+    expect(rootCard.classList.contains('is-disabled')).toBe(true);
     expect((copyId as HTMLButtonElement).disabled).toBe(false);
     expect(copyId.parentElement?.closest('button')).toBeNull();
     expect(copyId.parentElement?.closest('[role="button"]')).toBeNull();

@@ -1149,7 +1149,7 @@ export function ApiWorkspace() {
                       return (
                         <div
                           key={item.id}
-                          className={'ff-work-card ' + (selectedWorkItemId === item.id ? 'is-selected' : '') + (disabled ? ' is-disabled' : '')}
+                          className={'ff-work-card ' + (selectedWorkItemId === item.id ? 'is-selected' : '')}
                         >
                           <div className="ff-card-tags">
                             <CopyableWorkItemId id={item.id} onResult={setClipboardResult} />
@@ -1159,7 +1159,7 @@ export function ApiWorkspace() {
                           </div>
                           <button
                             type="button"
-                            className="ff-work-card-main"
+                            className={`ff-work-card-main${disabled ? ' is-disabled' : ''}`}
                             disabled={disabled}
                             onClick={() => setSelectedWorkItemId(item.id)}
                           >
