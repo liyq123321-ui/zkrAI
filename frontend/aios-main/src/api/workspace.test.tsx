@@ -501,7 +501,7 @@ describe('workspace regression', () => {
 
     // The old project's PRD remains bound to that project while the second chat is active.
     fireEvent.click(screen.getByRole('button',{name:/知识问答.*打开 PRD 审核/}));
-    const dialog = within(await screen.findByRole('dialog',{name:'PRD 审核'}));
+    const dialog = within(await screen.findByRole('dialog',{name:'项目需求详情'}));
     fireEvent.click(dialog.getByRole('button',{name:'正文'}));
     expect(await dialog.findByText('这是已保存的 PRD 正文。')).toBeTruthy();
     fireEvent.click(dialog.getByRole('button',{name:'关闭详情'}));
@@ -560,7 +560,7 @@ describe('workspace regression', () => {
     render(<ApiWorkspace />);
     await screen.findByRole('button',{name:/另一个项目.*PRD 生成后可打开/});
     fireEvent.click(await screen.findByRole('button',{name:/知识问答.*打开 PRD 审核/}));
-    const dialog = within(await screen.findByRole('dialog',{name:'PRD 审核'}));
+    const dialog = within(await screen.findByRole('dialog',{name:'项目需求详情'}));
     const confirm = dialog.getByRole('button',{name:'确认当前 PRD，进入任务拆分'});
     await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(confirm);
@@ -753,7 +753,7 @@ describe('workspace regression', () => {
     localStorage.setItem('firstflight.active-session-id','session-1');
     render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button',{name:/知识问答.*打开 PRD 审核/}));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('dialog', { name: '项目需求详情' });
     expect(within(dialog).getByRole('button',{name:'Diff'}).getAttribute('aria-pressed')).toBe('true');
     expect(await within(within(dialog).getByRole('region',{name:'PRD Diff'})).findByText('+这是已保存的 PRD 正文。')).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button',{name:'关闭详情'}));
@@ -835,6 +835,8 @@ describe('workspace regression', () => {
     render(<ApiWorkspace />);
 
     const copyId = await screen.findByRole('button', { name: '复制工单 UUID：root-1' });
+    const rootCard = screen.getByRole('button', { name: /待生成 PRD 项目.*PRD 生成后可打开/ });
+    expect((rootCard as HTMLButtonElement).disabled).toBe(true);
     expect((copyId as HTMLButtonElement).disabled).toBe(false);
     expect(copyId.parentElement?.closest('button')).toBeNull();
     expect(copyId.parentElement?.closest('[role="button"]')).toBeNull();
@@ -958,7 +960,7 @@ describe('workspace regression', () => {
 
     render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const dialog = within(await screen.findByRole('dialog', { name: '项目需求详情' }));
     const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
     await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
     vi.useFakeTimers();
@@ -1077,7 +1079,7 @@ describe('workspace regression', () => {
 
     render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const dialog = within(await screen.findByRole('dialog', { name: '项目需求详情' }));
     let decompose = dialog.getByRole('button', { name: '开始任务拆分' });
     await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
     vi.useFakeTimers();
@@ -1144,7 +1146,7 @@ describe('workspace regression', () => {
 
     render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const dialog = within(await screen.findByRole('dialog', { name: '项目需求详情' }));
     const approve = dialog.getByRole('button', { name: '确认当前 PRD，进入任务拆分' });
     await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
 
@@ -1212,7 +1214,7 @@ describe('workspace regression', () => {
 
     render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const dialog = within(await screen.findByRole('dialog', { name: '项目需求详情' }));
     let decompose = dialog.getByRole('button', { name: '开始任务拆分' });
     await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
 
@@ -1325,7 +1327,7 @@ describe('workspace regression', () => {
     };
     render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const dialog = within(await screen.findByRole('dialog', { name: '项目需求详情' }));
     const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
     await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
     vi.useFakeTimers();
@@ -1384,7 +1386,7 @@ describe('workspace regression', () => {
     };
     const view = render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const dialog = within(await screen.findByRole('dialog', { name: '项目需求详情' }));
     const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
     await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
     vi.useFakeTimers();
@@ -1425,7 +1427,7 @@ describe('workspace regression', () => {
     };
     render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const dialog = within(await screen.findByRole('dialog', { name: '项目需求详情' }));
     const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
     await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
     vi.useFakeTimers();
@@ -1526,7 +1528,7 @@ describe('workspace regression', () => {
     };
     render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const dialog = within(await screen.findByRole('dialog', { name: '项目需求详情' }));
     const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
     await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
     const delayedRefresh = deferred();
@@ -1573,7 +1575,7 @@ describe('workspace regression', () => {
     };
     const view = render(<ApiWorkspace />);
     fireEvent.click(await screen.findByRole('button', { name: /知识问答.*打开 PRD 审核/ }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'PRD 审核' }));
+    const dialog = within(await screen.findByRole('dialog', { name: '项目需求详情' }));
     const decompose = dialog.getByRole('button', { name: '开始任务拆分' });
     await waitFor(() => expect((decompose as HTMLButtonElement).disabled).toBe(false));
     const delayedRefresh = deferred();

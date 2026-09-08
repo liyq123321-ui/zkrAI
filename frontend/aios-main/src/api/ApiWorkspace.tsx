@@ -31,6 +31,7 @@ import { AuditTrail } from './AuditTrail';
 import { AgentSpecDetail, type WorkItemPreview } from './AgentSpecDetail';
 import { MilestoneTaskMonitor, MilestoneTaskSummary } from './MilestoneTaskMonitor';
 import { CopyableWorkItemId } from './CopyableWorkItemId';
+import { RootWorkItemDetail } from './RootWorkItemDetail';
 import { validWorkItemSummary } from './workItemSummary';
 import { getEmployeeOptions } from './employeeDirectory';
 import { WorkItemDialog } from './WorkItemDialog';
@@ -1281,29 +1282,30 @@ export function ApiWorkspace() {
         <WorkItemDialog
           contentKey={selectedWorkItem.id}
           title={selectedWorkItem.kind === 'ROOT'
-            ? 'PRD 审核'
+            ? '项目需求详情'
             : selectedWorkItem.kind === 'MILESTONE'
               ? '里程碑详情'
               : '任务详情'}
           onClose={() => setSelectedWorkItemId(null)}
         >
-          {selectedWorkItem.kind === 'ROOT' && selectedProject && selectedSpec && (
-            <PrdReviewPanel
-              key={selectedWorkItem.id + ':' + selectedSpec.id}
-              fallbackSpec={selectedSpec}
-              wi={selectedWorkItem.id}
-              sessionState={selectedProject.state}
-              workflowBusy={busy}
-              onConfirmAndDecompose={confirmPrdAndDecompose}
-              onResourcesChanged={refreshCurrentResources}
-            />
-          )}
-          {selectedWorkItem.kind === 'ROOT' && !selectedSpec && (
-            <div className="ff-empty-detail">
-              <h2>{selectedWorkItem.title || selectedWorkItem.id}</h2>
-              <p>{selectedWorkItem.objective || selectedWorkItem.description}</p>
-              <p>当前任务尚未生成 PRD。</p>
-            </div>
+          {selectedWorkItem.kind === 'ROOT' && (
+            <RootWorkItemDetail item={selectedWorkItem} onCopyResult={setClipboardResult}>
+              {selectedProject && selectedSpec ? (
+                <PrdReviewPanel
+                  key={selectedWorkItem.id + ':' + selectedSpec.id}
+                  fallbackSpec={selectedSpec}
+                  wi={selectedWorkItem.id}
+                  sessionState={selectedProject.state}
+                  workflowBusy={busy}
+                  onConfirmAndDecompose={confirmPrdAndDecompose}
+                  onResourcesChanged={refreshCurrentResources}
+                />
+              ) : (
+                <div className="ff-empty-detail">
+                  <p>当前任务尚未生成 PRD。</p>
+                </div>
+              )}
+            </RootWorkItemDetail>
           )}
           {selectedWorkItem.kind === 'MILESTONE' && (
             <MilestoneTaskMonitor

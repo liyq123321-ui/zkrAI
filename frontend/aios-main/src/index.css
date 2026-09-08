@@ -2473,6 +2473,18 @@ button:disabled {
   font-size: 10px;
 }
 
+.ff-root-detail {
+  color: #263244;
+}
+
+.ff-root-detail-description p {
+  white-space: pre-wrap;
+}
+
+.ff-root-detail-prd {
+  margin-top: 18px;
+}
+
 .ff-spec-objective {
   display: flex;
   gap: 10px;
