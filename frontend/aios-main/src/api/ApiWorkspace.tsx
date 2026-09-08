@@ -30,6 +30,7 @@ import { AgentRuntimePanel } from './AgentRuntimePanel';
 import { AuditTrail } from './AuditTrail';
 import { AgentSpecDetail, type WorkItemPreview } from './AgentSpecDetail';
 import { MilestoneTaskMonitor, MilestoneTaskSummary } from './MilestoneTaskMonitor';
+import { CopyableWorkItemId } from './CopyableWorkItemId';
 import { getEmployeeOptions } from './employeeDirectory';
 import { WorkItemDialog } from './WorkItemDialog';
 import { WorkItemFilterControls } from './WorkItemFilterControls';
@@ -210,6 +211,7 @@ export function ApiWorkspace() {
   const [chatOpen, setChatOpen] = useState(true);
   const [kanbanFilters, setKanbanFilters] = useState(defaultWorkItemFilters);
   const [flowFilters, setFlowFilters] = useState(defaultWorkItemFilters);
+  const [clipboardResult, setClipboardResult] = useState<string | null>(null);
   const pendingCommandIds = useRef(new Map<string, string>());
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const decompositionLifecycles = useRef(new Set<AbortController>());
@@ -293,8 +295,11 @@ export function ApiWorkspace() {
 
   const historicalSpecs = resources.specs.filter((spec) => spec.id !== state?.current_spec_version_id);
   const availableAgents = useMemo(() => Array.from(new Set(displayWorkItems.map(assigneeLabel))).sort(), [displayWorkItems]);
-  const filterRoots = useMemo(() => catalog.flatMap((project) =>
-    project.root_work_item_id ? [{ id: project.root_work_item_id, title: project.title }] : []), [catalog]);
+  const filterRoots = useMemo(() => projectList.flatMap((project) => {
+    const root = project.resources.workItems.find((item) => item.kind === 'ROOT');
+    const name = root?.summary || root?.title || projectTitle(project);
+    return root ? [{ id: root.id, title: `${name}（${root.id}）` }] : [];
+  }), [projectList]);
   const rootIdByItem = useMemo(() => new Map([...workItemProjects].map(([itemId, project]) => [
     itemId,
     project.resources.workItems.find((item) => item.kind === 'ROOT')?.id ?? '',
@@ -1113,6 +1118,7 @@ export function ApiWorkspace() {
               {workflowProgress && <div className="ff-page-alert ff-page-alert-progress"><Loader2 className="ff-spin" aria-hidden="true" /><span>{workflowProgress}</span></div>}
             </div>
           )}
+          {clipboardResult && <div className="ff-clipboard-status" role="status" aria-live="polite">{clipboardResult}</div>}
 
           {Object.entries(loadErrors).map(([sessionId, message]) => (
             <div key={sessionId} role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{message}。可点击“刷新看板”重试。</span></div>
@@ -1155,14 +1161,16 @@ export function ApiWorkspace() {
                           }}
                         >
                           <div className="ff-card-tags">
-                            <span className="ff-item-id">#{item.id}</span>
+                            <CopyableWorkItemId id={item.id} onResult={setClipboardResult} />
                             <span className="ff-priority">{item.kind === 'ROOT' ? 'P0' : item.kind === 'MILESTONE' ? 'P1' : 'P2'}</span>
                             {item.kind === 'TASK' && <span className={`ff-card-status is-${workItemLane(item.status)}`}>{workItemStatusLabel(item.status)}</span>}
                             <span className="ff-card-kind">{item.kind === 'ROOT' ? 'Epic' : item.kind === 'MILESTONE' ? 'Milestone' : 'Subtask'}</span>
                           </div>
-                          <h3>{item.title || item.id}</h3>
+                          <h3>{item.kind === 'ROOT' ? item.summary || item.title || item.id : item.title || item.id}</h3>
                           {projectList.length > 1 && item.kind !== 'ROOT' && <span className="ff-card-project">项目：{projectTitle(project)}</span>}
-                          <p>{item.objective || item.description || '未提供任务目标'}</p>
+                          <p>{item.kind === 'ROOT'
+                            ? [item.title, item.objective || item.description].filter((value, index, values) => Boolean(value) && values.indexOf(value) === index).join(' · ') || '未提供任务目标'
+                            : item.objective || item.description || '未提供任务目标'}</p>
                           {item.parent_id && <div className="ff-parent-link">产生自：#{item.parent_id}</div>}
                           {item.kind === 'MILESTONE' && (
                             <MilestoneTaskSummary

@@ -89,7 +89,7 @@ beforeEach(() => {
       '/sessions/session-1/state':state,
       '/sessions/session-1/specs':[spec],
       '/sessions/session-1/work-items':[
-        {id:'root-1',parent_id:null,kind:'ROOT',title:'知识问答',description:null,objective:'回答问题',status:'in_progress',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:null,responsible_role:'Owner',suggested_assignee:'owner-1',dependency_work_item_ids:[]},
+        {id:'root-1',parent_id:null,kind:'ROOT',title:'知识问答',summary:'知识问答助手',description:null,objective:'回答问题',status:'in_progress',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:null,responsible_role:'Owner',suggested_assignee:'owner-1',dependency_work_item_ids:[]},
         {id:'task-todo',parent_id:'root-1',kind:'TASK',title:'实现问答 API',description:null,objective:'提供问答接口',status:'todo',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:['FastAPI'],responsible_role:'Backend Engineer',suggested_assignee:'Backend Agent',dependency_work_item_ids:[]},
         {id:'task-running',parent_id:'root-1',kind:'TASK',title:'构建检索流程',description:null,objective:'接入检索能力',status:'in_progress',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:['Retrieval'],responsible_role:'AI Engineer',suggested_assignee:'AI Agent',dependency_work_item_ids:['task-todo']},
         {id:'task-done',parent_id:'root-1',kind:'TASK',title:'定义验收用例',description:null,objective:'建立测试基线',status:'completed',scope:[],exclusions:[],outputs:null,acceptance_criteria:null,required_skills:['Testing'],responsible_role:'QA Engineer',suggested_assignee:'QA Agent',dependency_work_item_ids:[]},
@@ -258,8 +258,8 @@ describe('workspace regression', () => {
     fireEvent.change(screen.getByRole('combobox', { name: '搜索工单执行者' }), { target: { value: 'owner-1' } });
     fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
     let rootFilter = within(screen.getByRole('group', { name: '主任务筛选' }));
-    fireEvent.click(rootFilter.getByRole('checkbox', { name: '客户支持助手' }));
-    fireEvent.keyDown(rootFilter.getByRole('checkbox', { name: '客户支持助手' }), { key: 'Escape' });
+    fireEvent.click(rootFilter.getByRole('checkbox', { name: '客户支持助手（root-2）' }));
+    fireEvent.keyDown(rootFilter.getByRole('checkbox', { name: '客户支持助手（root-2）' }), { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: /DAG Flow Map/ }));
 
     const flowSearch = screen.getByRole('textbox', { name: '搜索流转图工单' });
@@ -272,8 +272,8 @@ describe('workspace regression', () => {
     fireEvent.change(screen.getByRole('combobox', { name: '搜索流转图工单执行者' }), { target: { value: 'AI Agent' } });
     fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
     rootFilter = within(screen.getByRole('group', { name: '主任务筛选' }));
-    fireEvent.click(rootFilter.getByRole('checkbox', { name: '知识问答' }));
-    fireEvent.keyDown(rootFilter.getByRole('checkbox', { name: '知识问答' }), { key: 'Escape' });
+    fireEvent.click(rootFilter.getByRole('checkbox', { name: '知识问答助手（root-1）' }));
+    fireEvent.keyDown(rootFilter.getByRole('checkbox', { name: '知识问答助手（root-1）' }), { key: 'Escape' });
 
     fireEvent.click(screen.getByRole('button', { name: /Kanban Board/ }));
     expect((screen.getByRole('textbox', { name: '搜索工单' }) as HTMLInputElement).value).toBe('问答');
@@ -281,17 +281,17 @@ describe('workspace regression', () => {
     expect((screen.getByRole('combobox', { name: '搜索工单执行者' }) as HTMLSelectElement).value).toBe('owner-1');
     fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
     rootFilter = within(screen.getByRole('group', { name: '主任务筛选' }));
-    expect((rootFilter.getByRole('checkbox', { name: '知识问答' }) as HTMLInputElement).checked).toBe(true);
-    expect((rootFilter.getByRole('checkbox', { name: '客户支持助手' }) as HTMLInputElement).checked).toBe(false);
-    fireEvent.keyDown(rootFilter.getByRole('checkbox', { name: '知识问答' }), { key: 'Escape' });
+    expect((rootFilter.getByRole('checkbox', { name: '知识问答助手（root-1）' }) as HTMLInputElement).checked).toBe(true);
+    expect((rootFilter.getByRole('checkbox', { name: '客户支持助手（root-2）' }) as HTMLInputElement).checked).toBe(false);
+    fireEvent.keyDown(rootFilter.getByRole('checkbox', { name: '知识问答助手（root-1）' }), { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: /DAG Flow Map/ }));
     expect((screen.getByRole('textbox', { name: '搜索流转图工单' }) as HTMLInputElement).value).toBe('检索');
     expect((screen.getByRole('combobox', { name: '搜索流转图工单类型' }) as HTMLSelectElement).value).toBe('TASK');
     expect((screen.getByRole('combobox', { name: '搜索流转图工单执行者' }) as HTMLSelectElement).value).toBe('AI Agent');
     fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
     rootFilter = within(screen.getByRole('group', { name: '主任务筛选' }));
-    expect((rootFilter.getByRole('checkbox', { name: '知识问答' }) as HTMLInputElement).checked).toBe(false);
-    expect((rootFilter.getByRole('checkbox', { name: '客户支持助手' }) as HTMLInputElement).checked).toBe(true);
+    expect((rootFilter.getByRole('checkbox', { name: '知识问答助手（root-1）' }) as HTMLInputElement).checked).toBe(false);
+    expect((rootFilter.getByRole('checkbox', { name: '客户支持助手（root-2）' }) as HTMLInputElement).checked).toBe(true);
   });
 
   it('normalizes invalid agents in both filter states after available agents change', async () => {
@@ -447,17 +447,17 @@ describe('workspace regression', () => {
     fireEvent.click(screen.getByRole('button',{name:'筛选主任务'}));
     const filter = within(screen.getByRole('group',{name:'主任务筛选'}));
     expect(filter.getAllByRole('checkbox')).toHaveLength(2);
-    fireEvent.click(filter.getByRole('checkbox',{name:'知识问答'}));
+    fireEvent.click(filter.getByRole('checkbox',{name:'知识问答助手（root-1）'}));
     expect(screen.queryByRole('button',{name:/知识问答.*打开 PRD 审核/})).toBeNull();
     expect(screen.queryByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeNull();
     expect(screen.getByRole('button',{name:/支持流程里程碑.*查看规划详情/})).toBeTruthy();
     expect(screen.getByRole('button',{name:/处理客服工单.*查看规划详情/})).toBeTruthy();
-    fireEvent.click(filter.getByRole('checkbox',{name:'知识问答'}));
+    fireEvent.click(filter.getByRole('checkbox',{name:'知识问答助手（root-1）'}));
     expect(screen.getByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeTruthy();
     fireEvent.click(filter.getByRole('button',{name:'清空选择'}));
     expect(screen.queryByRole('button',{name:/处理客服工单.*查看规划详情/})).toBeNull();
-    fireEvent.click(filter.getByRole('checkbox',{name:'客户支持助手'}));
-    fireEvent.keyDown(filter.getByRole('checkbox',{name:'客户支持助手'}),{key:'Escape'});
+    fireEvent.click(filter.getByRole('checkbox',{name:'客户支持助手（root-2）'}));
+    fireEvent.keyDown(filter.getByRole('checkbox',{name:'客户支持助手（root-2）'}),{key:'Escape'});
     fireEvent.click(screen.getByRole('button',{name:'规划新主工单'}));
     expect(screen.getByRole('button',{name:/处理客服工单.*查看规划详情/})).toBeTruthy();
     expect(screen.queryByRole('button',{name:/实现问答 API.*查看任务 Spec/})).toBeNull();
@@ -788,6 +788,27 @@ describe('workspace regression', () => {
     expect(within(dialog).queryByText(/"objective"/)).toBeNull();
   });
 
+  it('uses a root summary on the board and in the root-task filter without renaming child work items', async () => {
+    resourceOverrides['/sessions/session-1/work-items'] = [
+      {id:'root-1',parent_id:null,kind:'ROOT',title:'交付一个仅在本机运行的温度换算器',summary:'本地温度换算器',objective:'输入摄氏温度并换算华氏温度',status:'in_progress',dependency_work_item_ids:[]},
+      {id:'milestone-1',parent_id:'root-1',kind:'MILESTONE',title:'完成界面交付',objective:'交付换算界面',status:'in_progress',dependency_work_item_ids:[]},
+      {id:'task-1',parent_id:'milestone-1',kind:'TASK',title:'实现换算按钮',objective:'完成公式计算',status:'todo',dependency_work_item_ids:[]},
+    ];
+    localStorage.setItem('firstflight.active-session-id','session-1');
+    render(<ApiWorkspace />);
+
+    const rootLane = await screen.findByRole('region', { name: '项目需求 (Root)' });
+    const rootCard = within(rootLane).getByRole('button', { name: /本地温度换算器.*打开 PRD 审核/ });
+    expect(within(rootCard).getByRole('heading', { name: '本地温度换算器' })).toBeTruthy();
+    expect(within(rootCard).getByText(/交付一个仅在本机运行的温度换算器/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /完成界面交付.*查看规划详情/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /实现换算按钮.*查看规划详情/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
+    expect(within(screen.getByRole('group', { name: '主任务筛选' }))
+      .getByRole('checkbox', { name: '本地温度换算器（root-1）' })).toBeTruthy();
+  });
+
   it('renders task dependencies as project swimlanes in the flow map', async () => {
     localStorage.setItem('firstflight.active-session-id','session-1');
     render(<ApiWorkspace />);
@@ -847,7 +868,7 @@ describe('workspace regression', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '筛选主任务' }));
     const filter = within(screen.getByRole('group', { name: '主任务筛选' }));
-    fireEvent.click(filter.getByRole('checkbox', { name: '知识问答' }));
+    fireEvent.click(filter.getByRole('checkbox', { name: '知识问答助手（root-1）' }));
 
     expect(screen.queryByRole('button', { name: /知识问答.*Owner/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /实现问答 API/ })).toBeNull();

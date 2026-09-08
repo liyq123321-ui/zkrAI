@@ -9,6 +9,7 @@ const item: WorkItemDto = {
   parent_id: 'milestone-1',
   kind: 'TASK',
   title: '实现 Session API',
+  summary: null,
   description: null,
   objective: '提供受工作流保护的 API',
   status: 'todo',

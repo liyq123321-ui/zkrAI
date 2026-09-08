@@ -18,6 +18,7 @@ function item(
     parent_id: parentId,
     kind,
     title: id,
+    summary: null,
     description: null,
     objective: null,
     status,

@@ -31,7 +31,7 @@ const spec: SpecVersionDto = {
   created_at: '2026-09-03T02:44:00Z', reviews: [],
 };
 const root: WorkItemDto = {
-  id: 'root-1', parent_id: null, kind: 'ROOT', title: '知识问答', description: null,
+  id: 'root-1', parent_id: null, kind: 'ROOT', title: '知识问答', summary: null, description: null,
   objective: '回答问题', scope: [], exclusions: [], outputs: null, acceptance_criteria: null,
   required_skills: null, responsible_role: 'Owner', suggested_assignee: 'owner-1',
   dependency_work_item_ids: [],

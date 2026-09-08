@@ -1302,6 +1302,36 @@ button:disabled {
   font: 700 9px/13px ui-monospace, monospace;
 }
 
+.ff-item-id {
+  cursor: copy;
+}
+
+.ff-item-id:hover {
+  border-color: #8eadd0;
+  background: #eef5fc;
+  color: #23598e;
+}
+
+.ff-item-id:focus-visible {
+  outline: 2px solid #2b78cf;
+  outline-offset: 2px;
+}
+
+.ff-clipboard-status {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 80;
+  max-width: min(360px, calc(100vw - 40px));
+  padding: 8px 11px;
+  border: 1px solid #b9d1ea;
+  border-radius: 6px;
+  background: #f2f8ff;
+  box-shadow: 0 3px 12px rgb(31 68 105 / 18%);
+  color: #225987;
+  font-size: 11px;
+}
+
 .ff-priority {
   background: #fff;
   color: #273246;
