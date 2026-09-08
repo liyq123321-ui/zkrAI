@@ -109,12 +109,15 @@ class ProjectSummaryBackfill:
                 failed[project_id] = self._error_message(error)
                 continue
 
-            with self._session_factory() as db:
-                current = db.get(WorkItem, root_id)
-                if current is not None and self._is_valid_summary(current.summary):
-                    skipped.append(project_id)
-                else:
-                    failed[project_id] = "ROOT summary changed before update"
+            try:
+                with self._session_factory() as db:
+                    current = db.get(WorkItem, root_id)
+                    if current is not None and self._is_valid_summary(current.summary):
+                        skipped.append(project_id)
+                    else:
+                        failed[project_id] = "ROOT summary changed before update"
+            except Exception as error:
+                failed[project_id] = self._error_message(error)
 
         return SummaryBackfillResult(updated=updated, skipped=skipped, failed=failed)
 

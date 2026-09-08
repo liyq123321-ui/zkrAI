@@ -282,6 +282,65 @@ async def test_backfill_commit_failure_does_not_stop_later_project(
 
 
 @pytest.mark.asyncio
+async def test_backfill_cas_reread_failure_does_not_stop_later_project(
+    tmp_path, monkeypatch
+):
+    target_engine = create_engine_for_url(f"sqlite:///{tmp_path / 'cas-reread.sqlite'}")
+    Base.metadata.create_all(target_engine)
+    target_session_factory = make_session_factory(target_engine)
+    with target_session_factory() as db:
+        failed_project, failed_root = _add_project(db, "project-a-cas-reread-fails")
+        later_project, later_root = _add_project(db, "project-b-later")
+
+    cas_miss_injected = False
+    reread_failed = False
+
+    def change_summary_at_first_update(
+        connection, cursor, statement, parameters, context, executemany
+    ):
+        nonlocal cas_miss_injected
+        if cas_miss_injected or not statement.lstrip().upper().startswith(
+            "UPDATE WORK_ITEMS"
+        ):
+            return
+        cas_miss_injected = True
+        with target_engine.begin() as competing_connection:
+            competing_connection.execute(
+                update(WorkItem)
+                .where(WorkItem.id == failed_root.id)
+                .values(summary="并发\n无效摘要")
+            )
+
+    real_get = target_session_factory.class_.get
+
+    def fail_cas_reread(session, entity, ident, **kwargs):
+        nonlocal reread_failed
+        if cas_miss_injected and not reread_failed and ident == failed_root.id:
+            reread_failed = True
+            raise RuntimeError("CAS conflict reread failed")
+        return real_get(session, entity, ident, **kwargs)
+
+    event.listen(target_engine, "before_cursor_execute", change_summary_at_first_update)
+    monkeypatch.setattr(target_session_factory.class_, "get", fail_cas_reread)
+    agent = BackfillAgent([_analysis("首次项目摘要"), _analysis("后续项目摘要")])
+    try:
+        result = await ProjectSummaryBackfill(target_session_factory, agent).run()
+    finally:
+        event.remove(
+            target_engine, "before_cursor_execute", change_summary_at_first_update
+        )
+
+    assert cas_miss_injected is True
+    assert reread_failed is True
+    assert result.updated == [later_project.id]
+    assert result.skipped == []
+    assert result.failed == {failed_project.id: "CAS conflict reread failed"}
+    with target_session_factory() as db:
+        assert db.get(WorkItem, failed_root.id).summary == "并发\n无效摘要"
+        assert db.get(WorkItem, later_root.id).summary == "后续项目摘要"
+
+
+@pytest.mark.asyncio
 async def test_backfill_ignores_non_root_work_items(session_factory, db_session):
     project, task = _add_project(db_session, "project-task-only", kind="TASK")
     agent = BackfillAgent([])
