@@ -39,9 +39,11 @@ def create_app(
     """Build an application whose runtime dependencies can be safely injected."""
 
     settings = settings or Settings.from_env()
-    agent_gateway = agent_gateway or CodexAgentGateway(settings=settings)
     uses_runtime_database = session_factory is None
     session_factory = session_factory or SessionLocal
+    agent_gateway = agent_gateway or CodexAgentGateway(
+        settings=settings, session_factory=session_factory
+    )
     if auto_bind_prd_review is None:
         auto_bind_prd_review = uses_runtime_database
     owns_gitea_client = gitea_client is None

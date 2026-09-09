@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 import shutil
 import sys
@@ -13,9 +13,15 @@ import tempfile
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
+from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.agents.progress import report_agent_progress
+from app.services.agent_runtime_events import (
+    AgentRuntimeEventStore,
+    bind_agent_runtime_context,
+    current_agent_runtime_context,
+)
 from app.domain.implementation_plan import ImplementationPlan
 from app.agents.output_validation import OutputConsistencyError, merge_breakdown_revision, validate_node_output
 from app.domain.types import (
@@ -145,8 +151,13 @@ def build_strict_output_schema(output_type: type[BaseModel]) -> dict[str, object
 class CodexStructuredRunner:
     """Run Codex with a Pydantic schema and validate its final message."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        runtime_event_store: AgentRuntimeEventStore | None = None,
+    ) -> None:
         self.settings = settings or Settings.from_env()
+        self.runtime_event_store = runtime_event_store
 
     async def run(
         self, prompt: str, output_type: type[ModelT], cwd: Path,
@@ -158,6 +169,13 @@ class CodexStructuredRunner:
         last_error: ValidationError | OutputConsistencyError | None = None
 
         for attempt in range(3):
+            self._persist_runtime_event(
+                {
+                    "type": "attempt.started",
+                    "message": f"第 {attempt + 1} 次结构化生成尝试",
+                    "attempt": attempt + 1,
+                }
+            )
             try:
                 output = await self._run_once(
                     repair_prompt,
@@ -177,6 +195,15 @@ class CodexStructuredRunner:
                 logger.warning("Agent output validation failed: contract=%s attempt=%s codes=%s",
                                output_type.__name__, attempt + 1,
                                [item.get("code", item.get("type")) for item in findings])
+                self._persist_runtime_event(
+                    {
+                        "type": "validation.warning",
+                        "message": "结构化结果未通过校验，Codex 将按诊断自动修复。",
+                        "attempt": attempt + 1,
+                        "contract": output_type.__name__,
+                        "findings": findings,
+                    }
+                )
                 if attempt == 2:
                     break
                 repair_prompt = (
@@ -188,11 +215,28 @@ class CodexStructuredRunner:
                     + json.dumps({"previous_response": output, "validation_errors": findings}, ensure_ascii=False)
                     + "\n</non_control_input>\n"
                 )
+            except (AgentExecutionError, AgentOutputError) as error:
+                self._persist_runtime_event(
+                    {
+                        "type": "runtime.error",
+                        "status": "failed",
+                        "message": str(error),
+                    }
+                )
+                raise
 
-        raise AgentOutputError(
+        final_error = AgentOutputError(
             "Codex returned invalid output after 3 attempts: "
             f"{last_error}"
         )
+        self._persist_runtime_event(
+            {
+                "type": "runtime.error",
+                "status": "failed",
+                "message": str(final_error),
+            }
+        )
+        raise final_error
 
     async def _run_once(
         self,
@@ -301,6 +345,11 @@ class CodexStructuredRunner:
                 assert process.stderr is not None
                 while chunk := await process.stderr.read(4096):
                     self._append_diagnostic(stderr, chunk)
+                    diagnostic = chunk.decode("utf-8", errors="replace").strip()
+                    if diagnostic:
+                        self._persist_runtime_event(
+                            {"type": "stderr", "message": diagnostic}
+                        )
 
             stdout_task = asyncio.create_task(read_stdout())
             stderr_task = asyncio.create_task(read_stderr())
@@ -388,7 +437,11 @@ class CodexStructuredRunner:
                     "Codex did not write its final structured output; JSONL output: "
                     f"{jsonl}"
                 )
-            return output_path.read_text(encoding="utf-8")
+            output = output_path.read_text(encoding="utf-8")
+            self._persist_runtime_event(
+                {"type": "structured_output", "message": output}
+            )
+            return output
 
     @staticmethod
     def _append_diagnostic(buffer: bytearray, chunk: bytes) -> None:
@@ -398,15 +451,21 @@ class CodexStructuredRunner:
         if len(buffer) > 12000:
             del buffer[:-12000]
 
-    @staticmethod
-    def _report_jsonl_progress(line: bytes) -> None:
-        """Map Codex events to fixed public-safe messages."""
+    def _report_jsonl_progress(self, line: bytes) -> None:
+        """Persist the safe JSONL event and update the compact progress status."""
 
         try:
             event = json.loads(line)
         except (UnicodeDecodeError, json.JSONDecodeError):
+            diagnostic = line.decode("utf-8", errors="replace").strip()
+            if diagnostic:
+                self._persist_runtime_event(
+                    {"type": "stdout", "message": diagnostic}
+                )
             return
         event_type = event.get("type") if isinstance(event, dict) else None
+        if isinstance(event, dict):
+            self._persist_runtime_event(event)
         progress = {
             "thread.started": ("model_started", "模型任务已连接。"),
             "turn.started": ("model_reasoning", "模型正在生成结构化结果。"),
@@ -416,6 +475,11 @@ class CodexStructuredRunner:
         }.get(event_type)
         if progress is not None:
             report_agent_progress(*progress)
+
+    def _persist_runtime_event(self, event: Mapping[str, object]) -> None:
+        context = current_agent_runtime_context()
+        if self.runtime_event_store is not None and context is not None:
+            self.runtime_event_store.append(context, event)
 
     @staticmethod
     async def _terminate_and_reap(process: asyncio.subprocess.Process) -> None:
@@ -447,9 +511,20 @@ class CodexAgentGateway:
         self,
         runner: CodexStructuredRunner | None = None,
         settings: Settings | None = None,
+        session_factory: Callable[[], Session] | None = None,
     ) -> None:
         self.settings = settings or Settings.from_env()
-        self.runner = runner or CodexStructuredRunner(self.settings)
+        self.runtime_event_store = (
+            AgentRuntimeEventStore(session_factory) if session_factory is not None else None
+        )
+        self.runner = runner or CodexStructuredRunner(
+            self.settings, runtime_event_store=self.runtime_event_store
+        )
+
+    async def recommend_lifecycle(self, payload: dict[str, object]):
+        from app.domain.sdlc import LifecycleAssessment
+
+        return await self._run_node("pm_recommend_lifecycle", payload, LifecycleAssessment)
 
     async def analyze_brief(self, payload: dict[str, object]) -> ClarificationAnalysis:
         return await self._run_node("pm_analyze", payload, ClarificationAnalysis)
@@ -515,17 +590,35 @@ class CodexAgentGateway:
             ("drawio-skill",) if node_name in PRD_DRAWIO_NODES else ()
         )
         use_magic_mcp = node_name == "pm_generate_prototype"
-        if node_name in {"pm_generate_spec", "pm_rewrite_prd", "pm_decompose", "pm_revise_breakdown", "pm_plan_task"}:
+        operation_by_node = {
+            "pm_recommend_lifecycle": "recommend_lifecycle",
+            "pm_analyze": "analyze_brief",
+            "pm_generate_spec": "generate_spec",
+            "pm_generate_prototype": "generate_prd_prototype",
+            "reviewer_spec": "review_spec",
+            "reviewer_breakdown": "review_breakdown",
+            "pm_decompose": "decompose_spec",
+            "pm_revise_breakdown": "decompose_spec",
+            "pm_plan_task": "plan_task",
+            "pm_rewrite_prd": "rewrite_prd",
+        }
+        runtime_context = (
+            self.runtime_event_store.resolve(operation_by_node[node_name], payload)
+            if self.runtime_event_store is not None and node_name in operation_by_node
+            else None
+        )
+        with bind_agent_runtime_context(runtime_context):
+            if node_name in {"pm_generate_spec", "pm_rewrite_prd", "pm_decompose", "pm_revise_breakdown", "pm_plan_task"}:
+                return await self.runner.run(
+                    prompt, output_type, self.settings.codex_cwd,
+                    validate_output=lambda result: validate_node_output(result, payload),
+                    bundled_skills=bundled_skills,
+                    use_magic_mcp=use_magic_mcp,
+                )
             return await self.runner.run(
-                prompt, output_type, self.settings.codex_cwd,
-                validate_output=lambda result: validate_node_output(result, payload),
+                prompt,
+                output_type,
+                self.settings.codex_cwd,
                 bundled_skills=bundled_skills,
                 use_magic_mcp=use_magic_mcp,
             )
-        return await self.runner.run(
-            prompt,
-            output_type,
-            self.settings.codex_cwd,
-            bundled_skills=bundled_skills,
-            use_magic_mcp=use_magic_mcp,
-        )

@@ -106,6 +106,13 @@ def _normalize_base_breakdown(
 def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str, object]) -> WorkBreakdown:
     previous = WorkBreakdown.model_validate(payload.get("previous_breakdown"))
     merged = previous.model_dump(mode="json")
+    if revision.lifecycle is not None:
+        if previous.lifecycle is not None and revision.lifecycle.model != previous.lifecycle.model:
+            raise OutputConsistencyError([{
+                "code": "SDLC_ROUTE_LOCKED", "path": "lifecycle.model",
+                "message": "Route changes require renewed clarification and a new approved PRD.",
+            }])
+        merged["lifecycle"] = revision.lifecycle.model_dump(mode="json")
     for section, key_field in (("milestones", "local_key"), ("tasks", "local_key"), ("agent_specs", "work_item_key")):
         changes = getattr(revision, section)
         allowed = {item[key_field] for item in merged[section]}
@@ -136,6 +143,14 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
         _repair_context_refs(result, allowed_refs)
     if isinstance(result, WorkBreakdownRevision):
         result = merge_breakdown_revision(result, payload)
+    if isinstance(result, (BaseWorkBreakdown, WorkBreakdown)) and payload.get("selected_sdlc_model"):
+        selected = str(payload["selected_sdlc_model"])
+        if result.lifecycle is None or result.lifecycle.model != selected:
+            raise OutputConsistencyError([{
+                "code": "SDLC_ROUTE_MISMATCH",
+                "path": "lifecycle.model",
+                "message": f"lifecycle model must match the user-confirmed route {selected}",
+            }])
     if isinstance(result, ImplementationPlan):
         task = AgentSpecProposal.model_validate(payload["task_spec"])
         approved = payload["approved_spec"]
@@ -209,10 +224,11 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
                 require_implementation_plan=(
                     payload.get("decomposition_stage") != "base"
                 ),
+                require_lifecycle="sdlc_rules" in payload,
             )
         except BreakdownValidationError as error:
             # A genuinely unresolved decision still fails through the service gate.
-            if error.code in {"BLOCKING_OPEN_QUESTION", "UNACCEPTED_RISK"}:
+            if error.code in {"BLOCKING_OPEN_QUESTION", "UNACCEPTED_RISK", "SDLC_NEEDS_CLARIFICATION"}:
                 return
             raise OutputConsistencyError([{
                 "code": error.code, "path": error.local_key, "message": str(error),

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.gateway import AgentGateway
 from app.agents.progress import report_agent_progress
-from app.database.models import AgentCall, AgentSession, AgentSpec, AuditEvent, Project, SpecVersion, WorkItem, WorkItemDependency
+from app.database.models import AgentCall, AgentSession, AgentSpec, AuditEvent, Project, SdlcRouteDecision, SpecVersion, WorkItem, WorkItemDependency
 from app.domain.implementation_plan import ImplementationPlan
 from app.domain.types import AgentSpecProposal, ProjectPhase, ProjectSpecPayload, ReviewVerdict, SemanticReview, SpecStatus, WorkBreakdown, WorkItemKind
 from app.services.task_plan_graph import (
@@ -26,9 +26,10 @@ from app.services.task_plan_graph import (
     transitive_dependent_keys,
 )
 from app.services.task_specifications import ImplementationPlanError, requirement_snapshots, validate_implementation_plan
+from app.services.sdlc_rules import LifecycleError, planning_context, task_lifecycle_context, validate_lifecycle
 
 
-_DECOMPOSITION_CONTRACT_VERSION = 5
+_DECOMPOSITION_CONTRACT_VERSION = 6
 _MAX_SEMANTIC_REVIEW_ATTEMPTS = 5
 
 
@@ -272,6 +273,7 @@ def validate_breakdown(
     breakdown: WorkBreakdown,
     approved_spec: SpecVersion | ProjectSpecPayload | ApprovedSpecSnapshot | Mapping[str, object],
     *, require_implementation_plan: bool = True,
+    require_lifecycle: bool = False,
 ) -> None:
     """Reject unsafe model output before a database transaction is opened."""
     proposals = [*breakdown.milestones, *breakdown.tasks]
@@ -412,6 +414,11 @@ def validate_breakdown(
         _error("MISSING_ACCEPTANCE_COVERAGE", "agent_specs",
                f"requirements without task acceptance coverage: {', '.join(sorted(uncovered))}")
 
+    try:
+        validate_lifecycle(breakdown, dict(spec_content), required=require_lifecycle)
+    except LifecycleError as error:
+        _error(error.code, "lifecycle", str(error))
+
     for proposal in breakdown.agent_specs:
         if proposal.implementation_plan is None and not require_implementation_plan:
             continue
@@ -425,7 +432,7 @@ def _normalize_text(value: str) -> str:
     return " ".join(value.strip().split())
 
 
-def _normalized_agent_spec_content(proposal: AgentSpecProposal, *, work_item_id: str, dependency_ids: list[str], spec_id: str, approved_spec: Mapping[str, object]) -> dict[str, object]:
+def _normalized_agent_spec_content(proposal: AgentSpecProposal, *, work_item_id: str, dependency_ids: list[str], spec_id: str, approved_spec: Mapping[str, object], lifecycle=None) -> dict[str, object]:
     """Canonicalize human-readable fields but retain identifiers as exact validated values."""
     content = proposal.model_dump(mode="json")
     content.pop("work_item_key", None)
@@ -448,6 +455,12 @@ def _normalized_agent_spec_content(proposal: AgentSpecProposal, *, work_item_id:
     content["dependency_work_item_ids"] = dependency_ids
     content["source_spec_version_id"] = spec_id
     content["requirements"] = requirement_snapshots(proposal, dict(approved_spec))
+    if lifecycle is not None:
+        content["sdlc"] = task_lifecycle_context(lifecycle, proposal.work_item_key)
+        content["fixed_constraints"].insert(
+            0, f'SDLC 生命周期：{content["sdlc"]["model_rules"]["name"]}；'
+            '按选定路线的阶段、门禁、并行、缺陷回退与变更规则执行；计划不代表已获审批。'
+        )
     return json.loads(json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
 
 
@@ -474,6 +487,12 @@ class DecompositionService:
             snapshot = ApprovedSpecSnapshot(
                 version.id, json.loads(json.dumps(version.content)), tuple(version.input_refs), version.content_hash,
             )
+            route_decision = db.query(SdlcRouteDecision).filter_by(project_id=project.id).one_or_none()
+            if route_decision is None or route_decision.selected_model is None:
+                raise DecompositionNotAllowed(
+                    "a user-confirmed SDLC route is required before task decomposition"
+                )
+            selected_sdlc_model = route_decision.selected_model
             seed = self._latest_rejected_review(db, project_id, snapshot, command_id, input_hash)
 
         previous, first_round, prior_call_ids = seed or (None, 0, [])
@@ -515,7 +534,9 @@ class DecompositionService:
                 "repair_round": repair_round,
                 "decomposition_stage": "base",
                 "decomposition_contract_version": _DECOMPOSITION_CONTRACT_VERSION,
+                "sdlc_rules": planning_context(),
             }
+            payload["selected_sdlc_model"] = selected_sdlc_model
             if command_id is not None:
                 payload["command_id"] = command_id
             if input_hash is not None:
@@ -621,6 +642,7 @@ class DecompositionService:
         for call in calls:
             request = call.request
             if (request.get("project_id") != project_id
+                    or request.get("sdlc_rules", {}).get("hash") != planning_context()["hash"]
                     or request.get("decomposition_contract_version") != _DECOMPOSITION_CONTRACT_VERSION
                     or request.get("source_spec_version_id") != snapshot.id
                     or request.get("source_spec_content_hash") != snapshot.content_hash
@@ -634,7 +656,7 @@ class DecompositionService:
             try:
                 review = SemanticReview.model_validate(call.response)
                 breakdown = WorkBreakdown.model_validate(request.get("canonical_breakdown"))
-                validate_breakdown(breakdown, snapshot, require_implementation_plan=False)
+                validate_breakdown(breakdown, snapshot, require_implementation_plan=False, require_lifecycle=True)
             except ValueError:
                 return None
             if not self._review_blocks(review) or not self._can_repair_review(review):
@@ -745,7 +767,7 @@ class DecompositionService:
                 db.commit()
         try:
             validate_breakdown(
-                breakdown, snapshot, require_implementation_plan=False
+                breakdown, snapshot, require_implementation_plan=False, require_lifecycle=True
             )
             with self._session_factory() as db:
                 self._assert_snapshot_current(db, project_id, snapshot)
@@ -769,7 +791,7 @@ class DecompositionService:
                 command_id=command_id,
                 input_hash=input_hash,
             )
-            validate_breakdown(breakdown, snapshot)
+            validate_breakdown(breakdown, snapshot, require_lifecycle=True)
         except DecompositionPlanningFailure as error:
             error.agent_call_ids.insert(0, call_id)
             error.agent_call_id = error.agent_call_ids[-1]
@@ -915,7 +937,7 @@ class DecompositionService:
                         "task-plan evidence does not cover repair targets"
                     )
                 plan_calls_by_key.update(repaired_by_key)
-                validate_breakdown(breakdown, snapshot)
+                validate_breakdown(breakdown, snapshot, require_lifecycle=True)
             except DecompositionPlanningFailure as error:
                 error.agent_call_ids.insert(0, base_call_id)
                 error.agent_call_id = error.agent_call_ids[-1]
@@ -1046,6 +1068,7 @@ class DecompositionService:
             if (
                 call.status not in {"RESULT_READY", "SUCCEEDED"}
                 or request.get("decomposition_stage") != "base"
+                or request.get("sdlc_rules", {}).get("hash") != planning_context()["hash"]
                 or request.get("decomposition_contract_version") != _DECOMPOSITION_CONTRACT_VERSION
                 or request.get("source_spec_version_id", request.get("spec_version_id")) != snapshot.id
                 or request.get("source_spec_content_hash", request.get("spec_content_hash")) != snapshot.content_hash
@@ -1058,7 +1081,7 @@ class DecompositionService:
             try:
                 breakdown = WorkBreakdown.model_validate(call.response)
                 validate_breakdown(
-                    breakdown, snapshot, require_implementation_plan=False
+                    breakdown, snapshot, require_implementation_plan=False, require_lifecycle=True
                 )
             except ValueError:
                 continue
@@ -1163,6 +1186,9 @@ class DecompositionService:
                 "source_spec_content_hash": snapshot.content_hash,
                 "input_refs": list(snapshot.input_refs),
                 "decomposition_stage": "task_plan",
+                "sdlc_rules": planning_context(),
+                "lifecycle": breakdown.lifecycle.model_dump(mode="json") if breakdown.lifecycle else None,
+                "task_lifecycle": task_lifecycle_context(breakdown.lifecycle, task.work_item_key),
                 "decomposition_contract_version": _DECOMPOSITION_CONTRACT_VERSION,
                 "base_checkpoint_call_id": base_checkpoint_call_id,
                 "task_spec": task.model_dump(mode="json"),
@@ -1290,6 +1316,7 @@ class DecompositionService:
             if (
                 call.status not in {"RESULT_READY", "SUCCEEDED"}
                 or request.get("decomposition_stage") != "task_plan"
+                or request.get("sdlc_rules", {}).get("hash") != planning_context()["hash"]
                 or request.get("decomposition_contract_version") != _DECOMPOSITION_CONTRACT_VERSION
                 or request.get("source_spec_version_id") != snapshot.id
                 or request.get("source_spec_content_hash") != snapshot.content_hash
@@ -1299,6 +1326,7 @@ class DecompositionService:
                 or request.get("task_spec") != payload.get("task_spec")
                 or request.get("dependency_contract_hashes") != payload.get("dependency_contract_hashes")
                 or request.get("dependency_contracts") != payload.get("dependency_contracts")
+                or request.get("task_lifecycle") != payload.get("task_lifecycle")
             ):
                 continue
             try:
@@ -1315,6 +1343,7 @@ class DecompositionService:
     def _persist_direct(self, prepared: PreparedDecomposition) -> list[AgentSpec]:
         with self._session_factory() as db:
             with db.begin():
+                validate_breakdown(prepared.breakdown, prepared.approved_spec, require_lifecycle=True)
                 project = self._project(db, prepared.project_id)
                 self._assert_snapshot_current(db, project.id, prepared.approved_spec)
                 version = self._approved_version(db, project)
@@ -1359,6 +1388,7 @@ class DecompositionService:
                 for proposal in breakdown.agent_specs
             ],
             "canonical_breakdown": canonical_breakdown,
+            "sdlc_rules": planning_context(),
         }
         if command_id is not None:
             payload["command_id"] = command_id
@@ -1406,7 +1436,7 @@ class DecompositionService:
         specs: list[AgentSpec] = []
         for proposal in breakdown.agent_specs:
             dependencies = [id_by_key[key] for key in proposal.dependency_keys]
-            content = _normalized_agent_spec_content(proposal, work_item_id=id_by_key[proposal.work_item_key], dependency_ids=dependencies, spec_id=approved_spec.id, approved_spec=approved_spec.content)
+            content = _normalized_agent_spec_content(proposal, work_item_id=id_by_key[proposal.work_item_key], dependency_ids=dependencies, spec_id=approved_spec.id, approved_spec=approved_spec.content, lifecycle=breakdown.lifecycle)
             spec = AgentSpec(id=_new_id(), project_id=project.id, work_item_id=id_by_key[proposal.work_item_key], source_spec_version_id=approved_spec.id, dependency_work_item_ids=dependencies, content=content, content_hash=_canonical_hash(content))
             add(spec)
             specs.append(spec)
@@ -1430,6 +1460,9 @@ class DecompositionService:
                     ) from error
                 except (PreparedBreakdownValidationError, DecompositionAgentFailure, BreakdownReviewerFailure) as error:
                     call_ids = list(error.agent_call_ids)
+                    if getattr(error, "code", None) == "SDLC_NEEDS_CLARIFICATION":
+                        raise CommandHandlerRejected(str(error), agent_call_ids=call_ids,
+                            audit_payload={"decomposition_error_code": error.code}) from error
                     raise CommandHandlerFailure(str(error), agent_call_ids=call_ids, audit_payload={"decomposition_error_code": getattr(error, "code", "AGENT_FAILURE")}) from error
                 return PreparedCommand(payload={"approved_spec_id": prepared.approved_spec.id, "approved_spec": dict(prepared.approved_spec.content), "input_refs": list(prepared.approved_spec.input_refs), "spec_content_hash": prepared.approved_spec.content_hash, "breakdown": prepared.breakdown.model_dump(mode="json")}, agent_backed=True, agent_call_ids=prepared.agent_call_ids, audit_payload={"decomposition_agent_call_ids": prepared.agent_call_ids})
 
@@ -1448,7 +1481,7 @@ class DecompositionService:
     def _materialize_command(self, uow, context, approved_spec: ApprovedSpecSnapshot, breakdown: WorkBreakdown, agent_call_ids: list[str]):
         """Materialize using the narrow command UOW without mutating protected state."""
         from app.services.command_service import CommandHandlerResult
-        validate_breakdown(breakdown, approved_spec)
+        validate_breakdown(breakdown, approved_spec, require_lifecycle=True)
         items = [*breakdown.milestones, *breakdown.tasks]
         collisions = uow.existing_work_item_keys({item.local_key for item in items})
         if collisions:
@@ -1471,7 +1504,7 @@ class DecompositionService:
         specs = []
         for proposal in breakdown.agent_specs:
             dependency_ids = [id_by_key[key] for key in proposal.dependency_keys]
-            content = _normalized_agent_spec_content(proposal, work_item_id=id_by_key[proposal.work_item_key], dependency_ids=dependency_ids, spec_id=approved_spec.id, approved_spec=approved_spec.content)
+            content = _normalized_agent_spec_content(proposal, work_item_id=id_by_key[proposal.work_item_key], dependency_ids=dependency_ids, spec_id=approved_spec.id, approved_spec=approved_spec.content, lifecycle=breakdown.lifecycle)
             spec = AgentSpec(id=_new_id(), project_id=context.project_id, work_item_id=id_by_key[proposal.work_item_key], source_spec_version_id=approved_spec.id, dependency_work_item_ids=dependency_ids, content=content, content_hash=_canonical_hash(content))
             uow.add_agent_spec(spec)
             specs.append(spec)

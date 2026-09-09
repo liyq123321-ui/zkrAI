@@ -88,6 +88,13 @@ class SessionCommandRequest(BaseModel):
         return self
 
 
+class LifecycleRouteSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: Literal["strict_waterfall", "overlapping_waterfall", "iterative_incremental"]
+    actor_id: str | None = None
+
+
 class SessionState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

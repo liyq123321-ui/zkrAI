@@ -1,0 +1,238 @@
+version: 1
+id: iterative_incremental
+name: 迭代增量模型（敏捷验证·创新型）
+stages:
+- name: 待办构建
+  objective: 明确产品整体方向，搭建全局需求池，确定迭代节奏与资源配置
+  entry_criteria: 项目立项完成，产品愿景明确
+  exit_criteria: 待办池初始版本建立、迭代节奏确认、团队资源到位
+  owner: 产品负责人
+  schedule_guidance: 仅一次，不计入单轮迭代比例
+  id: backlog
+  number: 0
+  scope: global
+  activities:
+  - id: backlog.a1
+    name: 产品愿景拆解
+  - id: backlog.a2
+    name: 初始需求收集
+  - id: backlog.a3
+    name: 需求优先级排序
+  - id: backlog.a4
+    name: 搭建产品待办池
+  - id: backlog.a5
+    name: 确定迭代周期
+  - id: backlog.a6
+    name: 团队资源配置
+  deliverables:
+  - id: backlog.d1
+    name: 《产品愿景说明》
+  - id: backlog.d2
+    name: 《产品待办清单(PBL)》
+  - id: backlog.d3
+    name: 《迭代规则说明》
+- name: 迭代规划
+  objective: 确认本轮迭代交付范围，拆解为可执行的用户故事，锁定迭代目标
+  entry_criteria: 上一轮迭代验收完成；产品待办池有充足待办项
+  exit_criteria: 迭代范围与优先级确认、工作量与排期达成一致
+  owner: 产品负责人 + 研发团队
+  schedule_guidance: 10%~15%
+  id: planning
+  number: 1
+  scope: iteration
+  activities:
+  - id: planning.a1
+    name: 从待办池挑选本轮需求
+  - id: planning.a2
+    name: 拆解用户故事
+  - id: planning.a3
+    name: 定义迭代验收标准
+  - id: planning.a4
+    name: 评估工作量
+  - id: planning.a5
+    name: 确认迭代排期
+  deliverables:
+  - id: planning.d1
+    name: 《迭代计划》
+  - id: planning.d2
+    name: 《本轮用户故事清单》
+  - id: planning.d3
+    name: 《迭代验收标准》
+- name: 设计开发
+  objective: 完成本轮增量功能的设计与编码，产出可测试的功能版本
+  entry_criteria: 迭代计划评审通过
+  exit_criteria: 增量功能开发完成、单元测试通过、符合编码规范
+  owner: 开发工程师 + 架构师
+  schedule_guidance: 40%~50%
+  id: development
+  number: 2
+  scope: iteration
+  activities:
+  - id: development.a1
+    name: 本轮增量功能设计
+  - id: development.a2
+    name: 接口与数据库调整
+  - id: development.a3
+    name: 代码开发
+  - id: development.a4
+    name: 单元自测
+  - id: development.a5
+    name: 代码评审
+  deliverables:
+  - id: development.d1
+    name: 增量源代码
+  - id: development.d2
+    name: 单元测试用例
+  - id: development.d3
+    name: 可测试版本
+- name: 验证演示
+  objective: 验证本轮新增功能，同步回归历史功能，完成内部演示与验收
+  entry_criteria: 本轮增量功能开发完成
+  exit_criteria: 阻断性缺陷清零、核心功能验证通过、可正常演示
+  owner: 测试工程师 + 产品负责人
+  schedule_guidance: 20%~25%
+  id: verification
+  number: 3
+  scope: iteration
+  activities:
+  - id: verification.a1
+    name: 新功能测试
+  - id: verification.a2
+    name: 历史功能回归测试
+  - id: verification.a3
+    name: 缺陷修复
+  - id: verification.a4
+    name: 内部功能演示
+  - id: verification.a5
+    name: 验收确认
+  deliverables:
+  - id: verification.d1
+    name: 《迭代测试报告》
+  - id: verification.d2
+    name: 《缺陷清单》
+  - id: verification.d3
+    name: 《演示版本》
+- name: 发布反馈
+  objective: 灰度发布本轮功能，收集用户反馈，回流至产品待办池
+  entry_criteria: 迭代验证通过、无阻断性缺陷
+  exit_criteria: 增量版本成功上线、收集到有效用户反馈、待办池同步更新
+  owner: 运维 + 产品负责人
+  schedule_guidance: 5%~10%
+  id: release
+  number: 4
+  scope: iteration
+  activities:
+  - id: release.a1
+    name: 增量版本打包
+  - id: release.a2
+    name: 灰度部署
+  - id: release.a3
+    name: 用户试用
+  - id: release.a4
+    name: 反馈收集
+  - id: release.a5
+    name: 反馈整理录入待办池
+  deliverables:
+  - id: release.d1
+    name: 《发布记录》
+  - id: release.d2
+    name: 《用户反馈报告》
+  - id: release.d3
+    name: 《更新后的产品待办池》
+- name: 持续运维
+  objective: 贯穿全周期保障运行与文档同步
+  entry_criteria: 待办池建立
+  exit_criteria: 交接时文档与运行状态同步；长期服务不阻塞迭代
+  owner: 运维 + 产品负责人
+  schedule_guidance: 持续
+  id: operations
+  number: 0
+  scope: continuous
+  activities:
+  - id: operations.a1
+    name: 线上监控
+  - id: operations.a2
+    name: 故障响应
+  - id: operations.a3
+    name: 紧急缺陷修复
+  - id: operations.a4
+    name: 文档持续迭代更新
+  - id: operations.a5
+    name: 待办池日常维护
+  deliverables:
+  - id: operations.d1
+    name: 持续更新的运维手册
+  - id: operations.d2
+    name: 产品文档
+  - id: operations.d3
+    name: 产品待办池
+source_sections:
+  适用场景: 需求不明确、需快速验证的创新型项目；互联网产品；需持续增量交付，每2~4周产出可用版本；允许需求随用户反馈动态调整。
+  核心规则: 项目整体分为**全局启动阶段**和**多轮迭代循环**，每轮迭代（通常2~4周）内部闭环执行4个核心阶段，每轮产出可演示、可交付的增量功能；运维与文档贯穿全项目周期；支持跨迭代高度并行，上一轮测试/发布与下一轮需求/设计可同步开展。
+  阶段体系结构: '- 1个全局启动阶段（仅项目初期执行1次）
+
+    - 迭代内4个循环阶段（每轮迭代重复执行）
+
+    - 1个贯穿全周期的运维阶段
+
+
+    #### 一、全局启动阶段（仅执行1次）
+
+    | 阶段名称 | 阶段目标 | 准入条件 | 核心工作 | 关键交付物 | 准出标准 | 责任人 |
+
+    |---|---|---|---|---|---|---|
+
+    | 待办构建 | 明确产品整体方向，搭建全局需求池，确定迭代节奏与资源配置 | 项目立项完成，产品愿景明确 | 产品愿景拆解、初始需求收集、需求优先级排序、搭建产品待办池、确定迭代周期、团队资源配置
+    | 《产品愿景说明》《产品待办清单(PBL)》《迭代规则说明》 | 待办池初始版本建立、迭代节奏确认、团队资源到位 | 产品负责人 |
+
+
+    #### 二、迭代内循环阶段（每轮迭代重复执行，共4个阶段）
+
+    | 阶段编号 | 阶段名称 | 阶段目标 | 准入条件 | 核心工作 | 关键交付物 | 准出标准 | 责任人 | 单轮迭代内占比 |
+
+    |---|---|---|---|---|---|---|---|---|
+
+    | 1 | 迭代规划 | 确认本轮迭代交付范围，拆解为可执行的用户故事，锁定迭代目标 | 上一轮迭代验收完成；产品待办池有充足待办项 | 从待办池挑选本轮需求、拆解用户故事、定义迭代验收标准、评估工作量、确认迭代排期
+    | 《迭代计划》《本轮用户故事清单》《迭代验收标准》 | 迭代范围与优先级确认、工作量与排期达成一致 | 产品负责人 + 研发团队 | 10%~15% |
+
+    | 2 | 设计开发 | 完成本轮增量功能的设计与编码，产出可测试的功能版本 | 迭代计划评审通过 | 本轮增量功能设计、接口与数据库调整、代码开发、单元自测、代码评审 | 增量源代码、单元测试用例、可测试版本
+    | 增量功能开发完成、单元测试通过、符合编码规范 | 开发工程师 + 架构师 | 40%~50% |
+
+    | 3 | 验证演示 | 验证本轮新增功能，同步回归历史功能，完成内部演示与验收 | 本轮增量功能开发完成 | 新功能测试、历史功能回归测试、缺陷修复、内部功能演示、验收确认 | 《迭代测试报告》《缺陷清单》《演示版本》
+    | 阻断性缺陷清零、核心功能验证通过、可正常演示 | 测试工程师 + 产品负责人 | 20%~25% |
+
+    | 4 | 发布反馈 | 灰度发布本轮功能，收集用户反馈，回流至产品待办池 | 迭代验证通过、无阻断性缺陷 | 增量版本打包、灰度部署、用户试用、反馈收集、反馈整理录入待办池 | 《发布记录》《用户反馈报告》《更新后的产品待办池》
+    | 增量版本成功上线、收集到有效用户反馈、待办池同步更新 | 运维 + 产品负责人 | 5%~10% |
+
+
+    #### 三、贯穿全周期阶段
+
+    | 阶段名称 | 核心工作 | 交付物 |
+
+    |---|---|---|
+
+    | 持续运维 | 线上监控、故障响应、紧急缺陷修复、文档持续迭代更新、待办池日常维护 | 持续更新的运维手册、产品文档、产品待办池 |'
+  并行约束: '1. ✅ **跨迭代高度并行**：上一轮迭代进入验证/发布阶段，下一轮迭代即可同步启动规划与需求拆解。
+
+    2. ✅ 运维与反馈收集全程并行，持续回流至产品待办池。
+
+    3. ❌ 单轮迭代内部保持基础顺序：规划 → 设计开发 → 验证演示 → 发布反馈，禁止大范围跳阶段。'
+  阶段门禁规则: '1. **迭代启动门禁**：每轮迭代开始前召开迭代规划会，确认本轮需求范围、交付目标与排期，团队达成共识后启动。
+
+    2. **迭代验收门禁**：每轮迭代结束召开演示评审会，验收本轮交付功能，确认是否达到准出标准，未达标功能移入下一轮迭代。
+
+    3. **全局基线门禁**：整体架构、核心技术方案变更需全局评审；迭代内增量设计可分级审批。
+
+    4. **发布门禁**：增量版本上线前必须通过阻断性缺陷检查，未达标不得发布。'
+  缺陷回退规则: '1. 本轮迭代内发现的需求/设计缺陷：优先在本轮迭代内修复调整；时间不满足则移入产品待办池，安排至下一轮迭代。
+
+    2. 线上功能缺陷：紧急缺陷即时修复补丁；非紧急缺陷归入待办池，后续迭代排期修复。
+
+    3. 架构级缺陷：暂停当前迭代开发，回退至设计开发阶段整改，重新评审后恢复迭代。
+
+    4. 历史功能回归缺陷：优先在当前迭代修复；影响范围大则降级处理，纳入后续专项迭代。'
+  变更处理规则: '1. 迭代进行中原则上不插入新需求；新增需求统一放入产品待办池，下一轮迭代规划时排序纳入。
+
+    2. 紧急变更需走快速审批流程，评估对当前迭代的影响，必要时调整迭代范围。
+
+    3. 用户反馈持续汇入产品待办池，作为后续迭代的需求输入，不直接打断当前迭代。'

@@ -1,13 +1,18 @@
 import { useEffect, useState } from 'react';
-import type { AgentRuntimeDto } from './dto';
+import type { AgentRuntimeDto, AgentRuntimeEventDto } from './dto';
 import { displayTime } from './presentation';
-import { listAgentRuntime } from './sessions';
+import { listAgentRuntime, listAgentRuntimeEvents } from './sessions';
+import { AgentCallGraph } from './AgentCallGraph';
+import type { RuntimeGraphProject } from './agentRuntimeGraph';
+import { WorkItemDialog } from './WorkItemDialog';
 
 const POLL_INTERVAL_MS = 2_000;
 
-const operationLabels: Record<string, string> = {
+export const operationLabels: Record<string, string> = {
+  recommend_lifecycle: '评估 SDLC 顶层路线',
   analyze_brief: '分析项目需求完整性',
   generate_spec: '生成项目规格',
+  generate_prd_prototype: '生成 PRD 交互原型',
   review_spec: '审核项目规格质量',
   decompose_spec: '拆解已批准的项目规格',
   plan_task: '生成任务实施步骤与接口',
@@ -16,27 +21,113 @@ const operationLabels: Record<string, string> = {
   restore_spec: '恢复历史项目规格',
 };
 
-const statusLabels: Record<AgentRuntimeDto['status'], string> = {
-  running: '运行中',
-  completed: '已完成',
-  error: '异常',
-};
-
-type RuntimeProject = { sessionId: string; title: string };
-
-function elapsedTime(startedAt: string): string {
-  const milliseconds = Math.max(0, Date.now() - Date.parse(startedAt));
-  const seconds = Math.floor(milliseconds / 1_000);
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟`;
-  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
+export function agentOperationLabel(operation: string): string {
+  return operationLabels[operation] ?? operation;
 }
 
-export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) {
+const eventTypeLabels: Record<string, string> = {
+  reasoning: '推理摘要',
+  agent_message: 'Agent 消息',
+  command_execution: '命令执行',
+  file_change: '文件修改',
+  mcp_tool_call: '工具调用',
+  web_search: '网页搜索',
+  plan_update: '计划更新',
+  stderr: '运行诊断',
+  stdout: '标准输出',
+  structured_output: '结构化输出',
+  'thread.started': '会话阶段',
+  'turn.started': '执行阶段',
+  'turn.completed': '执行阶段',
+  'turn.failed': '执行阶段',
+};
+
+type SelectedAgent = { sessionId: string; agentSessionId: string };
+
+function selectionKey(sessionId: string, agentSessionId: string): string {
+  return `${sessionId}:${agentSessionId}`;
+}
+
+function eventLabel(event: AgentRuntimeEventDto): string {
+  return eventTypeLabels[event.item_type ?? event.event_type]
+    ?? event.item_type
+    ?? event.event_type;
+}
+
+function AgentTimeline({
+  agent,
+  events,
+  loading,
+  failed,
+}: {
+  agent: AgentRuntimeDto;
+  events: AgentRuntimeEventDto[];
+  loading: boolean;
+  failed: boolean;
+}) {
+  const currentCallEvents = events.filter((event) => event.agent_call_id === agent.current_call_id);
+  const currentReasoning = [...currentCallEvents]
+    .reverse()
+    .find((event) => event.item_type === 'reasoning');
+  const latest = currentCallEvents.at(-1) ?? events.at(-1);
+
+  return (
+    <div className="ff-agent-runtime-timeline" aria-live="polite">
+      <div className="ff-agent-runtime-disclosure">
+        <strong>{agent.status === 'running' ? '当前执行内容' : '最近一次执行内容'}</strong>
+        <span>
+          {currentReasoning?.detail
+            ?? latest?.detail
+            ?? latest?.title
+            ?? (loading ? '正在读取 Codex 运行记录…' : '暂无运行详情')}
+        </span>
+      </div>
+      <div className="ff-agent-runtime-timeline-header">
+        <strong>Codex 运行记录</strong>
+        <span>仅记录 CLI 公开的 JSONL 事件和脱敏诊断，不包含隐藏思维链。</span>
+      </div>
+      {failed && (
+        <p role="status" className="ff-agent-runtime-event-warning">
+          暂时无法刷新运行记录，下面保留最近一次成功读取的内容。
+        </p>
+      )}
+      {!loading && events.length === 0 && (
+        <p className="ff-agent-runtime-event-empty">
+          暂无可公开的 Codex 运行记录。功能启用前完成的调用不会补写历史事件。
+        </p>
+      )}
+      {events.length > 0 && (
+        <ol className="ff-agent-runtime-events">
+          {events.map((event) => (
+            <li key={event.id}>
+              <div className="ff-agent-runtime-event-meta">
+                <time dateTime={event.created_at}>{displayTime(event.created_at)}</time>
+                <span>{eventLabel(event)}</span>
+                <span>{agentOperationLabel(event.operation)}</span>
+                <code>{event.agent_call_id.slice(0, 8)}</code>
+              </div>
+              <strong>{event.title}</strong>
+              {event.detail && <pre>{event.detail}</pre>}
+              <details>
+                <summary>查看脱敏事件数据</summary>
+                <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+              </details>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+export function AgentRuntimePanel({ projects }: { projects: RuntimeGraphProject[] }) {
   const [snapshots, setSnapshots] = useState<Record<string, AgentRuntimeDto[]>>({});
   const [failedIds, setFailedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<SelectedAgent | null>(null);
+  const [eventSnapshots, setEventSnapshots] = useState<Record<string, AgentRuntimeEventDto[]>>({});
+  const [eventLoading, setEventLoading] = useState(false);
+  const [eventFailed, setEventFailed] = useState(false);
 
   useEffect(() => {
     let disposed = false;
@@ -77,6 +168,48 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) 
     };
   }, [projects]);
 
+  useEffect(() => {
+    if (selected === null) {
+      setEventLoading(false);
+      setEventFailed(false);
+      return undefined;
+    }
+    let disposed = false;
+    let timer: number | undefined;
+    let controller: AbortController | undefined;
+    const key = selectionKey(selected.sessionId, selected.agentSessionId);
+
+    const refresh = async () => {
+      controller = new AbortController();
+      try {
+        const events = await listAgentRuntimeEvents(
+          selected.sessionId,
+          selected.agentSessionId,
+          controller.signal,
+        );
+        if (disposed) return;
+        setEventSnapshots((previous) => ({ ...previous, [key]:events }));
+        setEventFailed(false);
+      } catch {
+        if (!disposed && !controller.signal.aborted) setEventFailed(true);
+      } finally {
+        if (!disposed) {
+          setEventLoading(false);
+          timer = window.setTimeout(refresh, POLL_INTERVAL_MS);
+        }
+      }
+    };
+
+    setEventLoading(true);
+    setEventFailed(false);
+    void refresh();
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      controller?.abort();
+    };
+  }, [selected]);
+
   const visibleProjects = projects.map((project) => ({
     project,
     agents:snapshots[project.sessionId],
@@ -95,7 +228,7 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) 
     <section className="ff-agent-runtime" aria-label="Agent 实时运行状态">
       <header className="ff-agent-runtime-header">
         <h2>Agent 实时运行状态</h2>
-        <p>{loading ? '正在加载运行状态' : '每 2 秒刷新一次'}</p>
+        <p>{loading ? '正在加载运行状态' : '每 2 秒刷新一次 · 点击 Agent 查看执行记录'}</p>
       </header>
       <dl className="ff-agent-runtime-metrics">
         <div>
@@ -124,33 +257,54 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeProject[] }) 
       )}
       <div className="ff-agent-runtime-projects">
         {!loading && !hasUnknownProject && startedCount === 0 && <p>暂无已启动 Agent</p>}
-        {visibleProjects.map(({ project, agents }) => (
-          agents && agents.length > 0 && (
-            <section className="ff-agent-runtime-project" key={project.sessionId} aria-label={`${project.title} Agent 运行状态`}>
-              <h3>{project.title}</h3>
-              <ul>
-                {agents.map((agent) => (
-                  <li key={agent.agent_session_id}>
-                    <div>
-                      <strong>{agent.role}</strong>
-                      <span className={`is-${agent.status}`}>{statusLabels[agent.status]}</span>
-                    </div>
-                    <p>{operationLabels[agent.current_operation] ?? agent.current_operation}</p>
-                    {agent.current_summary && <p>{agent.current_summary}</p>}
-                    <p>开始时间：{displayTime(agent.started_at)}</p>
-                    <p>
-                      {agent.status === 'running'
-                        ? `持续时间：${elapsedTime(agent.started_at)}`
-                        : `完成时间：${agent.completed_at ? displayTime(agent.completed_at) : '—'}`}
-                    </p>
-                    <p>{agent.call_count} 次调用</p>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )
-        ))}
+        {visibleProjects.map(({ project, agents }) => {
+          const selectedAgent = agents?.find((agent) => (
+            selected?.sessionId === project.sessionId
+            && selected.agentSessionId === agent.agent_session_id
+          ));
+          return (
+            <div className="ff-agent-runtime-project-wrap" key={project.sessionId}>
+              <AgentCallGraph
+                project={project}
+                agents={agents ?? []}
+                selectedAgentSessionId={selectedAgent?.agent_session_id ?? null}
+                onSelectAgent={(agent) => setSelected({
+                  sessionId:project.sessionId,
+                  agentSessionId:agent.agent_session_id,
+                })}
+              />
+            </div>
+          );
+        })}
       </div>
+      {selected && (() => {
+        const project = projects.find((candidate) => candidate.sessionId === selected.sessionId);
+        const agent = snapshots[selected.sessionId]?.find((candidate) => (
+          candidate.agent_session_id === selected.agentSessionId
+        ));
+        if (!project || !agent) return null;
+        const key = selectionKey(selected.sessionId, selected.agentSessionId);
+        return (
+          <WorkItemDialog
+            title={`Agent 运行记录 · ${agent.role}`}
+            contentKey={key}
+            onClose={() => setSelected(null)}
+          >
+            <div className="ff-agent-runtime-modal">
+              <div className="ff-agent-runtime-modal-context">
+                <strong>{project.title}</strong>
+                <span>{operationLabels[agent.current_operation] ?? agent.current_operation}</span>
+              </div>
+              <AgentTimeline
+                agent={agent}
+                events={eventSnapshots[key] ?? []}
+                loading={eventLoading}
+                failed={eventFailed}
+              />
+            </div>
+          </WorkItemDialog>
+        );
+      })()}
     </section>
   );
 }

@@ -1,0 +1,222 @@
+version: 1
+id: strict_waterfall
+name: 纯线性瀑布（强门禁·合规型）
+stages:
+- name: 需求定审
+  objective: 明确全部功能/非功能需求与验收标准，冻结正式需求基线
+  entry_criteria: 项目立项完成，业务方提交初始需求输入
+  exit_criteria: SRS逐条评审签字、需求基线100%冻结、验收标准可量化可验证
+  owner: 产品经理 + 业务分析师
+  schedule_guidance: 15%~20%
+  id: requirements
+  number: 1
+  scope: project
+  activities:
+  - id: requirements.a1
+    name: 用户访谈
+  - id: requirements.a2
+    name: 业务流程梳理
+  - id: requirements.a3
+    name: 功能/非功能需求分类
+  - id: requirements.a4
+    name: 验收标准定义
+  - id: requirements.a5
+    name: 需求优先级排序
+  - id: requirements.a6
+    name: 搭建需求追溯矩阵
+  deliverables:
+  - id: requirements.d1
+    name: 《需求规格说明书(SRS)》
+  - id: requirements.d2
+    name: 《需求追溯矩阵》
+  - id: requirements.d3
+    name: 《验收标准清单》
+- name: 设计签审
+  objective: 完成完整系统架构、模块、数据库、接口方案设计，输出正式设计基线
+  entry_criteria: 需求基线正式评审通过
+  exit_criteria: 设计文档评审签字、需求100%可追溯、无未解决重大技术风险
+  owner: 架构师 + 技术负责人
+  schedule_guidance: 15%~20%
+  id: design
+  number: 2
+  scope: project
+  activities:
+  - id: design.a1
+    name: 概要架构设计
+  - id: design.a2
+    name: 模块拆分
+  - id: design.a3
+    name: 数据库表结构设计
+  - id: design.a4
+    name: 接口定义
+  - id: design.a5
+    name: 安全方案
+  - id: design.a6
+    name: 部署架构
+  - id: design.a7
+    name: 编写详细设计文档
+  deliverables:
+  - id: design.d1
+    name: 《概要设计文档》
+  - id: design.d2
+    name: 《详细设计文档》
+  - id: design.d3
+    name: 《数据库设计文档》
+  - id: design.d4
+    name: 《接口规范文档》
+- name: 编码实现
+  objective: 依据设计文档完成全部代码开发，完成单元自测与代码评审
+  entry_criteria: 全套系统设计文档正式评审通过
+  exit_criteria: 代码100%开发完成、单元测试覆盖率达标、代码评审无遗留问题
+  owner: 开发工程师
+  schedule_guidance: 30%~40%
+  id: implementation
+  number: 3
+  scope: project
+  activities:
+  - id: implementation.a1
+    name: 按详细设计编码
+  - id: implementation.a2
+    name: 代码走查
+  - id: implementation.a3
+    name: 单元测试编写执行
+  - id: implementation.a4
+    name: 构建脚本开发
+  deliverables:
+  - id: implementation.d1
+    name: 源代码
+  - id: implementation.d2
+    name: 单元测试用例
+  - id: implementation.d3
+    name: 构建脚本
+  - id: implementation.d4
+    name: 代码评审记录
+- name: 测试验收
+  objective: 全量验证系统质量，完成集成、系统、UAT全流程测试，缺陷清零
+  entry_criteria: 全部编码完成、单元测试100%通过
+  exit_criteria: 高危/严重缺陷清零、测试用例执行率100%、业务方UAT签字确认
+  owner: 测试工程师 + 业务方
+  schedule_guidance: 15%~20%
+  id: acceptance
+  number: 4
+  scope: project
+  activities:
+  - id: acceptance.a1
+    name: 集成测试
+  - id: acceptance.a2
+    name: 系统功能测试
+  - id: acceptance.a3
+    name: 性能/安全测试
+  - id: acceptance.a4
+    name: UAT用户验收
+  - id: acceptance.a5
+    name: 缺陷修复与回归验证
+  deliverables:
+  - id: acceptance.d1
+    name: 《测试用例集》
+  - id: acceptance.d2
+    name: 《测试报告》
+  - id: acceptance.d3
+    name: 《缺陷清单》
+  - id: acceptance.d4
+    name: 《UAT验收报告》
+- name: 部署交付
+  objective: 生产环境正式部署交付，完成用户培训与上线全量验证
+  entry_criteria: 全量测试报告签字、UAT业务验收通过
+  exit_criteria: 上线验证全量通过、业务功能可用、用户培训覆盖完成
+  owner: 运维工程师 + 项目经理
+  schedule_guidance: 3%~5%
+  id: delivery
+  number: 5
+  scope: project
+  activities:
+  - id: delivery.a1
+    name: 生产环境准备
+  - id: delivery.a2
+    name: 版本包部署
+  - id: delivery.a3
+    name: 数据初始化
+  - id: delivery.a4
+    name: 业务人员培训
+  - id: delivery.a5
+    name: 上线功能验证
+  deliverables:
+  - id: delivery.d1
+    name: 《部署方案》
+  - id: delivery.d2
+    name: 《上线报告》
+  - id: delivery.d3
+    name: 《用户操作手册》
+- name: 运维归档
+  objective: 保障线上稳定运行，完成项目结项与全量档案归档
+  entry_criteria: 上线验证全部通过、部署报告正式归档
+  exit_criteria: 系统稳定运行约定周期、文档全量更新、结项评审通过
+  owner: 运维工程师 + 项目经理
+  schedule_guidance: 持续（项目交付后长期）
+  id: operations
+  number: 6
+  scope: project
+  activities:
+  - id: operations.a1
+    name: 线上故障响应
+  - id: operations.a2
+    name: bug修复
+  - id: operations.a3
+    name: 文档同步更新
+  - id: operations.a4
+    name: 小版本补丁
+  - id: operations.a5
+    name: 项目结项归档
+  deliverables:
+  - id: operations.d1
+    name: 《运维手册》
+  - id: operations.d2
+    name: 《结项报告》
+  - id: operations.d3
+    name: 《全量归档文档集》
+source_sections:
+  适用场景: 金融、政务、医疗等强监管合规项目；需求完全明确、预估变更率＜10%；小型项目；要求完整审计追溯与书面签字。
+  核心规则: 上一阶段100%完成 + 正式评审签字，才允许进入下一阶段；完全禁止跨阶段并发；任何缺陷必须回退至对应源头阶段修复，禁止下游阶段自行消化上游问题。
+  阶段划分（共6个正式阶段）: '| 阶段编号 | 阶段名称 | 阶段目标 | 准入条件 | 核心工作 | 关键交付物 | 准出验收标准 | 责任人 | 排期占比 |
+
+    |---|---|---|---|---|---|---|---|---|
+
+    | 1 | 需求定审 | 明确全部功能/非功能需求与验收标准，冻结正式需求基线 | 项目立项完成，业务方提交初始需求输入 | 用户访谈、业务流程梳理、功能/非功能需求分类、验收标准定义、需求优先级排序、搭建需求追溯矩阵
+    | 《需求规格说明书(SRS)》《需求追溯矩阵》《验收标准清单》 | SRS逐条评审签字、需求基线100%冻结、验收标准可量化可验证 | 产品经理 + 业务分析师 | 15%~20% |
+
+    | 2 | 设计签审 | 完成完整系统架构、模块、数据库、接口方案设计，输出正式设计基线 | 需求基线正式评审通过 | 概要架构设计、模块拆分、数据库表结构设计、接口定义、安全方案、部署架构、编写详细设计文档
+    | 《概要设计文档》《详细设计文档》《数据库设计文档》《接口规范文档》 | 设计文档评审签字、需求100%可追溯、无未解决重大技术风险 | 架构师 + 技术负责人 | 15%~20% |
+
+    | 3 | 编码实现 | 依据设计文档完成全部代码开发，完成单元自测与代码评审 | 全套系统设计文档正式评审通过 | 按详细设计编码、代码走查、单元测试编写执行、构建脚本开发 | 源代码、单元测试用例、构建脚本、代码评审记录
+    | 代码100%开发完成、单元测试覆盖率达标、代码评审无遗留问题 | 开发工程师 | 30%~40% |
+
+    | 4 | 测试验收 | 全量验证系统质量，完成集成、系统、UAT全流程测试，缺陷清零 | 全部编码完成、单元测试100%通过 | 集成测试、系统功能测试、性能/安全测试、UAT用户验收、缺陷修复与回归验证
+    | 《测试用例集》《测试报告》《缺陷清单》《UAT验收报告》 | 高危/严重缺陷清零、测试用例执行率100%、业务方UAT签字确认 | 测试工程师 + 业务方 | 15%~20% |
+
+    | 5 | 部署交付 | 生产环境正式部署交付，完成用户培训与上线全量验证 | 全量测试报告签字、UAT业务验收通过 | 生产环境准备、版本包部署、数据初始化、业务人员培训、上线功能验证 | 《部署方案》《上线报告》《用户操作手册》
+    | 上线验证全量通过、业务功能可用、用户培训覆盖完成 | 运维工程师 + 项目经理 | 3%~5% |
+
+    | 6 | 运维归档 | 保障线上稳定运行，完成项目结项与全量档案归档 | 上线验证全部通过、部署报告正式归档 | 线上故障响应、bug修复、文档同步更新、小版本补丁、项目结项归档 | 《运维手册》《结项报告》《全量归档文档集》
+    | 系统稳定运行约定周期、文档全量更新、结项评审通过 | 运维工程师 + 项目经理 | 持续（项目交付后长期） |'
+  并行约束: '**完全无并发，阶段强制串行；禁止提前启动后续阶段任何正式工作，仅可开展非产出性的背景调研。**'
+  阶段门禁规则: '1. 采用**一级正式评审制**，每个阶段准出必须召开正式评审会，所有相关角色全员签字确认，一票否决。
+
+    2. 上一阶段未通过评审，严禁启动下一阶段任何工作；阶段工作未完成不得申请评审。
+
+    3. 交付物版本规则：评审通过后主版本号+1；未通过则修订后重新评审，修订次数记录备案。
+
+    4. 所有评审记录、签字文件统一归档，作为审计追溯依据。'
+  缺陷回退规则: '1. 设计阶段发现需求不清晰/遗漏：必须回退至「需求定审」阶段补充完善，更新SRS并重新评审后，方可继续设计工作。
+
+    2. 开发阶段发现设计缺陷/逻辑矛盾：必须回退至「设计签审」阶段修正方案，更新设计文档并重新评审后，方可继续编码。
+
+    3. 测试阶段发现代码Bug：在测试阶段内修复回归，不跨阶段回退。
+
+    4. 测试阶段发现需求理解偏差/功能缺失：必须回退至「需求定审」阶段确认，视影响范围同步回退设计、开发阶段整改。
+
+    5. 上线后发现严重功能缺陷：启动紧急修复流程，视严重程度执行版本回滚；缺陷溯源后回退对应阶段整改，更新基线。'
+  变更处理规则: '1. 全阶段严格控制变更；任何需求、设计变更必须走正式变更控制流程。
+
+    2. 变更需评估影响范围、成本、工期，提交变更评审会审批，未通过不得执行。
+
+    3. 变更通过后，更新对应阶段基线，重新执行该阶段及下游所有阶段评审。'

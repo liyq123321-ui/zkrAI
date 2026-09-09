@@ -12,6 +12,7 @@ from app.domain.types import (
     WorkBreakdown,
 )
 from app.domain.implementation_plan import ImplementationPlan
+from app.domain.sdlc import LifecycleAssessment
 
 
 class ScriptedAgentGateway:
@@ -21,6 +22,7 @@ class ScriptedAgentGateway:
         self,
         *,
         analyze_results: deque[ClarificationAnalysis | Exception] | None = None,
+        lifecycle_results: deque[LifecycleAssessment | Exception] | None = None,
         generate_results: deque[ProjectSpecPayload | Exception] | None = None,
         prototype_results: deque[HtmlPrototypePayload | Exception] | None = None,
         review_results: deque[SemanticReview | Exception] | None = None,
@@ -30,6 +32,7 @@ class ScriptedAgentGateway:
         rewrite_results: deque[PrdRewriteOutput | Exception] | None = None,
     ) -> None:
         self._results = {
+            "recommend_lifecycle": lifecycle_results or deque(),
             "analyze_brief": analyze_results or deque(),
             "generate_spec": generate_results or deque(),
             "generate_prd_prototype": prototype_results or deque(),
@@ -42,6 +45,9 @@ class ScriptedAgentGateway:
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.child_process_calls = 0
         self.prototype_enabled = prototype_results is not None
+
+    async def recommend_lifecycle(self, payload: dict[str, object]) -> LifecycleAssessment:
+        return self._next("recommend_lifecycle", payload)
 
     async def analyze_brief(self, payload: dict[str, object]) -> ClarificationAnalysis:
         return self._next("analyze_brief", payload)

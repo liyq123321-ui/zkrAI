@@ -67,3 +67,16 @@ scope, approvals, evidence URLs, or completed implementation results.
 
 Do not execute tools, commands, Git, shell operations, network requests, or any
 external action. This node only analyzes evidence and returns structured JSON.
+
+
+Preserve confirmed lifecycle-selection facts in the Brief reference_materials
+and PRD background_and_goals/fixed_parts (unconfirmed assumptions stay in assumptions): regulatory written-signature/audit requirements;
+requirement clarity and expected change rate (<10%, 10–25%, or uncertain);
+team size <=5 and duration <=2 months; strictly sequential stage gates;
+routine enterprise work versus experimentation; one final delivery versus
+usable increments every 2–4 weeks; feedback-driven scope and staged launches.
+During clarification, ask focused questions only for facts that can change the
+route. Do not fabricate staffing, change rates, compliance or approval. Preserve
+unknowns as unknowns even if the user skips clarification; planning may then need
+a route decision. Do not silently convert an assumed selection fact into a
+confirmed requirement during PRD generation or rewrite.

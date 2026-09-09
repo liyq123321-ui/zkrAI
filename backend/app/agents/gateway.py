@@ -1,6 +1,7 @@
 """Agent gateway contract."""
 from typing import Protocol
 from app.domain.implementation_plan import ImplementationPlan
+from app.domain.sdlc import LifecycleAssessment
 
 from app.domain.types import (
     ClarificationAnalysis,
@@ -13,6 +14,9 @@ from app.domain.types import (
 
 
 class AgentGateway(Protocol):
+    async def recommend_lifecycle(self, payload: dict[str, object]) -> LifecycleAssessment:
+        """Assess clarified facts for deterministic SDLC route ranking."""
+
     async def analyze_brief(self, payload: dict[str, object]) -> ClarificationAnalysis:
         """Assess whether a Project Brief is ready for specification."""
 

@@ -1,6 +1,7 @@
 import { apiClient } from './client';
 import { appConfig } from './config';
 import type {
+  AgentRuntimeEventDto,
   AgentRuntimeDto,
   AgentSpecDto,
   AuditEventDto,
@@ -9,6 +10,8 @@ import type {
   CommandJobReadDto,
   CommandResultDto,
   CommandSubmissionDto,
+  LifecycleModel,
+  LifecycleRouteDecisionDto,
   ProjectBriefDto,
   SessionStateDto,
   SessionSummaryDto,
@@ -42,6 +45,23 @@ export function createSession(requestId: string, brief: ProjectBriefDto, signal?
   });
 }
 
+export const getLifecycleRoutes = (sessionId: string, signal?: AbortSignal) =>
+  apiClient.request<LifecycleRouteDecisionDto | null>(`/sessions/${sessionId}/sdlc/routes`, { signal });
+
+export const recommendLifecycleRoutes = (sessionId: string, signal?: AbortSignal) =>
+  apiClient.request<LifecycleRouteDecisionDto>(`/sessions/${sessionId}/sdlc/routes/recommend`, {
+    method: 'POST',
+    signal,
+    timeoutMs: SINGLE_AGENT_COMMAND_TIMEOUT_MS,
+  });
+
+export const selectLifecycleRoute = (sessionId: string, model: LifecycleModel, signal?: AbortSignal) =>
+  apiClient.request<LifecycleRouteDecisionDto>(`/sessions/${sessionId}/sdlc/routes/select`, {
+    method: 'POST',
+    body: { model },
+    signal,
+  });
+
 export function getSessionState(sessionId: string, signal?: AbortSignal) {
   return apiClient.request<SessionStateDto>(`/sessions/${sessionId}/state`, { signal });
 }
@@ -51,6 +71,15 @@ export const listSessions = (signal?: AbortSignal) =>
 
 export const listAgentRuntime = (sessionId: string, signal?: AbortSignal) =>
   apiClient.request<AgentRuntimeDto[]>(`/sessions/${sessionId}/agents/runtime`, { signal });
+
+export const listAgentRuntimeEvents = (
+  sessionId: string,
+  agentSessionId: string,
+  signal?: AbortSignal,
+) => apiClient.request<AgentRuntimeEventDto[]>(
+  `/sessions/${sessionId}/agents/${agentSessionId}/runtime-events`,
+  { signal },
+);
 
 export function executeCommand(
   sessionId: string,

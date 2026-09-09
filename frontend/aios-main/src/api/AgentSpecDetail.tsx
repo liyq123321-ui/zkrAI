@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -7,9 +7,7 @@ import {
   FolderLock,
   ListChecks,
   Network,
-  PackageCheck,
   ShieldCheck,
-  SlidersHorizontal,
   TestTube2,
   UserRound,
   Wrench,
@@ -18,6 +16,7 @@ import type { AgentSpecDto, SpecVersionDto, WorkItemDto } from './dto';
 import { AgentSpecDetails } from './AgentSpecDetails';
 import type { EmployeeOption } from './employeeDirectory';
 import { WorkItemAgentPanel } from './WorkItemAgentPanel';
+import { WorkItemReviewDashboard } from './WorkItemReviewDashboard';
 import { workItemLane, workItemStatusLabel } from './workflowUi';
 
 const fieldLabels: Record<string, string> = {
@@ -128,6 +127,7 @@ export function AgentSpecDetail({ item, agentSpecs, sourceSpecs = [], employees 
   workItems?: WorkItemDto[];
   onOpenWorkItem?: (workItemId: string) => void;
 }) {
+  const [activeTab, setActiveTab] = useState<'review' | 'plan' | 'collaboration' | 'spec'>('review');
   const lane = workItemLane(item.status);
   const primary = agentSpecs[0];
   const content = primary?.content ?? {};
@@ -164,123 +164,78 @@ export function AgentSpecDetail({ item, agentSpecs, sourceSpecs = [], employees 
         <div><h3>任务目标</h3><p>{objective}</p></div>
       </div>
 
-      <div className="ff-spec-detail-layout">
+      <nav className="ff-task-detail-tabs" aria-label="任务详情视图">
+        {([
+          ['review', '人工审核'],
+          ['plan', '实施方案'],
+          ['collaboration', '协作与依赖'],
+          ['spec', 'Agent Spec'],
+        ] as const).map(([key, label]) => <button key={key} type="button" className={activeTab === key ? 'is-active' : ''} aria-pressed={activeTab === key} onClick={() => setActiveTab(key)}>{label}</button>)}
+      </nav>
+
+      {activeTab === 'review' && <WorkItemReviewDashboard
+        item={item}
+        content={content}
+        employees={employees}
+        assigneeId={assigneeId}
+        onAssigneeChange={onPreviewChange ? (value) => onPreviewChange({ assigneeId: value }) : undefined}
+        dependencies={dependencies}
+        workItems={workItems}
+        onOpenWorkItem={onOpenWorkItem}
+      />}
+
+      {activeTab === 'plan' && <div className="ff-task-tab-panel ff-spec-main">
+        {primary ? agentSpecs.map((agentSpec) => <AgentSpecDetails
+          key={agentSpec.id}
+          agentSpec={agentSpec}
+          sourceSpec={sourceSpecs.find((spec) => spec.id === agentSpec.source_spec_version_id)}
+          implementationOnly
+        />) : <div className="ff-empty-detail">此任务尚未生成实施方案。</div>}
+      </div>}
+
+      {activeTab === 'collaboration' && <div className="ff-task-tab-panel ff-spec-detail-layout">
         <div className="ff-spec-main">
           <WorkItemAgentPanel draft={preview.draft} onDraftChange={onPreviewChange ? (draft) => onPreviewChange({ draft }) : undefined} />
-          {primary ? (
-            <>
-              {agentSpecs.map((agentSpec) => (
-                <AgentSpecDetails
-                  key={agentSpec.id}
-                  agentSpec={agentSpec}
-                  sourceSpec={sourceSpecs.find((spec) => spec.id === agentSpec.source_spec_version_id)}
-                  implementationOnly
-                />
-              ))}
-              <SpecSection title="工作范围" icon={<ShieldCheck aria-hidden="true" />}>
-                <ContentGroup label="需要完成" value={content.scope ?? item.scope} />
-                <ContentGroup label="明确不包含" value={content.exclusions ?? item.exclusions} />
-              </SpecSection>
-
-              <SpecSection title="输入与交付物" icon={<PackageCheck aria-hidden="true" />}>
-                <ContentGroup label="上下文与参考" value={content.context_refs} />
-                <ContentGroup label="输入" value={content.inputs} />
-                <ContentGroup label="输出" value={content.outputs ?? item.outputs} />
-              </SpecSection>
-
-              <SpecSection title="验收标准与测试" icon={<CheckCircle2 aria-hidden="true" />}>
-                <ContentGroup label="验收标准" value={content.acceptance_criteria ?? item.acceptance_criteria} />
-                <ContentGroup label="测试义务" value={content.test_obligations} />
-              </SpecSection>
-
-              <SpecSection title="实施边界与扩展点" icon={<SlidersHorizontal aria-hidden="true" />}>
-                <ContentGroup label="固定约束" value={content.fixed_constraints} />
-                <ContentGroup label="可配置部分" value={content.configurable_parts} />
-                <ContentGroup label="扩展点" value={content.extension_points} />
-              </SpecSection>
-
-              {(present(content.risks) || present(content.open_questions)) && (
-                <SpecSection title="风险与待确认事项" icon={<AlertTriangle aria-hidden="true" />}>
-                  <ContentGroup label="风险" value={content.risks} />
-                  <ContentGroup label="待确认事项" value={content.open_questions} />
-                </SpecSection>
-              )}
-
-              {otherEntries.length > 0 && (
-                <SpecSection title="其他说明" icon={<FileInput aria-hidden="true" />}>
-                  {otherEntries.map(([key, value]) => <ContentGroup key={key} label={fieldLabels[key] ?? key.replaceAll('_', ' ')} value={value} />)}
-                </SpecSection>
-              )}
-
-              {agentSpecs.length > 1 && <p className="ff-spec-version-note">该任务关联 {agentSpecs.length} 份 Spec，当前展示最新返回的第一份。</p>}
-            </>
-          ) : (
-            <div className="ff-empty-detail">该卡片当前还没有 Agent Spec。任务信息仍以 WorkItem 数据展示。</div>
-          )}
+          <SpecSection title="工作范围" icon={<ShieldCheck aria-hidden="true" />}>
+            <ContentGroup label="需要完成" value={content.scope ?? item.scope} />
+            <ContentGroup label="明确不包含" value={content.exclusions ?? item.exclusions} />
+          </SpecSection>
+          {(present(content.risks) || present(content.open_questions)) && <SpecSection title="风险与待确认事项" icon={<AlertTriangle aria-hidden="true" />}>
+            <ContentGroup label="风险" value={content.risks} />
+            <ContentGroup label="待确认事项" value={content.open_questions} />
+          </SpecSection>}
         </div>
-
         <aside className="ff-spec-sidebar">
           <MetaCard title="当前状态" icon={<CheckCircle2 aria-hidden="true" />}>
             <strong className={`ff-meta-status is-${lane}`}>{workItemStatusLabel(item.status)}</strong>
-            <p>状态由后端 WorkItem 字段决定，前端不修改任务状态。</p>
+            <p>状态由后端 WorkItem 字段决定。</p>
           </MetaCard>
           <MetaCard title="责任 Agent" icon={<UserRound aria-hidden="true" />}>
-            <label className="ff-assignee-field">
-              <span>指派员工</span>
-              <select value={assigneeId} disabled={!onPreviewChange} onChange={(event) => onPreviewChange?.({ assigneeId: event.target.value })}>
-                <option value="">未指派</option>
-                {employeeOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
-              </select>
-            </label>
+            <label className="ff-assignee-field"><span>指派员工</span><select value={assigneeId} disabled={!onPreviewChange} onChange={(event) => onPreviewChange?.({ assigneeId: event.target.value })}>
+              <option value="">未指派</option>{employeeOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+            </select></label>
             <p>{text(content.responsible_role, item.responsible_role || '未指定角色')}</p>
-            <p className="ff-assignee-preview-note">仅本页预览，刷新后恢复。示例员工未关联真实账号。</p>
           </MetaCard>
           <MetaCard title="依赖关系" icon={<Network aria-hidden="true" />}>
-            {dependencies.length > 0 ? (
-              <div className="ff-dependency-list">
-                {dependencies.map((id) => {
-                  const dependency = workItems.find((candidate) => candidate.id === id);
-                  const label = dependency?.title || `#${id}`;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      aria-label={`打开依赖任务：${label}`}
-                      disabled={!dependency || !onOpenWorkItem}
-                      onClick={() => onOpenWorkItem?.(id)}
-                    >
-                      <span>{label}<ArrowUpRight aria-hidden="true" /></span>
-                      {dependency && <small>#{id}</small>}
-                      {!dependency && <small>任务暂不可用</small>}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : <p>无前置依赖</p>}
+            {dependencies.length ? <div className="ff-dependency-list">{dependencies.map((id) => {
+              const dependency = workItems.find((candidate) => candidate.id === id);
+              const label = dependency?.title || `#${id}`;
+              return <button key={id} type="button" aria-label={`打开依赖任务：${label}`} disabled={!dependency || !onOpenWorkItem} onClick={() => onOpenWorkItem?.(id)}><span>{label}<ArrowUpRight aria-hidden="true" /></span><small>#{id}</small></button>;
+            })}</div> : <p>无前置依赖</p>}
           </MetaCard>
-          {skills.length > 0 && (
-            <MetaCard title="所需技能" icon={<Wrench aria-hidden="true" />}>
-              <div className="ff-spec-chips">{skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
-            </MetaCard>
-          )}
-          {present(content.allowed_tools) && (
-            <MetaCard title="允许工具" icon={<TestTube2 aria-hidden="true" />}>
-              <StructuredValue value={content.allowed_tools} />
-            </MetaCard>
-          )}
-          {present(content.allowed_paths) && (
-            <MetaCard title="允许路径" icon={<FolderLock aria-hidden="true" />}>
-              <StructuredValue value={content.allowed_paths} />
-            </MetaCard>
-          )}
-          {primary && (
-            <MetaCard title="Spec 来源" icon={<FileInput aria-hidden="true" />}>
-              <p>Agent Spec：{primary.id}</p>
-              <p>PRD 版本：{primary.source_spec_version_id}</p>
-            </MetaCard>
-          )}
+          {skills.length > 0 && <MetaCard title="所需技能" icon={<Wrench aria-hidden="true" />}><div className="ff-spec-chips">{skills.map((skill) => <span key={skill}>{skill}</span>)}</div></MetaCard>}
+          {present(content.allowed_tools) && <MetaCard title="允许工具" icon={<TestTube2 aria-hidden="true" />}><StructuredValue value={content.allowed_tools} /></MetaCard>}
+          {present(content.allowed_paths) && <MetaCard title="允许路径" icon={<FolderLock aria-hidden="true" />}><StructuredValue value={content.allowed_paths} /></MetaCard>}
         </aside>
-      </div>
+      </div>}
+
+      {activeTab === 'spec' && <div className="ff-task-tab-panel ff-spec-main">
+        {primary ? <>
+          {agentSpecs.map((agentSpec) => <AgentSpecDetails key={agentSpec.id} agentSpec={agentSpec} sourceSpec={sourceSpecs.find((spec) => spec.id === agentSpec.source_spec_version_id)} />)}
+          {otherEntries.length > 0 && <SpecSection title="扩展字段" icon={<FileInput aria-hidden="true" />}>{otherEntries.map(([key, value]) => <ContentGroup key={key} label={fieldLabels[key] ?? key.replaceAll('_', ' ')} value={value} />)}</SpecSection>}
+          {agentSpecs.length > 1 && <p className="ff-spec-version-note">该任务关联 {agentSpecs.length} 份 Agent Spec。</p>}
+        </> : <div className="ff-empty-detail">该任务当前还没有 Agent Spec。</div>}
+      </div>}
     </article>
   );
 }

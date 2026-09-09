@@ -1,0 +1,227 @@
+{
+  "$defs": {
+    "LifecyclePhase": {
+      "additionalProperties": false,
+      "properties": {
+        "milestone_key": {
+          "title": "Milestone Key",
+          "type": "string"
+        },
+        "stage_id": {
+          "title": "Stage Id",
+          "type": "string"
+        },
+        "iteration": {
+          "minimum": 0,
+          "title": "Iteration",
+          "type": "integer"
+        },
+        "exit_gate_key": {
+          "title": "Exit Gate Key",
+          "type": "string"
+        },
+        "schedule": {
+          "minLength": 1,
+          "title": "Schedule",
+          "type": "string"
+        }
+      },
+      "required": [
+        "milestone_key",
+        "stage_id",
+        "iteration",
+        "exit_gate_key",
+        "schedule"
+      ],
+      "title": "LifecyclePhase",
+      "type": "object"
+    },
+    "LifecycleTask": {
+      "additionalProperties": false,
+      "properties": {
+        "task_key": {
+          "title": "Task Key",
+          "type": "string"
+        },
+        "activity_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Activity Ids",
+          "type": "array"
+        },
+        "deliverable_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Deliverable Ids",
+          "type": "array"
+        },
+        "module_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Module Key"
+        },
+        "special_gate": {
+          "anyOf": [
+            {
+              "enum": [
+                "core_requirements_review",
+                "architecture_review",
+                "module_design_review"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Special Gate"
+        },
+        "gate_checks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Gate Checks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "task_key",
+        "activity_ids",
+        "deliverable_ids",
+        "gate_checks"
+      ],
+      "title": "LifecycleTask",
+      "type": "object"
+    },
+    "SelectionAnswer": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "answer": {
+          "enum": [
+            "yes",
+            "no",
+            "unknown"
+          ],
+          "title": "Answer",
+          "type": "string"
+        },
+        "evidence": {
+          "title": "Evidence",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question_id",
+        "answer",
+        "evidence"
+      ],
+      "title": "SelectionAnswer",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "rules_version": {
+      "title": "Rules Version",
+      "type": "string"
+    },
+    "rules_hash": {
+      "title": "Rules Hash",
+      "type": "string"
+    },
+    "model": {
+      "enum": [
+        "strict_waterfall",
+        "overlapping_waterfall",
+        "iterative_incremental"
+      ],
+      "title": "Model",
+      "type": "string"
+    },
+    "answers": {
+      "items": {
+        "$ref": "#/$defs/SelectionAnswer"
+      },
+      "maxItems": 10,
+      "minItems": 10,
+      "title": "Answers",
+      "type": "array"
+    },
+    "selection_reason": {
+      "minLength": 1,
+      "title": "Selection Reason",
+      "type": "string"
+    },
+    "phases": {
+      "items": {
+        "$ref": "#/$defs/LifecyclePhase"
+      },
+      "minItems": 1,
+      "title": "Phases",
+      "type": "array"
+    },
+    "tasks": {
+      "items": {
+        "$ref": "#/$defs/LifecycleTask"
+      },
+      "minItems": 1,
+      "title": "Tasks",
+      "type": "array"
+    },
+    "iteration_weeks": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Iteration Weeks"
+    },
+    "cadence_rationale": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cadence Rationale"
+    },
+    "operations_handover": {
+      "minLength": 1,
+      "title": "Operations Handover",
+      "type": "string"
+    }
+  },
+  "required": [
+    "rules_version",
+    "rules_hash",
+    "model",
+    "answers",
+    "selection_reason",
+    "phases",
+    "tasks",
+    "operations_handover"
+  ],
+  "title": "LifecyclePlan",
+  "type": "object"
+}

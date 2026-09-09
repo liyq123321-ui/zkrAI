@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.database.models import (
     AgentSpec,
     AgentCall,
+    AgentRuntimeEvent,
     AgentSession,
     AuditEvent,
     Project,
@@ -162,6 +163,23 @@ class AgentRuntimeRead(BaseModel):
     started_at: datetime
     completed_at: datetime | None
     call_count: int
+
+
+class AgentRuntimeEventRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    project_id: str
+    agent_session_id: str
+    agent_call_id: str
+    operation: str
+    event_type: str
+    item_type: str | None
+    status: str | None
+    title: str
+    detail: str | None
+    payload: dict[str, object]
+    created_at: datetime
 
 
 class QueryService:
@@ -393,6 +411,43 @@ class QueryService:
                         else None
                     ),
                     call_count=row.call_count,
+                )
+                for row in rows
+            ]
+
+    def agent_runtime_events(
+        self, session_id: str, agent_session_id: str
+    ) -> list[AgentRuntimeEventRead]:
+        """Return the complete sanitized Codex event timeline for one Agent."""
+
+        with self._session_factory() as db:
+            project = self._project(db, session_id)
+            agent = db.get(AgentSession, agent_session_id)
+            if agent is None or agent.project_id != project.id:
+                raise KeyError("Agent session not found for project")
+            rows = (
+                db.query(AgentRuntimeEvent)
+                .filter_by(
+                    project_id=project.id,
+                    agent_session_id=agent_session_id,
+                )
+                .order_by(AgentRuntimeEvent.created_at, AgentRuntimeEvent.id)
+                .all()
+            )
+            return [
+                AgentRuntimeEventRead(
+                    id=row.id,
+                    project_id=row.project_id,
+                    agent_session_id=row.agent_session_id,
+                    agent_call_id=row.agent_call_id,
+                    operation=row.operation,
+                    event_type=row.event_type,
+                    item_type=row.item_type,
+                    status=row.status,
+                    title=row.title,
+                    detail=row.detail,
+                    payload=dict(row.payload or {}),
+                    created_at=self._as_utc(row.created_at),
                 )
                 for row in rows
             ]

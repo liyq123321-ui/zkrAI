@@ -78,6 +78,25 @@ class Project(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
 
+class SdlcRouteDecision(Base):
+    """Recommended routes and the user's pre-planning lifecycle choice."""
+
+    __tablename__ = "sdlc_route_decisions"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_sdlc_route_project"),)
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, nullable=False, unique=True, index=True)
+    rules_version = Column(String, nullable=False)
+    rules_hash = Column(String(64), nullable=False)
+    assessment = Column(JSON, nullable=False)
+    options = Column(JSON, nullable=False)
+    selected_model = Column(String, nullable=True)
+    selected_by = Column(String, nullable=True)
+    selected_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class AgentSession(Base):
     __tablename__ = "agent_sessions"
 
@@ -105,6 +124,33 @@ class AgentCall(Base):
     error = Column(Text, nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AgentRuntimeEvent(Base):
+    """Append-only, public-safe Codex JSONL event attached to one Agent call."""
+
+    __tablename__ = "agent_runtime_events"
+    __table_args__ = (
+        Index(
+            "ix_agent_runtime_events_session_time",
+            "agent_session_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(String, nullable=False, index=True)
+    agent_session_id = Column(String, nullable=False, index=True)
+    agent_call_id = Column(String, nullable=False, index=True)
+    operation = Column(String, nullable=False)
+    event_type = Column(String, nullable=False)
+    item_type = Column(String, nullable=True)
+    status = Column(String, nullable=True)
+    title = Column(String, nullable=False)
+    detail = Column(Text, nullable=True)
+    payload = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class IntakeAnalysisClaim(Base):

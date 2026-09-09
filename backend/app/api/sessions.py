@@ -10,11 +10,13 @@ from sqlalchemy.orm import Session
 from app.agents.gateway import AgentGateway
 from app.agents.codex import AgentExecutionError
 from app.domain.types import CommandAction, ProjectPhase
+from app.domain.sdlc import LifecycleRouteDecision
 from app.identity import ActorResolver
 from app.schemas.workflow import (
     CommandJobAccepted,
     CommandJobRead,
     CommandResult,
+    LifecycleRouteSelectionRequest,
     SessionCommandRequest,
     SessionCreateRequest,
     SessionState,
@@ -26,6 +28,7 @@ from app.services.execution_service import ExecutionService
 from app.services.project_service import ProjectService
 from app.services.query_service import (
     AgentRuntimeRead,
+    AgentRuntimeEventRead,
     AgentSpecRead,
     AuditEventRead,
     QueryService,
@@ -36,6 +39,7 @@ from app.services.query_service import (
 from app.services.spec_service import SpecService
 from app.services.prd_review import PrdReviewService
 from app.services.prd_prototype import PrdPrototypeService
+from app.services.lifecycle_decision import LifecycleDecisionService
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +70,7 @@ def build_router(
         },
     )
     queries = QueryService(session_factory)
+    lifecycle_decisions = LifecycleDecisionService(session_factory, agent_gateway)
 
     def http_error(error: Exception) -> HTTPException:
         public_error = classify_workflow_error(error)
@@ -274,6 +279,53 @@ def build_router(
     def list_agent_runtime(session_id: str) -> list[AgentRuntimeRead]:
         try:
             return queries.agent_runtime(session_id)
+        except Exception as error:
+            raise http_error(error) from error
+
+    @router.get(
+        "/{session_id}/sdlc/routes",
+        response_model=LifecycleRouteDecision | None,
+    )
+    def get_lifecycle_routes(session_id: str) -> LifecycleRouteDecision | None:
+        try:
+            return lifecycle_decisions.read(session_id)
+        except Exception as error:
+            raise http_error(error) from error
+
+    @router.post(
+        "/{session_id}/sdlc/routes/recommend",
+        response_model=LifecycleRouteDecision,
+    )
+    async def recommend_lifecycle_routes(session_id: str) -> LifecycleRouteDecision:
+        try:
+            return await lifecycle_decisions.recommend(session_id)
+        except Exception as error:
+            raise http_error(error) from error
+
+    @router.post(
+        "/{session_id}/sdlc/routes/select",
+        response_model=LifecycleRouteDecision,
+    )
+    def select_lifecycle_route(
+        session_id: str,
+        request_body: LifecycleRouteSelectionRequest,
+        request: Request,
+    ) -> LifecycleRouteDecision:
+        actor_id = actor_resolver.resolve(request, request_body.actor_id)
+        try:
+            return lifecycle_decisions.select(session_id, request_body.model, actor_id)
+        except Exception as error:
+            raise http_error(error) from error
+
+    @router.get(
+        "/{session_id}/agents/{agent_session_id}/runtime-events",
+        response_model=list[AgentRuntimeEventRead],
+    )
+    def list_agent_runtime_events(
+        session_id: str, agent_session_id: str
+    ) -> list[AgentRuntimeEventRead]:
+        try:
+            return queries.agent_runtime_events(session_id, agent_session_id)
         except Exception as error:
             raise http_error(error) from error
 

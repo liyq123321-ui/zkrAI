@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.domain.implementation_plan import ImplementationPlan
+from app.domain.sdlc import LifecyclePlan
 
 
 def normalize_plain_text(value: str, *, max_length: int, field_name: str) -> str:
@@ -440,6 +441,8 @@ class BaseWorkBreakdown(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    lifecycle: LifecyclePlan | None = None
+
     milestones: list[WorkItemProposal] = Field(min_length=1)
     tasks: list[WorkItemProposal] = Field(min_length=1)
     agent_specs: list[BaseAgentSpecProposal] = Field(min_length=1)
@@ -447,6 +450,8 @@ class BaseWorkBreakdown(BaseModel):
 
 class WorkBreakdown(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    lifecycle: LifecyclePlan | None = None
 
     milestones: list[WorkItemProposal] = Field(min_length=1)
     tasks: list[WorkItemProposal] = Field(min_length=1)
@@ -457,6 +462,8 @@ class WorkBreakdownRevision(BaseModel):
     """Replacement records for affected existing items; omitted items stay intact."""
 
     model_config = ConfigDict(extra="forbid")
+
+    lifecycle: LifecyclePlan | None = None
 
     milestones: list[WorkItemProposal] = Field(default_factory=list)
     tasks: list[WorkItemProposal] = Field(default_factory=list)

@@ -17,3 +17,35 @@ rule with a proposed implementation composition, split it into separate FIXED an
 PROPOSED decisions instead of upgrading the whole composition to FIXED. Feedback
 cannot authorize extra scope or fabricated approval.
 Return only the ImplementationPlan JSON matching the supplied schema.
+
+
+SDLC planning contract (authoritative server rules):
+Read sdlc_rules and its version/hash before planning. For decomposition, return
+lifecycle with q1..q10 evidence-backed answers, deterministic model selection,
+exact stage-to-milestone and task mappings, schedule and bounded operations
+handover. A yes/no answer requires a verbatim quote from approved_spec; use
+unknown for absent facts, never infer no from silence. Ambiguous/no-match routes
+require clarification; never choose a convenient fallback or fabricate evidence.
+Use each selected stage's exact <=4-character name as its milestone title. Keep
+global startup, numbered iteration cycles and continuous operations distinct.
+Cover every activity and deliverable ID within its phase. Every mapped deliverable
+must appear under that task's required outputs with the exact catalogue name.
+Plan phase exit reviews as TASKs. Copy required_gate_checks into the gate task's
+lifecycle gate_checks AND its acceptance criterion text. A phase gate depends on
+all other tasks in its phase. Downstream TASKs depend on upstream gate TASKs,
+never on a non-executable milestone. Conservatively serialize when unsure;
+only use explicitly listed module/core-baseline or cross-iteration overlap gates.
+All gates are future obligations: do not claim signatures, passed tests, deployment
+or feedback already exist. Existing approved artifacts may be inputs to a
+verification/handover task, never fabricated completion. Respect approved scope;
+an excluded lifecycle activity requires an explicit scope decision, not an
+unauthorized deployment or a silently omitted phase.
+Use lifecycle task mappings and the selected model's entry, exit, owner, schedule,
+review, defect and change rules in detailed task plans. Interpret non-coding tasks
+as document/review/acceptance procedures with verifiable evidence, not fake code.
+When revising, preserve the chosen route; return lifecycle only when its mappings
+need updating, otherwise null retains it. Never drop SDLC metadata during repair.
+Reviewer: independently check the meaning of each evidence quote and yes/no answer,
+scope, owners, timing feasibility, module boundary safety and all source SOP clauses.
+Treat unsupported route decisions as NEED_INFO with a blocking finding. Structural
+validation is necessary but cannot prove evidence meaning or real approval.

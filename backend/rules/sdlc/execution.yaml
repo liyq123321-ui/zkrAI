@@ -1,0 +1,101 @@
+version: 1
+# All dependency lists refer to executable TASK keys, never milestone keys.
+models:
+  strict_waterfall:
+    ordered_stages: [requirements, design, implementation, acceptance, delivery, operations]
+    transition: previous_exit_gate
+    overlap: []
+    review:
+      phase_exit: formal_unanimous
+      required: [all_work_complete, all_deliverables_present, all_roles_signed, no_veto, archive_record]
+      baseline: {on_pass: increment_major, on_fail: revise_and_record_count}
+    defects:
+      - {id: SW-D1, event: unclear_or_missing_requirement, target: requirements, action: pause_downstream_rebaseline_review}
+      - {id: SW-D2, event: design_defect_during_coding, target: design, action: pause_downstream_rebaseline_review}
+      - {id: SW-D3, event: code_bug_during_testing, target: acceptance, action: local_fix_and_regression}
+      - {id: SW-D4, event: requirement_deviation_during_testing, target: requirements, action: impact_design_code_and_rebaseline}
+      - {id: SW-D5, event: severe_production_defect, target: source_stage, action: emergency_fix_assess_rollback_rebaseline}
+    changes:
+      approval: formal_change_board
+      assessment: [scope, cost, schedule]
+      before_approval: forbid_execution
+      after_approval: [update_source_baseline, review_source_and_all_downstream_stages]
+  overlapping_waterfall:
+    ordered_stages: [requirements, design, implementation, acceptance, operations]
+    transition: previous_exit_gate
+    overlap:
+      - id: OW-P1
+        stage: design
+        alternative_entry_gate: core_requirements_review
+        source_stage: requirements
+      - id: OW-P2
+        stage: implementation
+        alternative_entry_gate: module_design_review
+        source_stage: design
+        same_module: true
+    internal_parallel:
+      implementation: module_code_then_module_tests
+      operations: [deploy_with_documentation, verify_with_monitoring_and_archival]
+    review:
+      requirements: formal_unanimous
+      design: formal_unanimous
+      acceptance: formal_unanimous
+      module: technical_lead_decision
+      supplementary: direct_stakeholder_confirmation
+    special_gates:
+      core_requirements_review: {stage: requirements, review: formal_unanimous, required_deliverables: [requirements.d1, requirements.d3]}
+      architecture_review: {stage: design, review: formal_unanimous, required_deliverables: [design.d1]}
+      module_design_review: {stage: design, review: technical_lead_decision, module_required: true, required_deliverables: [design.d2], prerequisite_review: architecture_review}
+    module_sequence:
+      stage: implementation
+      code_activity: implementation.a1
+      test_activities: [implementation.a3, implementation.a4]
+    red_lines:
+      - core_requirements_before_detailed_design
+      - reviewed_module_design_before_coding
+      - completed_module_code_before_system_testing
+      - no_major_new_module_design_during_system_testing
+      - no_new_feature_development_during_deployment
+      - no_unreviewed_major_change_during_maintenance
+    defects:
+      - {id: OW-D1, event: core_requirement_or_architecture_defect, target: source_stage, action: pause_related_downstream_rebaseline_review}
+      - {id: OW-D2, event: module_design_or_code_defect, target: source_module, action: module_local_repair_others_continue}
+      - {id: OW-D3, event: module_bug_during_testing, target: acceptance, action: local_fix_and_regression_others_continue}
+      - {id: OW-D4, event: core_architecture_defect_during_testing, target: design, action: pause_related_modules_review}
+      - {id: OW-D5, event: nonurgent_production_defect, target: operations, action: maintenance_plan}
+      - {id: OW-D6, event: urgent_production_defect, target: operations, action: immediate_fix_update_documents}
+    changes:
+      core_baseline: formal_review
+      minor_or_module: record_in_stage
+      already_in_test: impact_assessment_required
+      not_yet_in_test: flexible_adjustment_with_record
+      cross_module: technical_lead_approval_before_execution
+  iterative_incremental:
+    global_stage: backlog
+    ordered_stages: [planning, development, verification, release]
+    continuous_stage: operations
+    iteration_weeks: {minimum: 2, maximum: 4, other: explicit_rationale_required}
+    transition: previous_exit_gate
+    overlap:
+      - id: II-P1
+        stage: planning
+        previous_iteration_entry_stage: development
+        commitment_waits_for_previous_iteration_stage: verification
+    review:
+      planning: team_consensus
+      verification: demonstration_acceptance
+      release: no_blocking_defects
+      global_architecture_change: global_review
+    release_required: [increment_deployed, valid_user_feedback_collected, backlog_updated]
+    defects:
+      - {id: II-D1, event: requirement_or_design_defect, target: current_iteration, action: fix_or_return_to_backlog_if_time_insufficient}
+      - {id: II-D2, event: urgent_production_defect, target: operations, action: immediate_patch}
+      - {id: II-D3, event: nonurgent_production_defect, target: backlog, action: schedule_future_iteration}
+      - {id: II-D4, event: architecture_defect, target: development, action: pause_current_development_remediate_global_review}
+      - {id: II-D5, event: historical_regression, target: current_iteration, action: fix_first_or_degrade_and_schedule_special_iteration}
+    changes:
+      new_requirement: backlog_next_iteration
+      user_feedback: backlog_without_interrupting_current_iteration
+      emergency: fast_approval_impact_assessment_adjust_scope
+      failed_acceptance: move_unaccepted_features_to_next_iteration
+      blocking_defect: forbid_release_even_if_deferred

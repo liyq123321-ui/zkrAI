@@ -5,22 +5,30 @@ import {
   Bot,
   CheckCircle2,
   ClipboardList,
-  CornerDownLeft,
   FileText,
+  FolderPlus,
   GitFork,
+  History,
   LayoutGrid,
   Loader2,
+  Menu,
   Plus,
   RefreshCw,
+  Send,
   Server,
   Settings,
   ShieldCheck,
   Sparkles,
+  X,
 } from 'lucide-react';
 import { apiClient } from './client';
 import type {
   CommandAction,
+  AgentRuntimeDto,
+  AgentRuntimeEventDto,
   HealthDto,
+  LifecycleModel,
+  LifecycleRouteDecisionDto,
   ProjectBriefDto,
   SessionStateDto,
   WorkItemDto,
@@ -37,15 +45,24 @@ import { getEmployeeOptions } from './employeeDirectory';
 import { WorkItemDialog } from './WorkItemDialog';
 import { WorkItemFilterControls } from './WorkItemFilterControls';
 import { TaskDependencyGraph, type TaskDagProject } from './TaskDependencyGraph';
+import { TopLevelGraph } from './TopLevelGraph';
+import { LifecycleRouteChooser } from './LifecycleRouteChooser';
 import { emptyResources, projectSpec, projectTitle, useWorkspaceProjects, type ResourceBundle } from './useWorkspaceProjects';
 import { auditTitle, displayLabel, displayTime, progressDescription } from './presentation';
 import { PrdReviewPanel } from './PrdReviewPanel';
 import {
   createSession,
   executeCommand,
+  getLifecycleRoutes,
   getCommandJob,
+  getSessionState,
   isCommandJobAccepted,
+  listAgentRuntime,
+  listAgentRuntimeEvents,
+  recommendLifecycleRoutes,
+  selectLifecycleRoute,
 } from './sessions';
+import { streamChat } from './chat';
 import { observeCommandJob } from './commandJobs';
 import type { CommandJobAcceptedDto, CommandResultDto } from './dto';
 import {
@@ -82,14 +99,37 @@ const workItemActionLabels: Partial<Record<CommandAction, string>> = {
   fail_task: '失败',
 };
 
-type WorkspaceTab = 'kanban' | 'flow' | 'audit';
+type WorkspaceTab = 'topLevel' | 'kanban' | 'flow' | 'audit';
+type ChatTool = 'newProject' | 'resumeSession' | 'restoreSpec' | null;
+type ChatMessage = {
+  id: string;
+  role: 'user' | 'agent';
+  body: string;
+  detail?: string;
+  createdAt: string;
+};
+
+const NEW_CHAT_KEY = '__new__';
+
+const runtimeOperationLabels: Record<string, string> = {
+  recommend_lifecycle: '评估 SDLC 顶层路线',
+  analyze_brief: '分析项目需求完整性',
+  generate_spec: '生成项目规格',
+  generate_prd_prototype: '生成 PRD 交互原型',
+  review_spec: '审核项目规格质量',
+  decompose_spec: '按 SDLC 路线拆解任务',
+  plan_task: '生成任务实施计划',
+  review_breakdown: '审核任务拆解结果',
+  rewrite_prd: '根据审核批注修订 PRD',
+  restore_spec: '恢复历史项目规格',
+};
 
 const STALE_STATE_RECOVERY_MESSAGE =
   '状态已被其他操作更新。页面已刷新，请确认最新状态后重新提交。';
 
 const hierarchyColumns: Array<{ kind: NonNullable<WorkItemDto['kind']>; title: string; subtitle: string }> = [
   { kind: 'ROOT', title: '项目需求 (Root)', subtitle: '需求、PRD 与人工审核' },
-  { kind: 'MILESTONE', title: '里程碑 (Milestones)', subtitle: '交付阶段与关键节点' },
+  { kind: 'MILESTONE', title: 'SDLC 阶段 (Milestones)', subtitle: '所选生命周期路线的阶段' },
 ];
 
 type BoardColumn = {
@@ -102,7 +142,7 @@ type BoardColumn = {
 
 const boardColumns: BoardColumn[] = [
   { key: 'root', kind: 'ROOT', title: '项目需求 (Root)', subtitle: '需求、PRD 与人工审核' },
-  { key: 'milestone', kind: 'MILESTONE', title: '里程碑 (Milestones)', subtitle: '交付阶段与关键节点' },
+  { key: 'milestone', kind: 'MILESTONE', title: 'SDLC 阶段 (Milestones)', subtitle: '所选生命周期路线的阶段' },
   { key: 'task-todo', kind: 'TASK', taskLane: 'todo', title: '待开始 (To Do)', subtitle: '已下发、尚未开始的子任务' },
   { key: 'task-in-progress', kind: 'TASK', taskLane: 'in_progress', title: '进行中 (In Progress)', subtitle: '执行、评审或受阻的子任务' },
   { key: 'task-done', kind: 'TASK', taskLane: 'done', title: '已完成 (Done)', subtitle: '后端确认完成的子任务' },
@@ -211,19 +251,49 @@ export function ApiWorkspace() {
   const [observingDecomposition, setObservingDecomposition] = useState(false);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('kanban');
   const [chatOpen, setChatOpen] = useState(true);
+  const [chatTool, setChatTool] = useState<ChatTool>(null);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatMessages, setChatMessages] = useState<Record<string, ChatMessage[]>>({});
+  const [agentRuntime, setAgentRuntime] = useState<AgentRuntimeDto[]>([]);
+  const [topLevelRuntimeEvents, setTopLevelRuntimeEvents] = useState<AgentRuntimeEventDto[]>([]);
+  const [lifecycleDecision, setLifecycleDecision] = useState<LifecycleRouteDecisionDto | null>(null);
+  const [lifecycleLoading, setLifecycleLoading] = useState(false);
   const [kanbanFilters, setKanbanFilters] = useState(defaultWorkItemFilters);
   const [flowFilters, setFlowFilters] = useState(defaultWorkItemFilters);
+  const [auditFilters, setAuditFilters] = useState(defaultWorkItemFilters);
   const [clipboardResult, setClipboardResult] = useState<string | null>(null);
   const pendingCommandIds = useRef(new Map<string, string>());
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const decompositionLifecycles = useRef(new Set<AbortController>());
   const reconciledDecompositionJobs = useRef(new Set<string>());
   const reconcilingDecompositionJobs = useRef(new Set<string>());
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   const decompositionJobKey = (sessionId: string) =>
     `firstflight.decomposition-job.${sessionId}`;
   const decompositionObservationKey = (sessionId: string, commandId: string) =>
     `${sessionId}:${commandId}`;
+
+  const appendChatMessage = useCallback((
+    sessionId: string | null,
+    role: ChatMessage['role'],
+    body: string,
+    detail?: string,
+  ) => {
+    const key = sessionId ?? NEW_CHAT_KEY;
+    const message: ChatMessage = {
+      id: crypto.randomUUID(),
+      role,
+      body,
+      detail,
+      createdAt: new Date().toISOString(),
+    };
+    setChatMessages((previous) => ({
+      ...previous,
+      [key]: [...(previous[key] ?? []), message],
+    }));
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -246,10 +316,96 @@ export function ApiWorkspace() {
     commandObservations.current.clear();
   }, []);
 
+  useEffect(() => {
+    if (!activeSessionId) {
+      setAgentRuntime([]);
+      return undefined;
+    }
+    let disposed = false;
+    let timer: number | undefined;
+    let controller: AbortController | undefined;
+
+    const refresh = async () => {
+      controller = new AbortController();
+      try {
+        const snapshot = await listAgentRuntime(activeSessionId, controller.signal);
+        if (!disposed) setAgentRuntime(snapshot);
+      } catch {
+        // Keep the last successful snapshot. The main error surface owns API failures.
+      } finally {
+        if (!disposed) timer = window.setTimeout(refresh, 2_000);
+      }
+    };
+
+    void refresh();
+    return () => {
+      disposed = true;
+      controller?.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [activeSessionId]);
+
+  const activeRuntime = useMemo(() => {
+    const running = agentRuntime.find((agent) => agent.status === 'running');
+    return running ?? agentRuntime.at(-1) ?? null;
+  }, [agentRuntime]);
+  const runtimeAgentIds = agentRuntime.map((agent) => agent.agent_session_id).sort().join(',');
+  useEffect(() => {
+    if (activeTab !== 'topLevel' || !activeSessionId || !runtimeAgentIds) {
+      setTopLevelRuntimeEvents([]);
+      return undefined;
+    }
+    let disposed = false;
+    let timer: number | undefined;
+    const controllers = new Set<AbortController>();
+    const refresh = async () => {
+      const settled = await Promise.allSettled(agentRuntime.map(async (agent) => {
+        const controller = new AbortController();
+        controllers.add(controller);
+        try {
+          return await listAgentRuntimeEvents(activeSessionId, agent.agent_session_id, controller.signal);
+        } finally {
+          controllers.delete(controller);
+        }
+      }));
+      if (!disposed) {
+        const events = settled.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+        const unique = new Map(events.map((event) => [`${event.agent_session_id}:${event.id}`, event]));
+        setTopLevelRuntimeEvents([...unique.values()].sort((left, right) => left.created_at.localeCompare(right.created_at)));
+        timer = window.setTimeout(refresh, 3_000);
+      }
+    };
+    void refresh();
+    return () => {
+      disposed = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      controllers.forEach((controller) => controller.abort());
+    };
+  }, [activeSessionId, activeTab, runtimeAgentIds]);
+  const visibleChatMessages = chatMessages[activeSessionId ?? NEW_CHAT_KEY] ?? [];
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const scroll = chatScrollRef.current;
+      if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    activeSessionId,
+    activeRuntime?.current_summary,
+    busy,
+    chatTool,
+    state?.phase,
+    visibleChatMessages.length,
+    workflowProgress,
+  ]);
+
   const projectList = useMemo(() => Object.values(projects), [projects]);
   const runtimeProjects = useMemo(() => projectList.map((project) => ({
     sessionId: project.state.session_id,
     title: projectTitle(project),
+    workItems: project.resources.workItems,
+    agentSpecs: project.resources.agentSpecs,
   })), [projectList]);
   const allResources = useMemo<ResourceBundle>(() => ({
     specs: projectList.flatMap((project) => project.resources.specs),
@@ -259,7 +415,46 @@ export function ApiWorkspace() {
   }), [projectList]);
   const workItemProjects = useMemo(() => new Map(projectList.flatMap((project) =>
     project.resources.workItems.map((item) => [item.id, project] as const))), [projectList]);
-  const currentSpec = projectSpec(activeSessionId ? projects[activeSessionId] : undefined);
+  const currentProject = activeSessionId ? projects[activeSessionId] : undefined;
+  const currentSpec = projectSpec(currentProject);
+  useEffect(() => {
+    if (!state) {
+      setLifecycleDecision(null);
+      setLifecycleLoading(false);
+      return undefined;
+    }
+    let disposed = false;
+    const controller = new AbortController();
+    setLifecycleDecision(null);
+    const load = async () => {
+      setLifecycleLoading(true);
+      try {
+        let decision = await getLifecycleRoutes(state.session_id, controller.signal);
+        if (
+          decision === null
+          && state.phase === 'SPECIFICATION'
+          && state.current_spec_version_id === null
+        ) {
+          setWorkflowProgress('澄清已完成，正在依据 SDLC 规则评估推荐路线…');
+          decision = await recommendLifecycleRoutes(state.session_id, controller.signal);
+        }
+        if (!disposed) setLifecycleDecision(decision);
+      } catch (reason) {
+        const normalized = normalizeNetworkError(reason);
+        if (!disposed && normalized.code !== 'REQUEST_ABORTED') setError(errorText(reason));
+      } finally {
+        if (!disposed) {
+          setLifecycleLoading(false);
+          setWorkflowProgress(null);
+        }
+      }
+    };
+    void load();
+    return () => {
+      disposed = true;
+      controller.abort();
+    };
+  }, [state?.session_id, state?.phase, state?.current_spec_version_id]);
   const rootWorkItem = useMemo(
     () => resources.workItems.find((item) => item.kind === 'ROOT'),
     [resources.workItems],
@@ -314,12 +509,61 @@ export function ApiWorkspace() {
     () => filterWorkItems(displayWorkItems, flowFilters, rootIdByItem, assigneeLabel),
     [displayWorkItems, flowFilters, rootIdByItem],
   );
+  const auditVisibleWorkItems = useMemo(
+    () => filterWorkItems(displayWorkItems, auditFilters, rootIdByItem, assigneeLabel),
+    [auditFilters, displayWorkItems, rootIdByItem],
+  );
+  const auditProjectIds = useMemo(() => new Set(
+    auditVisibleWorkItems
+      .map((item) => workItemProjects.get(item.id)?.state.session_id)
+      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+  ), [auditVisibleWorkItems, workItemProjects]);
+  const auditRuntimeProjects = useMemo(() => runtimeProjects
+    .filter((project) => auditProjectIds.has(project.sessionId))
+    .map((project) => {
+      const visibleIds = new Set(auditVisibleWorkItems
+        .filter((item) => workItemProjects.get(item.id)?.state.session_id === project.sessionId)
+        .map((item) => item.id));
+      return {
+        ...project,
+        workItems: project.workItems.filter((item) => visibleIds.has(item.id)),
+        agentSpecs: project.agentSpecs.filter((item) => visibleIds.has(item.work_item_id)),
+      };
+    }), [auditProjectIds, auditVisibleWorkItems, runtimeProjects, workItemProjects]);
+  const auditEvents = useMemo(() => projectList
+    .filter((project) => auditProjectIds.has(project.state.session_id))
+    .flatMap((project) => {
+      const visibleIds = new Set(auditVisibleWorkItems
+        .filter((item) => workItemProjects.get(item.id)?.state.session_id === project.state.session_id)
+        .map((item) => item.id));
+      const rootId = project.resources.workItems.find((item) => item.kind === 'ROOT')?.id;
+      const workItemIds = new Set(project.resources.workItems.map((item) => item.id));
+      const workItemByAgentSpec = new Map(project.resources.agentSpecs
+        .map((spec) => [spec.id, spec.work_item_id] as const));
+      return project.resources.events.filter((event) => {
+        const directId = typeof event.payload.work_item_id === 'string'
+          && workItemIds.has(event.payload.work_item_id)
+          ? event.payload.work_item_id
+          : null;
+        const agentSpecId = typeof event.payload.agent_spec_id === 'string'
+          ? event.payload.agent_spec_id
+          : null;
+        const relatedId = directId
+          ?? (agentSpecId ? workItemByAgentSpec.get(agentSpecId) : undefined)
+          ?? rootId;
+        return relatedId ? visibleIds.has(relatedId) : false;
+      });
+    }), [auditProjectIds, auditVisibleWorkItems, projectList, workItemProjects]);
+  const auditSpecs = useMemo(() => projectList
+    .filter((project) => auditProjectIds.has(project.state.session_id))
+    .flatMap((project) => project.resources.specs), [auditProjectIds, projectList]);
 
   useEffect(() => {
     const keepValidAgent = (current: WorkItemFilterState) => current.agent === 'ALL' || availableAgents.includes(current.agent)
       ? current : { ...current, agent: 'ALL' };
     setKanbanFilters(keepValidAgent);
     setFlowFilters(keepValidAgent);
+    setAuditFilters(keepValidAgent);
   }, [availableAgents]);
   const taskDagProjects = useMemo<TaskDagProject[]>(() => projectList.map((project) => ({
     id: project.state.session_id,
@@ -358,10 +602,18 @@ export function ApiWorkspace() {
       project_manager_ids: [ownerId],
       root_owner_ids: [ownerId],
     };
+    setWorkflowProgress('正在读取项目简报并判断是否需要澄清…');
     try {
       const created = await createSession(crypto.randomUUID(), brief);
+      appendChatMessage(
+        created.session_id,
+        'user',
+        objective.trim() || motivation.trim() || '创建新项目',
+        [motivation.trim(), ...lines(scope), ...lines(deliverables)].filter(Boolean).join(' · '),
+      );
       updateSessionState(created);
       selectSession(created.session_id);
+      setChatTool(null);
       setMotivation('');
       setObjective('');
       setScope('');
@@ -370,6 +622,7 @@ export function ApiWorkspace() {
     } catch (reason) {
       setError(errorText(reason));
     } finally {
+      setWorkflowProgress(null);
       setBusy(false);
     }
   }
@@ -381,6 +634,8 @@ export function ApiWorkspace() {
       const sessionId = normalizeSessionId(resumeSessionId);
       const refreshed = await refreshResources(sessionId);
       selectSession(sessionId);
+      setChatTool(null);
+      setChatMenuOpen(false);
       setResumeSessionId('');
       const root = refreshed.resources.workItems.find((item) => item.kind === 'ROOT');
       if (root) setSelectedWorkItemId(root.id);
@@ -593,17 +848,20 @@ export function ApiWorkspace() {
     };
   }, [state?.session_id]);
 
-  async function runAction(action: CommandAction) {
+  async function runAction(action: CommandAction, inputMessage?: string) {
     if (!state || busy) return;
+    const sourceMessage = inputMessage ?? answer;
     const effectiveAction = action === 'message'
       && state.phase === 'NEED_CLARIFICATION'
       && !state.current_spec_version_id
       && state.legal_actions.includes('skip_clarification')
-      && isSkipClarificationIntent(answer)
+      && isSkipClarificationIntent(sourceMessage)
       ? 'skip_clarification'
       : action;
     const message = effectiveAction === 'message'
-      ? answer
+      ? sourceMessage
+      : effectiveAction === 'rework'
+        ? sourceMessage
       : effectiveAction === 'restore_spec_version'
         ? restoreReason
         : undefined;
@@ -625,6 +883,11 @@ export function ApiWorkspace() {
     }
     setBusy(true);
     setError(null);
+    setWorkflowProgress(
+      effectiveAction === 'message'
+        ? 'Agent 正在理解你的回复并重新判断当前阶段…'
+        : `正在执行：${actionLabels[effectiveAction]}…`,
+    );
     try {
       const payload =
         effectiveAction === 'rework'
@@ -638,8 +901,7 @@ export function ApiWorkspace() {
       let nextState = await submitCommand(state, effectiveAction, message, payload);
       if (effectiveAction === 'skip_clarification') {
         if (nextState.legal_actions.includes('create_spec')) {
-          setWorkflowProgress('正在根据现有信息和合理假设生成 PRD…');
-          nextState = await submitCommand(nextState, 'create_spec');
+          setWorkflowProgress('澄清已结束，正在准备 SDLC 顶层路线选择…');
         }
       }
       setAnswer('');
@@ -749,6 +1011,176 @@ export function ApiWorkspace() {
     }
   }
 
+  async function continueDecomposition() {
+    if (!state || busy) return;
+    setBusy(true);
+    setError(null);
+    setWorkflowProgress('正在选择 SDLC 路线并按阶段拆解任务…');
+    let decompositionRecoveryOwned = false;
+    try {
+      await submitDecomposition(state, () => {
+        decompositionRecoveryOwned = true;
+      });
+    } catch (reason) {
+      const normalized = normalizeNetworkError(reason);
+      if (normalized.code === 'REQUEST_ABORTED') return;
+      if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
+        if (!decompositionRecoveryOwned) {
+          pendingCommandIds.current.clear();
+          await refreshResources(state.session_id).catch(() => undefined);
+        }
+        setError(STALE_STATE_RECOVERY_MESSAGE);
+        return;
+      }
+      setError(errorText(reason));
+    } finally {
+      setWorkflowProgress(null);
+      setBusy(false);
+    }
+  }
+
+  async function chooseLifecycleRoute(model: LifecycleModel) {
+    if (!state || busy || lifecycleDecision?.selected_model) return;
+    setBusy(true);
+    setError(null);
+    setWorkflowProgress('正在确认 SDLC 顶层路线…');
+    try {
+      const decision = await selectLifecycleRoute(state.session_id, model);
+      setLifecycleDecision(decision);
+      setActiveTab('topLevel');
+      const refreshedState = await getSessionState(state.session_id);
+      updateSessionState(refreshedState);
+      appendChatMessage(
+        state.session_id,
+        'agent',
+        `已确认顶层路线：${decision.options.find((option) => option.model === model)?.name ?? model}`,
+        '正在基于已确认路线生成 PRD；PRD 审核通过后，完整任务规划将严格按该路线展开。',
+      );
+      setWorkflowProgress('路线已确认，正在生成 PRD…');
+      await submitCommand(refreshedState, 'create_spec');
+      await refreshResources(state.session_id);
+    } catch (reason) {
+      const normalized = normalizeNetworkError(reason);
+      if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
+        pendingCommandIds.current.clear();
+        await refreshResources(state.session_id).catch(() => undefined);
+        setError(STALE_STATE_RECOVERY_MESSAGE);
+      } else {
+        setError(errorText(reason));
+      }
+    } finally {
+      setWorkflowProgress(null);
+      setBusy(false);
+    }
+  }
+
+  async function runGlobalInstruction(message: string) {
+    const normalized = message.trim().replace(/[。！!？?，,]/g, '').toLowerCase();
+    const navigation: Array<{ phrases: string[]; tab: WorkspaceTab; reply: string }> = [
+      { phrases: ['打开顶层图', '查看顶层图', '顶层图'], tab: 'topLevel', reply: '已打开当前任务的 SDLC 顶层图。' },
+      { phrases: ['打开看板', '查看看板', '任务看板', '看板'], tab: 'kanban', reply: '已打开任务看板。' },
+      { phrases: ['打开流转图', '查看流转图', '任务流转图'], tab: 'flow', reply: '已打开任务依赖流转图。' },
+      { phrases: ['打开审计记录', '查看审计记录', '审计记录'], tab: 'audit', reply: '已打开审计记录。' },
+    ];
+    const destination = navigation.find((item) => item.phrases.includes(normalized));
+    if (destination) {
+      setActiveTab(destination.tab);
+      appendChatMessage(state?.session_id ?? null, 'agent', destination.reply);
+      return;
+    }
+    if (['刷新', '刷新状态', '刷新项目'].includes(normalized) && state) {
+      await manualRefresh();
+      appendChatMessage(state.session_id, 'agent', '已从后端刷新当前项目状态。');
+      return;
+    }
+
+    if (!state) {
+      let createdSessionId: string | null = null;
+      setBusy(true);
+      setError(null);
+      setWorkflowProgress('正在理解项目目标并分析需求完整性…');
+      try {
+        const responseSessionId = await streamChat(message, (event) => {
+          if (event.event === 'session.created' && typeof event.data.session_id === 'string') {
+            const created = event.data as unknown as SessionStateDto;
+            createdSessionId = created.session_id;
+            updateSessionState(created);
+            selectSession(created.session_id);
+            appendChatMessage(created.session_id, 'user', message);
+          }
+          if (event.event === 'workflow.error') {
+            const errorMessage = typeof event.data.message === 'string'
+              ? event.data.message
+              : 'Agent 未能完成这次分析。';
+            appendChatMessage(createdSessionId, 'agent', '本次分析未完成', errorMessage);
+          }
+        });
+        const sessionId = createdSessionId ?? responseSessionId;
+        if (sessionId) {
+          selectSession(sessionId);
+          await refreshResources(sessionId);
+        }
+      } catch (reason) {
+        setError(errorText(reason));
+      } finally {
+        setWorkflowProgress(null);
+        setBusy(false);
+      }
+      return;
+    }
+
+    if (state.legal_actions.includes('message')) {
+      await runAction('message', message);
+      return;
+    }
+
+    const actionAliases: Array<{ action: CommandAction; phrases: string[] }> = [
+      { action: 'skip_clarification', phrases: ['跳过澄清', '跳过澄清并生成prd'] },
+      { action: 'create_spec', phrases: ['生成prd', '创建prd', '生成项目规格'] },
+      { action: 'revise', phrases: ['生成修订版', '修订prd'] },
+      { action: 'approve', phrases: ['人工通过', '批准prd', '通过审核'] },
+      { action: 'reject', phrases: ['人工驳回', '驳回prd'] },
+      { action: 'publish_review', phrases: ['发布审核', '提交审核'] },
+      { action: 'convert_to_work_item', phrases: ['拆解workitem', '拆解任务', '继续拆分子任务', '按sdlc拆解'] },
+    ];
+    const requestedAction = actionAliases.find((item) => item.phrases.includes(normalized))?.action;
+    if (
+      requestedAction === 'create_spec'
+      && state.phase === 'SPECIFICATION'
+      && !lifecycleDecision?.selected_model
+    ) {
+      appendChatMessage(state.session_id, 'agent', '请先从上方两套 SDLC 顶层路线中选择一套，再生成 PRD。');
+      return;
+    }
+    if (requestedAction && state.legal_actions.includes(requestedAction)) {
+      if (requestedAction === 'convert_to_work_item') await continueDecomposition();
+      else await runAction(requestedAction);
+      return;
+    }
+
+    const legalLabels = state.legal_actions
+      .filter((action) => action !== 'message' && action !== 'restore_spec_version')
+      .map((action) => actionLabels[action]);
+    appendChatMessage(
+      state.session_id,
+      'agent',
+      `已收到你的全局指令。当前阶段是“${displayLabel(state.phase)}”。`,
+      legalLabels.length > 0
+        ? `为保持阶段门禁，请明确输入以下操作之一：${legalLabels.join('、')}。也可以输入“打开顶层图”“打开看板”或“刷新状态”。`
+        : progressDescription(state),
+    );
+  }
+
+  async function submitChat(event: FormEvent) {
+    event.preventDefault();
+    const message = chatDraft.trim();
+    if (!message || busy || projectsLoading || health !== 'ok') return;
+    appendChatMessage(state?.session_id ?? null, 'user', message);
+    setChatDraft('');
+    setChatMenuOpen(false);
+    await runGlobalInstruction(message);
+  }
+
   const refreshCurrentResources = useCallback(async () => {
     if (selectedProject) await refreshResources(selectedProject.state.session_id);
   }, [refreshResources, selectedProject?.state.session_id]);
@@ -768,11 +1200,14 @@ export function ApiWorkspace() {
     setAnswer('');
     setRestoreRevision('');
     setRestoreReason('');
+    setChatTool(null);
+    setChatMenuOpen(false);
     setError(null);
   }
 
   function startNewTask() {
     switchConversation(null);
+    setChatTool(null);
     setChatOpen(true);
   }
 
@@ -793,6 +1228,15 @@ export function ApiWorkspace() {
           <span className="ff-online-dot" />
         </button>
         <div className="ff-activity-divider" />
+        <button
+          className={'ff-activity-button ' + (activeTab === 'topLevel' ? 'is-active' : '')}
+          onClick={() => setActiveTab('topLevel')}
+          title="顶层图"
+          aria-label="打开顶层图"
+          aria-pressed={activeTab === 'topLevel'}
+        >
+          <GitFork aria-hidden="true" />
+        </button>
         <button
           className={'ff-activity-button ' + (activeTab === 'kanban' ? 'is-active' : '')}
           onClick={() => setActiveTab('kanban')}
@@ -863,218 +1307,250 @@ export function ApiWorkspace() {
             </label>
           )}
 
-          {!state ? (
-            <form onSubmit={onCreate} className="ff-intake-form">
-              <div className="ff-quick-row">
-                <span><Sparkles aria-hidden="true" /> 新项目需求</span>
-                <span className={health === 'ok' ? 'is-online' : 'is-offline'}>
-                  {health === 'ok' ? '后端在线' : health === 'error' ? '后端不可用' : '正在连接'}
-                </span>
-              </div>
-              <div className="ff-chat-scroll">
-                <div className="ff-message ff-message-agent">
-                  <span className="ff-avatar">PM</span>
-                  <div>
-                    <p className="ff-message-meta">Project Manager Agent</p>
-                    <div className="ff-message-bubble">
-                      请先提供项目简报。我会把内容交给后端 PM Agent 分析，并在需要时继续提出澄清问题。
-                    </div>
+          <div className="ff-quick-row">
+            <span><Sparkles aria-hidden="true" /> {state ? '全局任务对话' : '新项目需求'}</span>
+            <span className={health === 'ok' ? 'is-online' : 'is-offline'}>
+              {health === 'ok' ? '后端在线' : health === 'error' ? '后端不可用' : '正在连接'}
+            </span>
+          </div>
+
+          <div ref={chatScrollRef} className="ff-chat-scroll" role="log" aria-label="Agent 对话与工作记录">
+            {visibleChatMessages.length === 0 && !state && (
+              <div className="ff-message ff-message-agent">
+                <span className="ff-avatar">PM</span>
+                <div className="ff-message-content">
+                  <p className="ff-message-meta">Project Manager Agent</p>
+                  <div className="ff-message-bubble">
+                    直接描述你要完成的项目，我会创建任务并分析需求。也可以点击输入框左侧菜单，打开完整项目表单或恢复已有 Session。
                   </div>
                 </div>
-                <div className="ff-form-card">
-                  <Field label="为什么要做" value={motivation} onChange={setMotivation} multiline />
-                  <Field label="最终目标" value={objective} onChange={setObjective} multiline />
-                  <Field label="已知范围（每行一项）" value={scope} onChange={setScope} multiline />
-                  <Field label="预期交付物（每行一项）" value={deliverables} onChange={setDeliverables} multiline />
-                  <Field label="负责人标识" value={ownerId} onChange={setOwnerId} />
-                  <button disabled={busy || projectsLoading || health !== 'ok'} className="ff-primary-button ff-full-button">
-                    {busy && <Loader2 className="ff-spin" aria-hidden="true" />}
-                    创建并分析
-                  </button>
-                </div>
-                <details className="ff-resume-card">
-                  <summary>恢复已有项目 Session</summary>
-                  <p>只读取后端已有状态，不会创建新的 Agent 运行。</p>
-                  <Field label="Session ID" value={resumeSessionId} onChange={setResumeSessionId} />
-                  <button type="button" disabled={busy || health !== 'ok'} onClick={resumeExistingSession} className="ff-secondary-button ff-full-button">
-                    恢复并打开
-                  </button>
-                </details>
               </div>
-            </form>
-          ) : (
-            <>
-              <div className="ff-quick-row ff-chat-actions">
-                <button onClick={manualRefresh} disabled={busy} title="刷新项目状态" aria-label="刷新项目状态">
-                  <RefreshCw className={busy ? 'ff-spin' : ''} aria-hidden="true" />
-                  刷新状态
-                </button>
-                <button
-                  type="button"
-                  onClick={startNewTask}
-                  disabled={busy}
-                  className="ff-create-task-button"
-                  title="填写新任务需求，保留当前项目数据"
-                >
-                  <Plus aria-hidden="true" />
-                  创建新任务
-                </button>
-                <span className={health === 'ok' ? 'is-online' : 'is-offline'}>
-                  {health === 'ok' ? 'API ONLINE' : 'API OFFLINE'}
-                </span>
-              </div>
+            )}
 
-              <div className="ff-chat-scroll" role="log" aria-label="Agent 工作记录">
-                <div className="ff-message ff-message-user">
-                  <div>
-                    <p className="ff-message-meta">Project Owner</p>
-                    <div className="ff-message-bubble">
-                      {rootWorkItem?.title || rootWorkItem?.objective || '当前项目需求'}
-                    </div>
-                  </div>
-                  <span className="ff-avatar ff-avatar-user">U</span>
-                </div>
-
-                <div className="ff-message ff-message-agent">
-                  <span className="ff-avatar">PM</span>
-                  <div className="ff-message-content">
-                    <p className="ff-message-meta">Project Orchestrator Agent</p>
-                    <div className="ff-message-bubble">
-                      <strong>当前阶段：{displayLabel(state.phase)}</strong>
-                      <p>{progressDescription(state)}</p>
-                      <StatusBadge state={state} />
-                      {currentSpec && <p className="ff-inline-note">当前 PRD v{currentSpec.revision}</p>}
-                    </div>
+            {visibleChatMessages.map((message) => (
+              <div key={message.id} className={`ff-message ff-message-${message.role}`}>
+                {message.role === 'agent' && <span className="ff-avatar">PM</span>}
+                <div className="ff-message-content">
+                  <p className="ff-message-meta">{message.role === 'agent' ? 'Project Orchestrator Agent' : 'Project Owner'} · {displayTime(message.createdAt)}</p>
+                  <div className="ff-message-bubble">
+                    <strong>{message.body}</strong>
+                    {message.detail && <p>{message.detail}</p>}
                   </div>
                 </div>
+                {message.role === 'user' && <span className="ff-avatar ff-avatar-user">U</span>}
+              </div>
+            ))}
 
-                {state.outstanding_questions.map((question) => (
-                  <div key={question.question_id} className="ff-message ff-message-agent">
-                    <span className="ff-avatar ff-avatar-warning">?</span>
-                    <div className="ff-message-content">
-                      <p className="ff-message-meta">Clarification Agent</p>
-                      <div className="ff-message-bubble ff-question-bubble">
-                        <strong>{question.question}</strong>
-                        <p>{question.reason}</p>
+            {state && visibleChatMessages.length === 0 && (
+              <div className="ff-message ff-message-user">
+                <div className="ff-message-content">
+                  <p className="ff-message-meta">Project Owner</p>
+                  <div className="ff-message-bubble">{rootWorkItem?.title || rootWorkItem?.objective || '当前项目需求'}</div>
+                </div>
+                <span className="ff-avatar ff-avatar-user">U</span>
+              </div>
+            )}
+
+            {state && (
+              <div className="ff-message ff-message-agent">
+                <span className="ff-avatar">PM</span>
+                <div className="ff-message-content">
+                  <p className="ff-message-meta">Project Orchestrator Agent</p>
+                  <div className="ff-message-bubble">
+                    <strong>当前阶段：{displayLabel(state.phase)}</strong>
+                    <p>{progressDescription(state)}</p>
+                    <StatusBadge state={state} />
+                    {currentSpec && <p className="ff-inline-note">当前 PRD v{currentSpec.revision}</p>}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {state?.outstanding_questions.map((question) => (
+              <div key={question.question_id} className="ff-message ff-message-agent">
+                <span className="ff-avatar ff-avatar-warning">?</span>
+                <div className="ff-message-content">
+                  <p className="ff-message-meta">Clarification Agent</p>
+                  <div className="ff-message-bubble ff-question-bubble">
+                    <strong>{question.question}</strong>
+                    <p>{question.reason}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {lifecycleDecision && (
+              <div className="ff-message ff-message-agent ff-route-message">
+                <span className="ff-avatar">PM</span>
+                <div className="ff-message-content">
+                  <p className="ff-message-meta">SDLC Planning Agent</p>
+                  <LifecycleRouteChooser
+                    decision={lifecycleDecision}
+                    busy={busy}
+                    onSelect={(model) => void chooseLifecycleRoute(model)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {(busy || lifecycleLoading || observingDecomposition || activeRuntime?.status === 'running') && (
+              <div className="ff-message ff-message-agent ff-thinking-message" aria-live="polite">
+                <span className="ff-avatar ff-avatar-thinking"><Loader2 className="ff-spin" aria-hidden="true" /></span>
+                <div className="ff-message-content">
+                  <p className="ff-message-meta">Project Orchestrator Agent · 思考中</p>
+                  <div className="ff-message-bubble ff-thinking-bubble">
+                    <strong>{workflowProgress || (activeRuntime
+                      ? runtimeOperationLabels[activeRuntime.current_operation] ?? activeRuntime.current_operation
+                      : '正在理解指令并准备下一步')}</strong>
+                    {state && <p>当前阶段：{displayLabel(state.phase)}</p>}
+                    {activeRuntime?.current_summary && <p>{activeRuntime.current_summary}</p>}
+                    {activeRuntime && (
+                      <div className="ff-runtime-meta">
+                        <span>操作 {runtimeOperationLabels[activeRuntime.current_operation] ?? activeRuntime.current_operation}</span>
+                        <span>调用 {activeRuntime.call_count}</span>
                       </div>
-                    </div>
+                    )}
                   </div>
-                ))}
+                </div>
+              </div>
+            )}
 
-                {resources.events.slice(-5).map((event) => (
-                  <div key={event.id} className="ff-agent-event">
-                    <span className="ff-event-check"><CheckCircle2 aria-hidden="true" /></span>
-                    <div>
-                      <strong>{auditTitle(event)}</strong>
-                      <p>{displayTime(event.created_at)} · {event.actor_id || '系统 Agent'}</p>
-                    </div>
+            {activeRuntime && activeRuntime.status !== 'running' && !busy && (
+              <div className={`ff-agent-event ${activeRuntime.status === 'error' ? 'is-error' : ''}`}>
+                <span className="ff-event-check">{activeRuntime.status === 'error' ? <AlertCircle aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}</span>
+                <div>
+                  <strong>{activeRuntime.status === 'error' ? 'Agent 运行异常' : 'Agent 已完成本阶段处理'}</strong>
+                  <p>{runtimeOperationLabels[activeRuntime.current_operation] ?? activeRuntime.current_operation} · {activeRuntime.current_summary || `累计调用 ${activeRuntime.call_count} 次`}</p>
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="ff-message ff-message-agent">
+                <span className="ff-avatar ff-avatar-warning">!</span>
+                <div className="ff-message-content">
+                  <p className="ff-message-meta">System Agent</p>
+                  <div role="alert" className="ff-message-bubble ff-error-bubble">{error}</div>
+                </div>
+              </div>
+            )}
+
+            {state && resources.events.slice(-3).map((event) => (
+              <div key={event.id} className="ff-agent-event">
+                <span className="ff-event-check"><CheckCircle2 aria-hidden="true" /></span>
+                <div><strong>{auditTitle(event)}</strong><p>{displayTime(event.created_at)} · {event.actor_id || '系统 Agent'}</p></div>
+              </div>
+            ))}
+
+            {chatTool === 'newProject' && (
+              <form onSubmit={onCreate} className="ff-form-card ff-chat-tool-card">
+                <div className="ff-tool-card-header"><strong>生成新项目</strong><button type="button" onClick={() => setChatTool(null)} aria-label="关闭新项目表单"><X aria-hidden="true" /></button></div>
+                <Field label="为什么要做" value={motivation} onChange={setMotivation} multiline />
+                <Field label="最终目标" value={objective} onChange={setObjective} multiline />
+                <Field label="已知范围（每行一项）" value={scope} onChange={setScope} multiline />
+                <Field label="预期交付物（每行一项）" value={deliverables} onChange={setDeliverables} multiline />
+                <Field label="负责人标识" value={ownerId} onChange={setOwnerId} />
+                <button disabled={busy || projectsLoading || health !== 'ok'} className="ff-primary-button ff-full-button">
+                  {busy && <Loader2 className="ff-spin" aria-hidden="true" />} 创建并分析
+                </button>
+              </form>
+            )}
+
+            {chatTool === 'resumeSession' && (
+              <section className="ff-form-card ff-chat-tool-card">
+                <div className="ff-tool-card-header"><strong>恢复已有项目 Session</strong><button type="button" onClick={() => setChatTool(null)} aria-label="关闭恢复表单"><X aria-hidden="true" /></button></div>
+                <p className="ff-tool-card-description">读取后端已有状态，不创建新的 Agent 运行。</p>
+                <Field label="Session ID" value={resumeSessionId} onChange={setResumeSessionId} />
+                <button type="button" disabled={busy || health !== 'ok'} onClick={resumeExistingSession} className="ff-secondary-button ff-full-button">恢复并打开</button>
+              </section>
+            )}
+
+            {chatTool === 'restoreSpec' && state && (
+              <section className="ff-form-card ff-chat-tool-card">
+                <div className="ff-tool-card-header"><strong>从历史 PRD 创建新版</strong><button type="button" onClick={() => setChatTool(null)} aria-label="关闭历史版本表单"><X aria-hidden="true" /></button></div>
+                <p className="ff-tool-card-description">复制所选旧版内容并生成新版本，已有记录会保留。</p>
+                <select aria-label="历史 PRD 版本" value={restoreRevision} onChange={(event) => setRestoreRevision(event.target.value)} className="ff-field-control">
+                  <option value="">选择历史版本</option>
+                  {historicalSpecs.map((spec) => <option key={spec.id} value={spec.revision}>v{spec.revision} · {displayLabel(spec.status)}</option>)}
+                </select>
+                <Field label="创建新版的原因" value={restoreReason} onChange={setRestoreReason} multiline />
+                <button type="button" disabled={busy || !restoreRevision || !restoreReason.trim()} onClick={() => runAction('restore_spec_version')} className="ff-secondary-button ff-full-button">基于历史版本创建新版</button>
+              </section>
+            )}
+
+            {state && currentSpec && (
+              <button type="button" aria-label="查看 PRD 与审核意见" onClick={() => rootWorkItem && setSelectedWorkItemId(rootWorkItem.id)} className="ff-related-work-item">
+                <FileText aria-hidden="true" />
+                <span><strong>查看 PRD 与审核意见</strong><small>v{currentSpec.revision} · {displayLabel(currentSpec.status)}</small></span>
+              </button>
+            )}
+
+            {state && state.review_findings.length > 0 && (
+              <div className="ff-warning-note"><AlertCircle aria-hidden="true" /><span>当前有 {state.review_findings.length} 项审核发现，请在 PRD 审核窗口中处理。</span></div>
+            )}
+          </div>
+
+          <footer className="ff-chat-composer">
+            <form onSubmit={submitChat} className="ff-stream-composer">
+              <div className="ff-chat-menu-wrap">
+                <button type="button" className={`ff-chat-menu-button ${chatMenuOpen ? 'is-open' : ''}`} onClick={() => setChatMenuOpen((open) => !open)} aria-label="展开常用功能" aria-expanded={chatMenuOpen}>
+                  <Menu aria-hidden="true" />
+                </button>
+                {chatMenuOpen && (
+                  <div className="ff-chat-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => { startNewTask(); setChatTool('newProject'); setChatMenuOpen(false); }}><FolderPlus aria-hidden="true" /><span><strong>生成新项目</strong><small>打开完整项目简报</small></span></button>
+                    <button type="button" role="menuitem" onClick={() => { setChatTool('resumeSession'); setChatMenuOpen(false); }}><History aria-hidden="true" /><span><strong>恢复已有 Session</strong><small>读取后端项目状态</small></span></button>
+                    {state && <button type="button" role="menuitem" onClick={() => { void manualRefresh(); setChatMenuOpen(false); }}><RefreshCw aria-hidden="true" /><span><strong>刷新当前项目</strong><small>同步阶段与运行状态</small></span></button>}
+                    {state?.legal_actions.includes('restore_spec_version') && historicalSpecs.length > 0 && <button type="button" role="menuitem" onClick={() => { setChatTool('restoreSpec'); setChatMenuOpen(false); }}><FileText aria-hidden="true" /><span><strong>恢复历史 PRD</strong><small>基于旧版本创建新版</small></span></button>}
                   </div>
-                ))}
-
-                {currentSpec && (
-                  <button
-                    type="button"
-                    aria-label="查看 PRD 与审核意见"
-                    onClick={() => rootWorkItem && setSelectedWorkItemId(rootWorkItem.id)}
-                    className="ff-related-work-item"
-                  >
-                    <FileText aria-hidden="true" />
-                    <span><strong>查看 PRD 与审核意见</strong><small>v{currentSpec.revision} · {displayLabel(currentSpec.status)}</small></span>
-                  </button>
-                )}
-
-                {state.review_findings.length > 0 && (
-                  <div className="ff-warning-note">
-                    <AlertCircle aria-hidden="true" />
-                    <span>当前有 {state.review_findings.length} 项审核发现，请在 PRD 审核窗口中处理。</span>
-                  </div>
-                )}
-
-                {state.legal_actions.includes('restore_spec_version') && historicalSpecs.length > 0 && (
-                  <details className="ff-resume-card">
-                    <summary>从历史 PRD 创建新版</summary>
-                    <p>复制所选旧版内容并生成新版本，已有记录会保留。</p>
-                    <select aria-label="历史 PRD 版本" value={restoreRevision} onChange={(event) => setRestoreRevision(event.target.value)} className="ff-field-control">
-                      <option value="">选择历史版本</option>
-                      {historicalSpecs.map((spec) => <option key={spec.id} value={spec.revision}>v{spec.revision} · {displayLabel(spec.status)}</option>)}
-                    </select>
-                    <Field label="创建新版的原因" value={restoreReason} onChange={setRestoreReason} multiline />
-                    <button disabled={busy || !restoreRevision || !restoreReason.trim()} onClick={() => runAction('restore_spec_version')} className="ff-secondary-button ff-full-button">
-                      基于历史版本创建新版
-                    </button>
-                  </details>
                 )}
               </div>
-
-              <footer className="ff-chat-composer">
-                {state.legal_actions.includes('message') && (
-                  <label className="ff-composer-input">
-                    <span>澄清答案</span>
-                    <textarea
-                      aria-label="澄清答案"
-                      value={answer}
-                      onChange={(event) => setAnswer(event.target.value)}
-                      placeholder="回复 Agent 的澄清问题，或输入下一步指令…"
-                    />
-                  </label>
-                )}
-                <div className="ff-composer-actions">
-                  {state.legal_actions.includes('message') && (
-                    <button disabled={busy} onClick={() => runAction('message')} className="ff-primary-button">
-                      提交澄清 <CornerDownLeft aria-hidden="true" />
-                    </button>
-                  )}
-                  {sidebarActions.includes('skip_clarification') && (
-                    <button disabled={busy} onClick={() => runAction('skip_clarification')} className="ff-secondary-button">
-                      跳过澄清并生成 PRD
-                    </button>
-                  )}
-                  {sidebarActions.filter((action) => !['message', 'skip_clarification'].includes(action)).map((action) => (
-                    <button key={action} disabled={busy} onClick={() => runAction(action)} className="ff-secondary-button">
-                      {actionLabels[action]}
-                    </button>
-                  ))}
-                  {state.legal_actions.includes('convert_to_work_item') && (
-                    <button type="button" disabled={busy || observingDecomposition} onClick={() => {
-                      if (!state || busy) return;
-                      setBusy(true);
-                      setError(null);
-                      let decompositionRecoveryOwned = false;
-                      void submitDecomposition(state, () => {
-                        decompositionRecoveryOwned = true;
-                      })
-                        .catch(async (reason) => {
-                          const normalized = normalizeNetworkError(reason);
-                          if (normalized.code === 'REQUEST_ABORTED') return;
-                          if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
-                            if (!decompositionRecoveryOwned) {
-                              pendingCommandIds.current.clear();
-                              await refreshResources(state.session_id).catch(() => undefined);
-                            }
-                            setError(STALE_STATE_RECOVERY_MESSAGE);
-                            return;
-                          }
-                          setError(errorText(reason));
-                        })
-                        .finally(() => { setWorkflowProgress(null); setBusy(false); });
-                    }} className="ff-secondary-button">
-                      继续拆分子任务
-                    </button>
-                  )}
-                </div>
-                <div className="ff-composer-foot">
-                  <span><span className="ff-small-dot" /> 后端状态驱动</span>
-                  <button disabled={busy} onClick={startNewTask}>返回项目入口（保留数据）</button>
-                </div>
-              </footer>
-            </>
-          )}
+              <textarea
+                aria-label="给 Project Agent 发送消息"
+                value={chatDraft}
+                disabled={busy || health !== 'ok'}
+                onChange={(event) => setChatDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                placeholder={state ? '输入全局指令、澄清答案或页面命令…' : '直接描述新项目，或从左侧菜单打开完整表单…'}
+                rows={1}
+              />
+              <button type="submit" className="ff-chat-send-button" disabled={busy || !chatDraft.trim() || health !== 'ok'} aria-label="发送消息">
+                {busy ? <Loader2 className="ff-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
+              </button>
+            </form>
+            {state && (
+              <div className="ff-composer-actions ff-suggested-actions">
+                {sidebarActions.filter((action) => action !== 'message' && !(
+                  action === 'create_spec'
+                  && state.phase === 'SPECIFICATION'
+                  && !lifecycleDecision?.selected_model
+                )).map((action) => (
+                  <button type="button" key={action} disabled={busy} onClick={() => runAction(action)} className="ff-secondary-button">{actionLabels[action]}</button>
+                ))}
+                {state.legal_actions.includes('convert_to_work_item') && <button type="button" disabled={busy || observingDecomposition} onClick={() => void continueDecomposition()} className="ff-secondary-button">继续拆分子任务</button>}
+              </div>
+            )}
+            <div className="ff-composer-foot">
+              <span><span className="ff-small-dot" /> 阶段门禁与后端状态驱动</span>
+              {state && <button type="button" disabled={busy} onClick={startNewTask}>新任务</button>}
+            </div>
+          </footer>
         </aside>
       )}
 
       <main className="ff-workspace">
         <header className="ff-top-tabs">
           <div className="ff-tabs">
+            <button className={activeTab === 'topLevel' ? 'is-active' : ''} onClick={() => setActiveTab('topLevel')}>
+              <GitFork aria-hidden="true" />
+              顶层图
+              <span>{lifecycleDecision?.selected_model ? 'SDLC' : '—'}</span>
+            </button>
             <button className={activeTab === 'kanban' ? 'is-active' : ''} onClick={() => setActiveTab('kanban')}>
               <LayoutGrid aria-hidden="true" />
               Kanban Board (敏捷看板)
@@ -1097,6 +1573,47 @@ export function ApiWorkspace() {
             </span>
           </div>
         </header>
+
+        <section className={activeTab === 'topLevel' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'topLevel'}>
+          <div className="ff-top-level-toolbar">
+            <div>
+              <h2>项目生命周期顶层图</h2>
+              <p>根据任务澄清后选择的 SDLC 路线，自上而下展示阶段、门禁和交付物。</p>
+            </div>
+            <label>
+              <span>当前任务</span>
+              <select
+                aria-label="顶层图项目"
+                value={activeSessionId ?? ''}
+                onChange={(event) => switchConversation(event.target.value || null)}
+              >
+                <option value="">请选择任务</option>
+                {catalog.map((project) => (
+                  <option key={project.session_id} value={project.session_id} disabled={!projects[project.session_id]}>{project.title}</option>
+                ))}
+              </select>
+            </label>
+            <button onClick={() => void refreshAllProjects()} disabled={busy || projectsLoading} className="ff-secondary-button">
+              <RefreshCw className={projectsLoading ? 'ff-spin' : ''} aria-hidden="true" />刷新
+            </button>
+          </div>
+          <div className="ff-top-level-canvas">
+            {currentProject ? (
+              <TopLevelGraph
+                projectTitle={projectTitle(currentProject)}
+                agentSpecs={currentProject.resources.agentSpecs}
+                workItems={currentProject.resources.workItems}
+                decision={lifecycleDecision}
+                runtimes={agentRuntime}
+                runtimeEvents={topLevelRuntimeEvents}
+                projectPhase={displayLabel(currentProject.state.phase)}
+                onOpenWorkItem={setSelectedWorkItemId}
+              />
+            ) : (
+              <div className="ff-top-level-empty" role="status"><GitFork aria-hidden="true" /><strong>请选择一个任务</strong><p>选择后显示该任务的 SDLC 顶层阶段路线。</p></div>
+            )}
+          </div>
+        </section>
 
         <section className={activeTab === 'kanban' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'kanban'}>
           <div className="ff-board-toolbar ff-filter-toolbar">
@@ -1155,7 +1672,7 @@ export function ApiWorkspace() {
                             <CopyableWorkItemId id={item.id} onResult={setClipboardResult} />
                             <span className="ff-priority">{item.kind === 'ROOT' ? 'P0' : item.kind === 'MILESTONE' ? 'P1' : 'P2'}</span>
                             {item.kind === 'TASK' && <span className={`ff-card-status is-${workItemLane(item.status)}`}>{workItemStatusLabel(item.status)}</span>}
-                            <span className="ff-card-kind">{item.kind === 'ROOT' ? 'Epic' : item.kind === 'MILESTONE' ? 'Milestone' : 'Subtask'}</span>
+                            <span className="ff-card-kind">{item.kind === 'ROOT' ? 'Epic' : item.kind === 'MILESTONE' ? 'SDLC Phase' : 'Subtask'}</span>
                           </div>
                           <button
                             type="button"
@@ -1265,10 +1782,25 @@ export function ApiWorkspace() {
         </section>
 
         <section className={activeTab === 'audit' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'audit'}>
+          <div className="ff-filter-toolbar ff-audit-filter-toolbar">
+            <WorkItemFilterControls
+              value={auditFilters}
+              roots={filterRoots}
+              agents={availableAgents}
+              searchLabel="搜索审计记录关联工单"
+              onChange={setAuditFilters}
+            />
+          </div>
           <div className="ff-audit-scroll">
             {activeTab === 'audit' && error && <div role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{error}</span></div>}
-            {activeTab === 'audit' && <AgentRuntimePanel projects={runtimeProjects} />}
-            <AuditTrail events={allResources.events} specs={allResources.specs} />
+            {auditVisibleWorkItems.length === 0 ? (
+              <div className="ff-flow-filter-empty" role="status" aria-live="polite">没有符合当前筛选条件的审计记录</div>
+            ) : (
+              <>
+                {activeTab === 'audit' && <AgentRuntimePanel projects={auditRuntimeProjects} />}
+                <AuditTrail events={auditEvents} specs={auditSpecs} />
+              </>
+            )}
           </div>
         </section>
 
@@ -1284,7 +1816,7 @@ export function ApiWorkspace() {
           title={selectedWorkItem.kind === 'ROOT'
             ? '项目需求详情'
             : selectedWorkItem.kind === 'MILESTONE'
-              ? '里程碑详情'
+              ? 'SDLC 阶段详情'
               : '任务详情'}
           onClose={() => setSelectedWorkItemId(null)}
         >

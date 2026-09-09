@@ -1,0 +1,11 @@
+Assess the clarified Project Brief against the ten lifecycle questions supplied in
+sdlc_selection.questions. Return q1 through q10 exactly once and in order.
+
+Use yes only when the Project Brief explicitly confirms the condition, no only
+when it explicitly confirms the opposite, and unknown when the fact is absent or
+ambiguous. Evidence for yes or no must be a short verbatim quote from the supplied
+Project Brief. For unknown, state which fact is missing without inventing it.
+
+This node supplies evidence to deterministic YAML ranking. It must not choose a
+route, invent an approval, or turn an assumption into a confirmed requirement.
+Summarize the decisive facts and remaining uncertainty in summary.

@@ -16,6 +16,7 @@ from app.agents.codex import AgentExecutionError, AgentOutputError
 from app.api.sessions import build_router as build_sessions_router
 from app.database.models import (
     AgentCall,
+    AgentRuntimeEvent,
     AgentSession,
     AuditEvent,
     ClarificationRequest,
@@ -834,6 +835,65 @@ def test_agent_runtime_selects_latest_call_by_id_when_start_times_match(session_
     assert runtime[0].current_operation == "decompose_spec"
     assert runtime[0].status == "running"
     assert runtime[0].call_count == 2
+
+
+def test_agent_runtime_events_endpoint_returns_ordered_public_timeline(session_factory):
+    started = datetime(2026, 9, 6, 2, 0, tzinfo=timezone.utc)
+    with session_factory() as db:
+        db.add_all([
+            Project(
+                id="runtime-events-project",
+                session_id="runtime-events-session",
+                creation_request_id="runtime-events-request",
+                brief={"final_objective": "Runtime events"},
+                final_approver="owner-1",
+                project_manager_ids=["owner-1"],
+                root_owner_ids=["owner-1"],
+            ),
+            AgentSession(
+                id="runtime-events-agent",
+                project_id="runtime-events-project",
+                role="PM",
+                created_at=started,
+            ),
+            AgentCall(
+                id="runtime-events-call",
+                project_id="runtime-events-project",
+                agent_session_id="runtime-events-agent",
+                operation="generate_spec",
+                request={},
+                status="PENDING",
+                started_at=started,
+            ),
+            AgentRuntimeEvent(
+                project_id="runtime-events-project",
+                agent_session_id="runtime-events-agent",
+                agent_call_id="runtime-events-call",
+                operation="generate_spec",
+                event_type="item.completed",
+                item_type="reasoning",
+                status="completed",
+                title="推理摘要",
+                detail="公开摘要",
+                payload={"type": "item.completed"},
+                created_at=started,
+            ),
+        ])
+        db.commit()
+
+    app = create_app(
+        agent_gateway=ScriptedAgentGateway(), session_factory=session_factory
+    )
+    with TestClient(app) as client:
+        response = client.get(
+            "/sessions/runtime-events-session/agents/"
+            "runtime-events-agent/runtime-events"
+        )
+
+    assert response.status_code == 200
+    assert response.json()[0]["title"] == "推理摘要"
+    assert response.json()[0]["detail"] == "公开摘要"
+    assert response.json()[0]["agent_call_id"] == "runtime-events-call"
 
 
 def test_agent_runtime_query_loads_only_latest_safe_scalar_call_columns(

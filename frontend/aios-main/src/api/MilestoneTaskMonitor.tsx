@@ -125,13 +125,13 @@ export function MilestoneTaskMonitor({ milestone, workItems, onOpenWorkItem }: {
         </div>
         <div>
           <h2>{milestone.title || milestone.id}</h2>
-          <p>Milestone · 子任务状态与依赖关系实时呈现</p>
+          <p>SDLC 阶段 · 子任务状态与依赖关系实时呈现</p>
         </div>
       </div>
 
       <div className="ff-spec-objective">
         <span><ListChecks aria-hidden="true" /></span>
-        <div><h3>里程碑目标</h3><p>{milestone.objective || milestone.description || '未提供里程碑目标'}</p></div>
+        <div><h3>阶段目标</h3><p>{milestone.objective || milestone.description || '未提供阶段目标'}</p></div>
       </div>
 
       <section className="ff-milestone-overview" aria-label="里程碑任务概览">

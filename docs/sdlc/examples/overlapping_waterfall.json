@@ -1,0 +1,1126 @@
+{
+  "notice": "合成测试数据，仅示范规则格式，不表示真实选型、证据或已通过评审。",
+  "approved_spec": {
+    "background_and_goals": [
+      "Make project planning reproducible",
+      "Synthetic q1=no",
+      "Synthetic q2=no",
+      "Synthetic q3=no",
+      "Synthetic q4=no",
+      "Synthetic q5=yes",
+      "Synthetic q6=yes",
+      "Synthetic q7=yes",
+      "Synthetic q8=no",
+      "Synthetic q9=no",
+      "Synthetic q10=no"
+    ],
+    "users_and_scenarios": [
+      "A project manager submits a brief",
+      "Agents prepare delivery plans"
+    ],
+    "functional_requirements": [
+      {
+        "requirement_id": "FR-001",
+        "statement": "The system creates a workflow session from a brief",
+        "priority": "MUST"
+      }
+    ],
+    "non_functional_requirements": [
+      {
+        "requirement_id": "NFR-001",
+        "statement": "Commands are idempotent by command identifier",
+        "priority": "MUST"
+      }
+    ],
+    "system_boundaries": [
+      "The workflow API and its persistence layer"
+    ],
+    "exclusions": [],
+    "fixed_parts": [
+      "State transitions are validated"
+    ],
+    "configurable_parts": [
+      "Agent model selection"
+    ],
+    "extension_points": [
+      "Additional review providers"
+    ],
+    "core_objects": [
+      "Project",
+      "Session",
+      "SpecVersion",
+      "WorkItem"
+    ],
+    "main_flows": [
+      "Submit brief, clarify, specify, review, decompose"
+    ],
+    "exceptional_flows": [
+      "Pause when blocking questions remain"
+    ],
+    "permissions_and_responsibilities": [
+      "Approver approves specifications"
+    ],
+    "deliverable_requirements": [
+      "Versioned project specification"
+    ],
+    "acceptance_criteria": [
+      {
+        "requirement_ids": [
+          "FR-001"
+        ],
+        "criterion": "The workflow accepts a complete brief",
+        "verification_method": "API integration test",
+        "expected_result": "A session is created with INTAKE phase"
+      },
+      {
+        "requirement_ids": [
+          "NFR-001"
+        ],
+        "criterion": "Repeated commands are handled idempotently",
+        "verification_method": "Replay test",
+        "expected_result": "The same command produces the same result"
+      }
+    ],
+    "risks": [
+      "Ambiguous source requirements"
+    ],
+    "assumptions": [
+      "Actors have stable identifiers"
+    ],
+    "open_questions": [],
+    "source_refs": [
+      "artifact:brief-1"
+    ],
+    "er_diagrams": []
+  },
+  "breakdown": {
+    "lifecycle": {
+      "rules_version": "1",
+      "rules_hash": "64adee07e03bb0338f26f82b015af4d55fa486a60ee235ad06ba27aa28343e47",
+      "model": "overlapping_waterfall",
+      "answers": [
+        {
+          "question_id": "q1",
+          "answer": "no",
+          "evidence": "Synthetic q1=no"
+        },
+        {
+          "question_id": "q2",
+          "answer": "no",
+          "evidence": "Synthetic q2=no"
+        },
+        {
+          "question_id": "q3",
+          "answer": "no",
+          "evidence": "Synthetic q3=no"
+        },
+        {
+          "question_id": "q4",
+          "answer": "no",
+          "evidence": "Synthetic q4=no"
+        },
+        {
+          "question_id": "q5",
+          "answer": "yes",
+          "evidence": "Synthetic q5=yes"
+        },
+        {
+          "question_id": "q6",
+          "answer": "yes",
+          "evidence": "Synthetic q6=yes"
+        },
+        {
+          "question_id": "q7",
+          "answer": "yes",
+          "evidence": "Synthetic q7=yes"
+        },
+        {
+          "question_id": "q8",
+          "answer": "no",
+          "evidence": "Synthetic q8=no"
+        },
+        {
+          "question_id": "q9",
+          "answer": "no",
+          "evidence": "Synthetic q9=no"
+        },
+        {
+          "question_id": "q10",
+          "answer": "no",
+          "evidence": "Synthetic q10=no"
+        }
+      ],
+      "selection_reason": "Synthetic fixture; not real project approval",
+      "phases": [
+        {
+          "milestone_key": "i0-requirements",
+          "stage_id": "requirements",
+          "iteration": 0,
+          "exit_gate_key": "i0-requirements-gate",
+          "schedule": "按团队评估排期；示例不承诺具体日期"
+        },
+        {
+          "milestone_key": "i0-design",
+          "stage_id": "design",
+          "iteration": 0,
+          "exit_gate_key": "i0-design-gate",
+          "schedule": "按团队评估排期；示例不承诺具体日期"
+        },
+        {
+          "milestone_key": "i0-implementation",
+          "stage_id": "implementation",
+          "iteration": 0,
+          "exit_gate_key": "i0-implementation-gate",
+          "schedule": "按团队评估排期；示例不承诺具体日期"
+        },
+        {
+          "milestone_key": "i0-acceptance",
+          "stage_id": "acceptance",
+          "iteration": 0,
+          "exit_gate_key": "i0-acceptance-gate",
+          "schedule": "按团队评估排期；示例不承诺具体日期"
+        },
+        {
+          "milestone_key": "i0-operations",
+          "stage_id": "operations",
+          "iteration": 0,
+          "exit_gate_key": "i0-operations-gate",
+          "schedule": "按团队评估排期；示例不承诺具体日期"
+        }
+      ],
+      "tasks": [
+        {
+          "task_key": "i0-requirements-work",
+          "activity_ids": [
+            "requirements.a1",
+            "requirements.a2",
+            "requirements.a3",
+            "requirements.a4",
+            "requirements.a5"
+          ],
+          "deliverable_ids": [
+            "requirements.d1",
+            "requirements.d2",
+            "requirements.d3"
+          ],
+          "module_key": null,
+          "special_gate": null,
+          "gate_checks": []
+        },
+        {
+          "task_key": "i0-requirements-gate",
+          "activity_ids": [],
+          "deliverable_ids": [],
+          "module_key": null,
+          "special_gate": null,
+          "gate_checks": [
+            "核心需求100%评审冻结、次要需求有明确补全排期",
+            "review:formal_unanimous"
+          ]
+        },
+        {
+          "task_key": "i0-design-work",
+          "activity_ids": [
+            "design.a1",
+            "design.a2",
+            "design.a3",
+            "design.a4",
+            "design.a5"
+          ],
+          "deliverable_ids": [
+            "design.d1",
+            "design.d2"
+          ],
+          "module_key": null,
+          "special_gate": null,
+          "gate_checks": []
+        },
+        {
+          "task_key": "i0-design-gate",
+          "activity_ids": [],
+          "deliverable_ids": [],
+          "module_key": null,
+          "special_gate": null,
+          "gate_checks": [
+            "概要架构正式评审通过、已完成模块设计可追溯至需求",
+            "review:formal_unanimous"
+          ]
+        },
+        {
+          "task_key": "i0-implementation-work",
+          "activity_ids": [
+            "implementation.a1",
+            "implementation.a2",
+            "implementation.a3",
+            "implementation.a4",
+            "implementation.a5"
+          ],
+          "deliverable_ids": [
+            "implementation.d1",
+            "implementation.d2",
+            "implementation.d3"
+          ],
+          "module_key": "main",
+          "special_gate": null,
+          "gate_checks": []
+        },
+        {
+          "task_key": "i0-implementation-gate",
+          "activity_ids": [],
+          "deliverable_ids": [],
+          "module_key": null,
+          "special_gate": null,
+          "gate_checks": [
+            "已提测模块单元/集成测试通过、剩余模块有明确开发排期",
+            "review:direct_stakeholder_confirmation"
+          ]
+        },
+        {
+          "task_key": "i0-acceptance-work",
+          "activity_ids": [
+            "acceptance.a1",
+            "acceptance.a2",
+            "acceptance.a3",
+            "acceptance.a4",
+            "acceptance.a5"
+          ],
+          "deliverable_ids": [
+            "acceptance.d1",
+            "acceptance.d2",
+            "acceptance.d3"
+          ],
+          "module_key": null,
+          "special_gate": null,
+          "gate_checks": []
+        },
+        {
+          "task_key": "i0-acceptance-gate",
+          "activity_ids": [],
+          "deliverable_ids": [],
+          "module_key": null,
+          "special_gate": null,
+          "gate_checks": [
+            "整体系统测试通过、高危/严重缺陷清零、业务方UAT签字确认",
+            "review:formal_unanimous"
+          ]
+        },
+        {
+          "task_key": "i0-operations-work",
+          "activity_ids": [
+            "operations.a1",
+            "operations.a2",
+            "operations.a3",
+            "operations.a4",
+            "operations.a5",
+            "operations.a6"
+          ],
+          "deliverable_ids": [
+            "operations.d1",
+            "operations.d2",
+            "operations.d3",
+            "operations.d4"
+          ],
+          "module_key": null,
+          "special_gate": null,
+          "gate_checks": []
+        },
+        {
+          "task_key": "i0-operations-gate",
+          "activity_ids": [],
+          "deliverable_ids": [],
+          "module_key": null,
+          "special_gate": null,
+          "gate_checks": [
+            "上线验证全量通过、系统稳定运行、文档与实际状态同步",
+            "review:direct_stakeholder_confirmation"
+          ]
+        }
+      ],
+      "iteration_weeks": null,
+      "cadence_rationale": null,
+      "operations_handover": "约定稳定观察期后交接，持续服务另行排期"
+    },
+    "milestones": [
+      {
+        "local_key": "i0-requirements",
+        "parent_key": null,
+        "kind": "MILESTONE",
+        "title": "需求锁定",
+        "objective": "优先锁定核心业务需求，次要需求后续逐步补齐，输出核心需求基线",
+        "dependency_keys": []
+      },
+      {
+        "local_key": "i0-design",
+        "parent_key": null,
+        "kind": "MILESTONE",
+        "title": "架构设计",
+        "objective": "概要架构先行评审，按模块分批输出详细设计，无需等待全量设计完成",
+        "dependency_keys": []
+      },
+      {
+        "local_key": "i0-implementation",
+        "parent_key": null,
+        "kind": "MILESTONE",
+        "title": "编码测试",
+        "objective": "按模块分批编码开发，模块完成即启动单元/集成测试，无需等待全量编码完成",
+        "dependency_keys": []
+      },
+      {
+        "local_key": "i0-acceptance",
+        "parent_key": null,
+        "kind": "MILESTONE",
+        "title": "集成验收",
+        "objective": "完成全系统集成测试、系统测试与UAT验收，缺陷闭环",
+        "dependency_keys": []
+      },
+      {
+        "local_key": "i0-operations",
+        "parent_key": null,
+        "kind": "MILESTONE",
+        "title": "运维迭代",
+        "objective": "生产部署与文档更新同步执行，持续运维保障与文档迭代",
+        "dependency_keys": []
+      }
+    ],
+    "tasks": [
+      {
+        "local_key": "i0-requirements-work",
+        "parent_key": "i0-requirements",
+        "kind": "TASK",
+        "title": "完成：需求锁定",
+        "objective": "优先锁定核心业务需求，次要需求后续逐步补齐，输出核心需求基线",
+        "dependency_keys": []
+      },
+      {
+        "local_key": "i0-requirements-gate",
+        "parent_key": "i0-requirements",
+        "kind": "TASK",
+        "title": "准出评审：需求锁定",
+        "objective": "优先锁定核心业务需求，次要需求后续逐步补齐，输出核心需求基线",
+        "dependency_keys": [
+          "i0-requirements-work"
+        ]
+      },
+      {
+        "local_key": "i0-design-work",
+        "parent_key": "i0-design",
+        "kind": "TASK",
+        "title": "完成：架构设计",
+        "objective": "概要架构先行评审，按模块分批输出详细设计，无需等待全量设计完成",
+        "dependency_keys": [
+          "i0-requirements-gate"
+        ]
+      },
+      {
+        "local_key": "i0-design-gate",
+        "parent_key": "i0-design",
+        "kind": "TASK",
+        "title": "准出评审：架构设计",
+        "objective": "概要架构先行评审，按模块分批输出详细设计，无需等待全量设计完成",
+        "dependency_keys": [
+          "i0-design-work"
+        ]
+      },
+      {
+        "local_key": "i0-implementation-work",
+        "parent_key": "i0-implementation",
+        "kind": "TASK",
+        "title": "完成：编码测试",
+        "objective": "按模块分批编码开发，模块完成即启动单元/集成测试，无需等待全量编码完成",
+        "dependency_keys": [
+          "i0-design-gate"
+        ]
+      },
+      {
+        "local_key": "i0-implementation-gate",
+        "parent_key": "i0-implementation",
+        "kind": "TASK",
+        "title": "准出评审：编码测试",
+        "objective": "按模块分批编码开发，模块完成即启动单元/集成测试，无需等待全量编码完成",
+        "dependency_keys": [
+          "i0-implementation-work"
+        ]
+      },
+      {
+        "local_key": "i0-acceptance-work",
+        "parent_key": "i0-acceptance",
+        "kind": "TASK",
+        "title": "完成：集成验收",
+        "objective": "完成全系统集成测试、系统测试与UAT验收，缺陷闭环",
+        "dependency_keys": [
+          "i0-implementation-gate"
+        ]
+      },
+      {
+        "local_key": "i0-acceptance-gate",
+        "parent_key": "i0-acceptance",
+        "kind": "TASK",
+        "title": "准出评审：集成验收",
+        "objective": "完成全系统集成测试、系统测试与UAT验收，缺陷闭环",
+        "dependency_keys": [
+          "i0-acceptance-work"
+        ]
+      },
+      {
+        "local_key": "i0-operations-work",
+        "parent_key": "i0-operations",
+        "kind": "TASK",
+        "title": "完成：运维迭代",
+        "objective": "生产部署与文档更新同步执行，持续运维保障与文档迭代",
+        "dependency_keys": [
+          "i0-acceptance-gate"
+        ]
+      },
+      {
+        "local_key": "i0-operations-gate",
+        "parent_key": "i0-operations",
+        "kind": "TASK",
+        "title": "准出评审：运维迭代",
+        "objective": "生产部署与文档更新同步执行，持续运维保障与文档迭代",
+        "dependency_keys": [
+          "i0-operations-work"
+        ]
+      }
+    ],
+    "agent_specs": [
+      {
+        "work_item_key": "i0-requirements-work",
+        "objective": "优先锁定核心业务需求，次要需求后续逐步补齐，输出核心需求基线",
+        "scope": [
+          "优先锁定核心业务需求，次要需求后续逐步补齐，输出核心需求基线"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "《核心需求基线》",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "《次要需求补全计划》",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "《验收标准（核心部分）》",
+            "format": "按交付物类型",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "核心需求100%评审冻结、次要需求有明确补全排期",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "产品经理 + 业务分析师",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      },
+      {
+        "work_item_key": "i0-requirements-gate",
+        "objective": "优先锁定核心业务需求，次要需求后续逐步补齐，输出核心需求基线",
+        "scope": [
+          "优先锁定核心业务需求，次要需求后续逐步补齐，输出核心需求基线"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "评审记录",
+            "format": "Markdown",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "核心需求100%评审冻结、次要需求有明确补全排期\nreview:formal_unanimous",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "产品经理 + 业务分析师",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [
+          "i0-requirements-work"
+        ],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      },
+      {
+        "work_item_key": "i0-design-work",
+        "objective": "概要架构先行评审，按模块分批输出详细设计，无需等待全量设计完成",
+        "scope": [
+          "概要架构先行评审，按模块分批输出详细设计，无需等待全量设计完成"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "《概要架构设计文档》",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "《分模块详细设计文档》（分批输出）",
+            "format": "按交付物类型",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "概要架构正式评审通过、已完成模块设计可追溯至需求",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "架构师 + 模块负责人",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [
+          "i0-requirements-gate"
+        ],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      },
+      {
+        "work_item_key": "i0-design-gate",
+        "objective": "概要架构先行评审，按模块分批输出详细设计，无需等待全量设计完成",
+        "scope": [
+          "概要架构先行评审，按模块分批输出详细设计，无需等待全量设计完成"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "评审记录",
+            "format": "Markdown",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "概要架构正式评审通过、已完成模块设计可追溯至需求\nreview:formal_unanimous",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "架构师 + 模块负责人",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [
+          "i0-design-work"
+        ],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      },
+      {
+        "work_item_key": "i0-implementation-work",
+        "objective": "按模块分批编码开发，模块完成即启动单元/集成测试，无需等待全量编码完成",
+        "scope": [
+          "按模块分批编码开发，模块完成即启动单元/集成测试，无需等待全量编码完成"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "分批模块源代码",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "模块单元测试报告",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "模块集成测试报告",
+            "format": "按交付物类型",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "已提测模块单元/集成测试通过、剩余模块有明确开发排期",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "各模块开发工程师 + 测试工程师",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [
+          "i0-design-gate"
+        ],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      },
+      {
+        "work_item_key": "i0-implementation-gate",
+        "objective": "按模块分批编码开发，模块完成即启动单元/集成测试，无需等待全量编码完成",
+        "scope": [
+          "按模块分批编码开发，模块完成即启动单元/集成测试，无需等待全量编码完成"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "评审记录",
+            "format": "Markdown",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "已提测模块单元/集成测试通过、剩余模块有明确开发排期\nreview:direct_stakeholder_confirmation",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "各模块开发工程师 + 测试工程师",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [
+          "i0-implementation-work"
+        ],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      },
+      {
+        "work_item_key": "i0-acceptance-work",
+        "objective": "完成全系统集成测试、系统测试与UAT验收，缺陷闭环",
+        "scope": [
+          "完成全系统集成测试、系统测试与UAT验收，缺陷闭环"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "《整体测试报告》",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "《缺陷清零清单》",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "《UAT验收报告》",
+            "format": "按交付物类型",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "整体系统测试通过、高危/严重缺陷清零、业务方UAT签字确认",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "测试工程师 + 业务方",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [
+          "i0-implementation-gate"
+        ],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      },
+      {
+        "work_item_key": "i0-acceptance-gate",
+        "objective": "完成全系统集成测试、系统测试与UAT验收，缺陷闭环",
+        "scope": [
+          "完成全系统集成测试、系统测试与UAT验收，缺陷闭环"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "评审记录",
+            "format": "Markdown",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "整体系统测试通过、高危/严重缺陷清零、业务方UAT签字确认\nreview:formal_unanimous",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "测试工程师 + 业务方",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [
+          "i0-acceptance-work"
+        ],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      },
+      {
+        "work_item_key": "i0-operations-work",
+        "objective": "生产部署与文档更新同步执行，持续运维保障与文档迭代",
+        "scope": [
+          "生产部署与文档更新同步执行，持续运维保障与文档迭代"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "《部署方案》",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "《上线报告》",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "《运维手册》",
+            "format": "按交付物类型",
+            "required": true
+          },
+          {
+            "name": "《持续更新文档集》",
+            "format": "按交付物类型",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "上线验证全量通过、系统稳定运行、文档与实际状态同步",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "运维工程师 + 项目经理",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [
+          "i0-acceptance-gate"
+        ],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      },
+      {
+        "work_item_key": "i0-operations-gate",
+        "objective": "生产部署与文档更新同步执行，持续运维保障与文档迭代",
+        "scope": [
+          "生产部署与文档更新同步执行，持续运维保障与文档迭代"
+        ],
+        "exclusions": [
+          "HTTP routes"
+        ],
+        "context_refs": [
+          "artifact:brief-1"
+        ],
+        "inputs": [
+          "approved project specification"
+        ],
+        "outputs": [
+          {
+            "name": "评审记录",
+            "format": "Markdown",
+            "required": true
+          }
+        ],
+        "fixed_constraints": [
+          "Pydantic"
+        ],
+        "configurable_parts": [],
+        "extension_points": [],
+        "acceptance_criteria": [
+          {
+            "requirement_ids": [
+              "FR-001",
+              "NFR-001"
+            ],
+            "criterion": "上线验证全量通过、系统稳定运行、文档与实际状态同步\nreview:direct_stakeholder_confirmation",
+            "verification_method": "检查交付物和真实评审证据",
+            "expected_result": "满足全部验收条件后由责任人确认"
+          }
+        ],
+        "required_skills": [
+          "backend-development"
+        ],
+        "allowed_tools": [
+          "pytest"
+        ],
+        "allowed_paths": [
+          "app/domain"
+        ],
+        "responsible_role": "运维工程师 + 项目经理",
+        "suggested_assignee": "domain-agent",
+        "dependency_keys": [
+          "i0-operations-work"
+        ],
+        "test_obligations": [
+          "Unit test"
+        ],
+        "risks": [],
+        "open_questions": [],
+        "implementation_plan": null
+      }
+    ]
+  }
+}

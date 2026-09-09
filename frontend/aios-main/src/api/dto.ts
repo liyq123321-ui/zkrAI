@@ -83,6 +83,7 @@ export interface SpecVersionDto {
 
 export interface WorkItemDto {
   id: string;
+  local_key?: string | null;
   parent_id: string | null;
   kind: 'ROOT' | 'MILESTONE' | 'TASK' | null;
   title: string | null;
@@ -137,6 +138,54 @@ export interface AgentRuntimeDto {
   started_at: string;
   completed_at: string | null;
   call_count: number;
+}
+
+export type LifecycleModel = 'strict_waterfall' | 'overlapping_waterfall' | 'iterative_incremental';
+
+export interface LifecycleRouteOptionDto {
+  model: LifecycleModel;
+  name: string;
+  rank: 'recommended' | 'alternative';
+  score: number;
+  reason: string;
+  stages: Array<{
+    id: string;
+    name: string;
+    objective: string;
+    schedule: string;
+    number?: number;
+    scope?: 'project' | 'global' | 'iteration' | 'continuous';
+    entry_criteria?: string;
+    exit_criteria?: string;
+    owner?: string;
+    deliverables?: Array<{ id: string; name: string }>;
+  }>;
+}
+
+export interface LifecycleRouteDecisionDto {
+  rules_version: string;
+  rules_hash: string;
+  assessment: {
+    answers: Array<{ question_id: string; answer: 'yes' | 'no' | 'unknown'; evidence: string }>;
+    summary: string;
+  };
+  options: LifecycleRouteOptionDto[];
+  selected_model: LifecycleModel | null;
+}
+
+export interface AgentRuntimeEventDto {
+  id: number;
+  project_id: string;
+  agent_session_id: string;
+  agent_call_id: string;
+  operation: string;
+  event_type: string;
+  item_type: string | null;
+  status: string | null;
+  title: string;
+  detail: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface CommandResultDto {

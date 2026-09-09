@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AgentRuntimePanel } from './AgentRuntimePanel';
 
 const runtime = [
@@ -18,8 +18,16 @@ function response(body: unknown, status = 200): Response {
   } as Response;
 }
 
-beforeEach(() => vi.stubGlobal('fetch', vi.fn(async () =>
-  new Response(JSON.stringify(runtime), { status:200 }))));
+beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function showModal() {
+    this.setAttribute('open', '');
+  };
+  HTMLDialogElement.prototype.close = function close() {
+    this.removeAttribute('open');
+  };
+  vi.stubGlobal('fetch', vi.fn(async () =>
+    new Response(JSON.stringify(runtime), { status:200 })));
+});
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('AgentRuntimePanel', () => {
@@ -50,6 +58,36 @@ describe('AgentRuntimePanel', () => {
     expect(statusFor('PM Agent', '运行中').classList.contains('is-running')).toBe(true);
     expect(statusFor('Writer Agent', '已完成').classList.contains('is-completed')).toBe(true);
     expect(statusFor('Reviewer Agent', '异常').classList.contains('is-error')).toBe(true);
+  });
+
+  it('opens an Agent record dialog and shows its current reasoning and complete event timeline', async () => {
+    const events = [
+      { id:1, project_id:'project-1', agent_session_id:'agent-pm', agent_call_id:'call-1', operation:'generate_spec', event_type:'thread.started', item_type:null, status:null, title:'Codex CLI 会话已连接', detail:null, payload:{ type:'thread.started' }, created_at:'2026-09-06T02:00:00Z' },
+      { id:2, project_id:'project-1', agent_session_id:'agent-pm', agent_call_id:'call-2', operation:'decompose_spec', event_type:'item.completed', item_type:'reasoning', status:'completed', title:'推理摘要', detail:'正在核对当前规格和约束。', payload:{ type:'item.completed', item:{ type:'reasoning', text:'正在核对当前规格和约束。' } }, created_at:'2026-09-06T02:01:10Z' },
+      { id:3, project_id:'project-1', agent_session_id:'agent-pm', agent_call_id:'call-2', operation:'decompose_spec', event_type:'item.completed', item_type:'command_execution', status:'completed', title:'命令执行', detail:'rg requirements', payload:{ type:'item.completed', item:{ type:'command_execution', command:'rg requirements' } }, created_at:'2026-09-06T02:01:20Z' },
+    ];
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      return response(url.includes('/runtime-events') ? events : runtime);
+    });
+    render(<AgentRuntimePanel projects={[{ sessionId:'session-1', title:'知识问答' }]} />);
+
+    fireEvent.click(await screen.findByRole('button', { name:/PM Agent/ }));
+
+    const dialog = await screen.findByRole('dialog', { name:'Agent 运行记录 · PM Agent' });
+    const timeline = within(dialog).getByText('Codex 运行记录');
+    const container = timeline.closest<HTMLElement>('.ff-agent-runtime-timeline')!;
+    expect(within(container).getByText('当前执行内容')).toBeTruthy();
+    expect(within(container).getAllByText('正在核对当前规格和约束。').length).toBeGreaterThan(0);
+    expect(within(container).getAllByText('命令执行').length).toBeGreaterThan(0);
+    expect(within(container).getByText('rg requirements')).toBeTruthy();
+    expect(within(container).getAllByText('查看脱敏事件数据')).toHaveLength(3);
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/sessions/session-1/agents/agent-pm/runtime-events'),
+      expect.objectContaining({ signal:expect.any(AbortSignal) }),
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name:'关闭详情' }));
+    expect(screen.queryByRole('dialog', { name:'Agent 运行记录 · PM Agent' })).toBeNull();
   });
 
   it('renders an explicit empty state', async () => {

@@ -1,0 +1,199 @@
+version: 1
+id: overlapping_waterfall
+name: 阶段重叠瀑布（工程实操·企业型）
+stages:
+- name: 需求锁定
+  objective: 优先锁定核心业务需求，次要需求后续逐步补齐，输出核心需求基线
+  entry_criteria: 项目立项完成
+  exit_criteria: 核心需求100%评审冻结、次要需求有明确补全排期
+  owner: 产品经理 + 业务分析师
+  schedule_guidance: 15%~20%（核心需求占60%时长）
+  id: requirements
+  number: 1
+  scope: project
+  activities:
+  - id: requirements.a1
+    name: 核心业务访谈
+  - id: requirements.a2
+    name: 核心需求梳理确认
+  - id: requirements.a3
+    name: 次要需求收集排期
+  - id: requirements.a4
+    name: 定义核心验收标准
+  - id: requirements.a5
+    name: 搭建需求池
+  deliverables:
+  - id: requirements.d1
+    name: 《核心需求基线》
+  - id: requirements.d2
+    name: 《次要需求补全计划》
+  - id: requirements.d3
+    name: 《验收标准（核心部分）》
+- name: 架构设计
+  objective: 概要架构先行评审，按模块分批输出详细设计，无需等待全量设计完成
+  entry_criteria: 核心需求基线评审通过
+  exit_criteria: 概要架构正式评审通过、已完成模块设计可追溯至需求
+  owner: 架构师 + 模块负责人
+  schedule_guidance: 15%~20%（与开发重叠约30%时长）
+  id: design
+  number: 2
+  scope: project
+  activities:
+  - id: design.a1
+    name: 概要架构设计
+  - id: design.a2
+    name: 技术选型确认
+  - id: design.a3
+    name: 模块拆分
+  - id: design.a4
+    name: 按模块分批输出详细设计
+  - id: design.a5
+    name: 数据库与接口设计
+  deliverables:
+  - id: design.d1
+    name: 《概要架构设计文档》
+  - id: design.d2
+    name: 《分模块详细设计文档》（分批输出）
+- name: 编码测试
+  objective: 按模块分批编码开发，模块完成即启动单元/集成测试，无需等待全量编码完成
+  entry_criteria: 对应模块详细设计评审通过
+  exit_criteria: 已提测模块单元/集成测试通过、剩余模块有明确开发排期
+  owner: 各模块开发工程师 + 测试工程师
+  schedule_guidance: 30%~40%（与测试重叠约20%时长）
+  id: implementation
+  number: 3
+  scope: project
+  activities:
+  - id: implementation.a1
+    name: 分模块编码实现
+  - id: implementation.a2
+    name: 代码走查
+  - id: implementation.a3
+    name: 单元测试
+  - id: implementation.a4
+    name: 模块级集成测试
+  - id: implementation.a5
+    name: 缺陷即时修复
+  deliverables:
+  - id: implementation.d1
+    name: 分批模块源代码
+  - id: implementation.d2
+    name: 模块单元测试报告
+  - id: implementation.d3
+    name: 模块集成测试报告
+- name: 集成验收
+  objective: 完成全系统集成测试、系统测试与UAT验收，缺陷闭环
+  entry_criteria: 所有模块开发完成、模块级测试通过
+  exit_criteria: 整体系统测试通过、高危/严重缺陷清零、业务方UAT签字确认
+  owner: 测试工程师 + 业务方
+  schedule_guidance: 15%~20%（测试左移提前启动）
+  id: acceptance
+  number: 4
+  scope: project
+  activities:
+  - id: acceptance.a1
+    name: 全系统集成测试
+  - id: acceptance.a2
+    name: 系统功能测试
+  - id: acceptance.a3
+    name: 性能/安全专项测试
+  - id: acceptance.a4
+    name: UAT用户验收
+  - id: acceptance.a5
+    name: 缺陷修复回归
+  deliverables:
+  - id: acceptance.d1
+    name: 《整体测试报告》
+  - id: acceptance.d2
+    name: 《缺陷清零清单》
+  - id: acceptance.d3
+    name: 《UAT验收报告》
+- name: 运维迭代
+  objective: 生产部署与文档更新同步执行，持续运维保障与文档迭代
+  entry_criteria: 整体系统测试+UAT验收通过
+  exit_criteria: 上线验证全量通过、系统稳定运行、文档与实际状态同步
+  owner: 运维工程师 + 项目经理
+  schedule_guidance: 持续
+  id: operations
+  number: 5
+  scope: project
+  activities:
+  - id: operations.a1
+    name: 生产环境部署
+  - id: operations.a2
+    name: 上线验证
+  - id: operations.a3
+    name: 用户培训
+  - id: operations.a4
+    name: 线上故障响应
+  - id: operations.a5
+    name: 文档持续同步更新
+  - id: operations.a6
+    name: 小版本优化
+  deliverables:
+  - id: operations.d1
+    name: 《部署方案》
+  - id: operations.d2
+    name: 《上线报告》
+  - id: operations.d3
+    name: 《运维手册》
+  - id: operations.d4
+    name: 《持续更新文档集》
+source_sections:
+  适用场景: 绝大多数企业级业务系统项目；需求大体稳定，细节可调整，预估变更率10%~25%；追求效率减少等待空窗期；不支持大范围跨阶段并行。
+  核心规则: 大阶段顺序保持不变；核心交付物评审通过后，即可启动下一阶段前置工作；主体工作必须等待上游核心交付物确认；仅允许相邻阶段边缘重叠、模块级分批并行，禁止大范围跨阶段并行。
+  阶段划分（共5个核心阶段）: '| 阶段编号 | 阶段名称 | 阶段目标 | 准入条件 | 核心工作 | 关键交付物 | 准出验收标准 | 责任人 | 排期占比 |
+
+    |---|---|---|---|---|---|---|---|---|
+
+    | 1 | 需求锁定 | 优先锁定核心业务需求，次要需求后续逐步补齐，输出核心需求基线 | 项目立项完成 | 核心业务访谈、核心需求梳理确认、次要需求收集排期、定义核心验收标准、搭建需求池 | 《核心需求基线》《次要需求补全计划》《验收标准（核心部分）》
+    | 核心需求100%评审冻结、次要需求有明确补全排期 | 产品经理 + 业务分析师 | 15%~20%（核心需求占60%时长） |
+
+    | 2 | 架构设计 | 概要架构先行评审，按模块分批输出详细设计，无需等待全量设计完成 | 核心需求基线评审通过 | 概要架构设计、技术选型确认、模块拆分、按模块分批输出详细设计、数据库与接口设计
+    | 《概要架构设计文档》《分模块详细设计文档》（分批输出） | 概要架构正式评审通过、已完成模块设计可追溯至需求 | 架构师 + 模块负责人 | 15%~20%（与开发重叠约30%时长） |
+
+    | 3 | 编码测试 | 按模块分批编码开发，模块完成即启动单元/集成测试，无需等待全量编码完成 | 对应模块详细设计评审通过 | 分模块编码实现、代码走查、单元测试、模块级集成测试、缺陷即时修复
+    | 分批模块源代码、模块单元测试报告、模块集成测试报告 | 已提测模块单元/集成测试通过、剩余模块有明确开发排期 | 各模块开发工程师 + 测试工程师 | 30%~40%（与测试重叠约20%时长）
+    |
+
+    | 4 | 集成验收 | 完成全系统集成测试、系统测试与UAT验收，缺陷闭环 | 所有模块开发完成、模块级测试通过 | 全系统集成测试、系统功能测试、性能/安全专项测试、UAT用户验收、缺陷修复回归
+    | 《整体测试报告》《缺陷清零清单》《UAT验收报告》 | 整体系统测试通过、高危/严重缺陷清零、业务方UAT签字确认 | 测试工程师 + 业务方 | 15%~20%（测试左移提前启动） |
+
+    | 5 | 运维迭代 | 生产部署与文档更新同步执行，持续运维保障与文档迭代 | 整体系统测试+UAT验收通过 | 生产环境部署、上线验证、用户培训、线上故障响应、文档持续同步更新、小版本优化 |
+    《部署方案》《上线报告》《运维手册》《持续更新文档集》 | 上线验证全量通过、系统稳定运行、文档与实际状态同步 | 运维工程师 + 项目经理 | 持续 |'
+  可并行重叠清单: '1. 核心需求锁定后，概要架构设计可同步启动，与次要需求补全并行
+
+    2. 单个模块详细设计完成，该模块即可启动编码，与其他模块设计并行
+
+    3. 模块编码完成，即可启动模块级测试，与其他模块编码并行
+
+    4. 部署执行过程中，运维文档、用户手册可同步更新
+
+    5. 上线验证与运维监控、文档归档并行开展'
+  不可并行红线: '1. 核心需求未定，禁止启动详细设计
+
+    2. 未完成详细设计的模块禁止编码
+
+    3. 未编码模块禁止进入系统级测试
+
+    4. 测试期间禁止启动大规模新模块设计
+
+    5. 部署期间禁止新增功能开发
+
+    6. 维护期禁止未经评审的重大变更'
+  阶段门禁规则: "1. 采用**三级门禁机制**：\n   - 一级（正式评审会）：核心里程碑交付物（核心需求、概要架构、整体测试验收），全员参与，一票否决。\n   - 二级（专项评审）：模块级交付物（模块详细设计、模块测试），模块负责人+相关技术人员参与，技术负责人决策。\n\
+    \   - 三级（确认制）：次要补充材料，直接相关人邮件/文档确认即可。\n2. 核心交付物未通过评审，禁止启动下一阶段主体工作；前置预研工作不受限制。\n3. 模块级交付物可分批评审，无需等待全阶段全部完成。"
+  缺陷回退规则: '1. 核心需求/架构缺陷：回退至对应源头阶段整改，重新评审核心基线，下游关联工作同步暂停。
+
+    2. 模块级设计/代码缺陷：在对应模块内回退修复，不影响其他模块并行推进。
+
+    3. 测试阶段发现模块级Bug：在测试阶段内修复回归，不阻塞其他模块测试。
+
+    4. 测试阶段发现核心架构问题：回退至架构设计阶段整改，同步暂停下游关联模块开发。
+
+    5. 上线后非紧急缺陷：纳入维护计划迭代修复；紧急缺陷即时修复并同步更新文档。'
+  变更处理规则: '1. 核心基线变更走正式评审流程；次要需求、模块级变更可在阶段内消化，记录备案。
+
+    2. 已进入测试阶段的模块变更需评估影响范围；未提测模块变更可灵活调整。
+
+    3. 变更影响跨模块时，需提交技术负责人评审，确认后方可执行。'

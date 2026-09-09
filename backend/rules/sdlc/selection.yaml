@@ -1,0 +1,67 @@
+version: 1
+source:
+  path: docs/sdlc/source.md
+  sha256: 3dd60feff2758bf700ac763a451aba56e74e1c31a1fd1b6ddb806b3f64768a6a
+trigger: after_clarification_before_decomposition
+answers:
+  values:
+  - 'yes'
+  - 'no'
+  - unknown
+  evidence: verbatim_approved_spec_quote
+  unknown_policy: evaluate_all_completions_require_same_result
+questions:
+- id: q1
+  question: 项目属于金融/政务/医疗强监管领域，需要全套书面签字评审与审计追溯？
+- id: q2
+  question: 项目需求启动前完全明确，预估需求变更率＜10%？
+- id: q3
+  question: 项目规模较小，团队≤5人，周期≤2个月？
+- id: q4
+  question: 业务方要求严格阶段门禁，必须上阶段全部完成才能进入下一阶段？
+- id: q5
+  question: 需求大体稳定，仅细节会调整，预估变更率10%~25%？
+- id: q6
+  question: 企业常规业务系统，无频繁试错需求？
+- id: q7
+  question: 项目末期一次性交付为主，不需要频繁向用户交付可用版本？
+- id: q8
+  question: 需求不明确，需要持续根据用户反馈调整产品方向？
+- id: q9
+  question: 需要每2~4周交付可使用的增量版本，快速验证功能？
+- id: q10
+  question: 创新业务/互联网产品，允许分批次上线，不要求一次性全量交付？
+routes:
+- model: strict_waterfall
+  questions:
+  - q1
+  - q2
+  - q3
+  - q4
+  minimum_yes: 3
+- model: overlapping_waterfall
+  questions:
+  - q5
+  - q6
+  - q7
+  minimum_yes: 2
+  unless_qualified: strict_waterfall
+- model: iterative_incremental
+  questions:
+  - q8
+  - q9
+  - q10
+  minimum_yes: 2
+conflict_policy: block_for_clarification
+no_match_policy: block_for_clarification
+hard_constraints:
+  q4_yes_requires: strict_waterfall
+stage_name_max_characters: 4
+planning:
+  require_all_stages: true
+  require_all_activities: true
+  require_all_deliverables: true
+  require_exit_gate_task: true
+  forbid_fabricated_approvals: true
+  schedule_percentages: guidance_not_additive
+  continuous_operations: bounded_handover_plus_service_obligations

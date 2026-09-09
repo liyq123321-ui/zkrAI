@@ -19,12 +19,14 @@ from app.database.models import (
     ClarificationRequest,
     ClarificationResponse,
     Project,
+    SdlcRouteDecision,
     SpecReview,
     SpecVersion,
     clarification_boundary_key,
 )
 from app.domain.types import ErDiagram, ProjectPhase, ProjectSpecPayload, ReviewKind, ReviewVerdict, SemanticReview, SpecStatus
 from app.services.drawio_diagrams import diagram_anchor, diagram_review_projection
+from app.services.sdlc_rules import route_confirmation
 from app.services.spec_review import merge_review_outcome, prevents_semantic_review, run_rule_review
 
 
@@ -506,6 +508,9 @@ class SpecService:
                 if context.request.action.value == "create_spec":
                     with service._session_factory() as db:
                         project = service._project(db, context.project_id)
+                        route = db.query(SdlcRouteDecision).filter_by(project_id=project.id).one_or_none()
+                        if route is not None and route.selected_model is None:
+                            raise ValueError("confirm one of the recommended SDLC routes before generating the PRD")
                         existing = service._current_spec(db, project)
                         if (
                             existing is not None
@@ -610,10 +615,17 @@ class SpecService:
                         raise CommandHandlerFailure(
                             str(error), agent_call_ids=call_ids
                         ) from error
+                    generated = service._apply_confirmed_lifecycle(
+                        generated, generation_payload
+                    )
                     service._record_call_result(
                         context.project_id,
                         generation_call.id,
                         generated.model_dump(mode="json"),
+                    )
+                else:
+                    generated = service._apply_confirmed_lifecycle(
+                        generated, generation_payload
                     )
 
                 return await service.prepare_external_revision(
@@ -960,7 +972,10 @@ class SpecService:
             except Exception as error:
                 self._record_call_failure(project_id, call_id, error, "SPEC_GENERATION_FAILED")
                 raise
+            generated = self._apply_confirmed_lifecycle(generated, payload)
             self._record_call_result(project_id, call_id, generated.model_dump(mode="json"))
+        else:
+            generated = self._apply_confirmed_lifecycle(generated, payload)
 
         return self._materialize_generated_version(project_id, call_id, generated)
 
@@ -1354,6 +1369,10 @@ class SpecService:
             "parent_version_id": parent.id if parent is not None else None,
             "authenticated_revision_decision_history": decision_history,
         }
+        route = db.query(SdlcRouteDecision).filter_by(project_id=project.id).one_or_none()
+        if route is not None and route.selected_model is not None:
+            payload["selected_sdlc_model"] = route.selected_model
+            payload["selected_sdlc_confirmation"] = route_confirmation(route.selected_model)
         if parent is not None:
             payload["parent_spec"] = parent.content
             payload["parent_spec_hash"] = parent.content_hash
@@ -1366,6 +1385,21 @@ class SpecService:
                     "instruction": comments,
                 }
         return payload
+
+    @staticmethod
+    def _apply_confirmed_lifecycle(
+        generated: ProjectSpecPayload,
+        generation_payload: dict[str, object],
+    ) -> ProjectSpecPayload:
+        """Keep the human route choice as durable PRD evidence."""
+
+        confirmation = generation_payload.get("selected_sdlc_confirmation")
+        if not isinstance(confirmation, str) or not confirmation:
+            return generated
+        fixed_parts = list(generated.fixed_parts)
+        if confirmation not in fixed_parts:
+            fixed_parts.append(confirmation)
+        return generated.model_copy(update={"fixed_parts": fixed_parts})
 
     @staticmethod
     def _artifact_snapshot(db: Session, project_id: str) -> list[dict[str, object]]:

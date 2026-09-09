@@ -9,3 +9,4 @@ defusedxml
 pytest
 pytest-asyncio
 httpx
+PyYAML>=6.0.3,<7
