@@ -1,5 +1,6 @@
 import { appConfig } from './config';
 import { normalizeNetworkError, responseToApiError } from './errors';
+import type { AgentBackendName } from './dto';
 
 export interface ChatEvent {
   event: 'session.created' | 'clarification.requested' | 'spec.ready' | 'workflow.error' | 'next_action' | string;
@@ -9,7 +10,7 @@ export interface ChatEvent {
 export async function streamChat(
   message: string,
   onEvent: (event: ChatEvent) => void,
-  options: { sessionId?: string; signal?: AbortSignal } = {},
+  options: { sessionId?: string; signal?: AbortSignal; agentBackend?: AgentBackendName } = {},
 ): Promise<string | null> {
   try {
     const response = await fetch(`${appConfig.apiBaseUrl}/chat`, {
@@ -19,7 +20,11 @@ export async function streamChat(
         'Content-Type': 'application/json',
         ...(options.sessionId ? { 'X-Session-ID': options.sessionId } : {}),
       },
-      body: JSON.stringify({ message, session_id: options.sessionId }),
+      body: JSON.stringify({
+        message,
+        session_id: options.sessionId,
+        agent_backend: options.agentBackend ?? 'codex',
+      }),
       signal: options.signal,
     });
     if (!response.ok) throw await responseToApiError(response);

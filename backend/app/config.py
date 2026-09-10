@@ -16,6 +16,16 @@ class Settings:
     codex_inactivity_timeout_seconds: float = 2000
     codex_skip_git_repo_check: bool = False
     codex_ignore_user_config: bool = False
+    agent_api_timeout_seconds: float = 2000
+    deepseek_api_key: str | None = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-pro"
+    zhipu_api_key: str | None = None
+    zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    zhipu_model: str = "glm-5.2"
+    moonshot_api_key: str | None = None
+    moonshot_base_url: str = "https://api.moonshot.cn/v1"
+    moonshot_model: str = "kimi-k3"
     gitea_url: str | None = None
     gitea_token: str | None = None
     gitea_owner: str | None = None
@@ -76,6 +86,24 @@ class Settings:
                 "CODEX_IGNORE_USER_CONFIG", "false"
             ).strip().lower()
             in {"1", "true", "yes", "on"},
+            agent_api_timeout_seconds=float(
+                os.getenv("AGENT_API_TIMEOUT_SECONDS", str(codex_timeout_seconds))
+            ),
+            deepseek_api_key=os.getenv("DEEPSEEK_API_KEY") or None,
+            deepseek_base_url=os.getenv(
+                "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
+            ).rstrip("/"),
+            deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro").strip(),
+            zhipu_api_key=os.getenv("ZHIPU_API_KEY") or None,
+            zhipu_base_url=os.getenv(
+                "ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"
+            ).rstrip("/"),
+            zhipu_model=os.getenv("ZHIPU_MODEL", "glm-5.2").strip(),
+            moonshot_api_key=os.getenv("MOONSHOT_API_KEY") or None,
+            moonshot_base_url=os.getenv(
+                "MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"
+            ).rstrip("/"),
+            moonshot_model=os.getenv("MOONSHOT_MODEL", "kimi-k3").strip(),
             gitea_url=os.getenv("GITEA_URL"),
             gitea_token=os.getenv("GITEA_TOKEN"),
             gitea_owner=os.getenv("GITEA_OWNER"),

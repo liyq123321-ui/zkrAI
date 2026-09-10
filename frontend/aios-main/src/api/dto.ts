@@ -140,6 +140,21 @@ export interface AgentRuntimeDto {
   call_count: number;
 }
 
+export type AgentBackendName = 'codex' | 'deepseek' | 'glm' | 'kimi';
+
+export interface AgentBackendOptionDto {
+  provider: AgentBackendName;
+  label: string;
+  model: string | null;
+  available: boolean;
+  configuration_env: string | null;
+}
+
+export interface AgentBackendSelectionDto {
+  provider: AgentBackendName;
+  model: string | null;
+}
+
 export type LifecycleModel = 'strict_waterfall' | 'overlapping_waterfall' | 'iterative_incremental';
 
 export interface LifecycleRouteOptionDto {

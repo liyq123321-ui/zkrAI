@@ -151,6 +151,9 @@ def build_strict_output_schema(output_type: type[BaseModel]) -> dict[str, object
 class CodexStructuredRunner:
     """Run Codex with a Pydantic schema and validate its final message."""
 
+    supports_magic_mcp = True
+    supports_direct_prototype = False
+
     def __init__(
         self,
         settings: Settings | None = None,
@@ -534,7 +537,9 @@ class CodexAgentGateway:
 
     @property
     def prototype_enabled(self) -> bool:
-        return self.settings.magic_mcp_enabled
+        return self.settings.magic_mcp_enabled or bool(
+            getattr(self.runner, "supports_direct_prototype", False)
+        )
 
     async def generate_prd_prototype(
         self, payload: dict[str, object]
@@ -571,7 +576,16 @@ class CodexAgentGateway:
     async def _run_node(
         self, node_name: str, payload: dict[str, object], output_type: type[ModelT]
     ) -> ModelT:
-        objective = (NODE_PROMPT_DIR / f"{node_name}.txt").read_text(encoding="utf-8")
+        direct_prototype = (
+            node_name == "pm_generate_prototype"
+            and bool(getattr(self.runner, "supports_direct_prototype", False))
+        )
+        prompt_name = (
+            "pm_generate_prototype_direct" if direct_prototype else node_name
+        )
+        objective = (NODE_PROMPT_DIR / f"{prompt_name}.txt").read_text(
+            encoding="utf-8"
+        )
         base_decomposition = (
             node_name in {"pm_decompose", "pm_revise_breakdown"}
             and payload.get("decomposition_stage") == "base"
@@ -589,7 +603,7 @@ class CodexAgentGateway:
         bundled_skills = (
             ("drawio-skill",) if node_name in PRD_DRAWIO_NODES else ()
         )
-        use_magic_mcp = node_name == "pm_generate_prototype"
+        use_magic_mcp = node_name == "pm_generate_prototype" and not direct_prototype
         operation_by_node = {
             "pm_recommend_lifecycle": "recommend_lifecycle",
             "pm_analyze": "analyze_brief",

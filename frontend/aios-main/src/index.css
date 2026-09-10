@@ -218,36 +218,32 @@
   background-color: rgba(31, 35, 40, 0.6) !important;
 }
 
-/* Custom Scrollbar for GitHub Theme */
+/* Unified low-contrast scrollbars for every horizontal and vertical scroller. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #c4ccd5 #eef1f4;
+}
+
 ::-webkit-scrollbar {
   width: 7px;
   height: 7px;
 }
 
-[data-theme="dark"] ::-webkit-scrollbar-track {
-  background: #131314;
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: #eef1f4;
 }
 
-[data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background: #333538;
+::-webkit-scrollbar-thumb {
+  min-width: 28px;
+  min-height: 28px;
+  border: 1px solid #eef1f4;
   border-radius: 4px;
+  background: #c4ccd5;
 }
 
-[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: #484f58;
-}
-
-[data-theme="light"] ::-webkit-scrollbar-track {
-  background: #f6f8fa;
-}
-
-[data-theme="light"] ::-webkit-scrollbar-thumb {
-  background: #d0d7de;
-  border-radius: 4px;
-}
-
-[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
-  background: #afb8c1;
+::-webkit-scrollbar-thumb:hover {
+  background: #aeb8c3;
 }
 
 /* firstFlight API workspace — restored AI Studio light workbench */
@@ -902,8 +898,9 @@ button:disabled {
 }
 
 .ff-stream-composer {
-  display: flex;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
   gap: 7px;
   padding: 6px;
   border: 1px solid #bdc9d6;
@@ -918,10 +915,12 @@ button:disabled {
 }
 
 .ff-stream-composer textarea {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  width: 100%;
   min-width: 0;
   min-height: 32px;
   max-height: 116px;
-  flex: 1;
   resize: none;
   border: 0;
   outline: 0;
@@ -933,8 +932,109 @@ button:disabled {
 
 .ff-chat-menu-wrap {
   position: relative;
-  flex: 0 0 auto;
+  grid-column: 1;
+  grid-row: 2;
 }
+
+.ff-agent-backend-picker {
+  position: relative;
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.ff-stream-composer > .ff-chat-send-button {
+  grid-column: 4;
+  grid-row: 2;
+}
+
+.ff-agent-backend-trigger {
+  display: inline-flex;
+  max-width: 112px;
+  height: 30px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 7px;
+  background: #f1f4f7;
+  color: #354356;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ff-agent-backend-trigger > span:not(.ff-provider-mark) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ff-agent-backend-trigger > svg { width: 11px; height: 11px; flex: 0 0 auto; }
+.ff-agent-backend-trigger:hover:not(:disabled) { background: #e6ebf0; }
+
+.ff-provider-mark {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 6px;
+  background: #e2e8ef;
+  color: #40546a;
+  font: 800 8px/1 ui-monospace, monospace;
+}
+
+.ff-provider-mark.is-codex { background: #e7f5ec; color: #177a43; }
+.ff-provider-mark.is-deepseek { background: #e8efff; color: #305fc4; }
+.ff-provider-mark.is-glm { background: #eeeafe; color: #6247ba; }
+.ff-provider-mark.is-kimi { background: #e9f4f6; color: #167184; }
+
+.ff-agent-backend-menu {
+  position: absolute;
+  right: -39px;
+  bottom: 40px;
+  z-index: 80;
+  width: 260px;
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid #bcc8d5;
+  border-radius: 11px;
+  background: rgb(255 255 255 / 99%);
+  box-shadow: 0 18px 40px rgb(30 42 56 / 20%);
+}
+
+.ff-agent-backend-menu > header {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px 9px;
+  border-bottom: 1px solid #e1e6ec;
+  text-align: left;
+}
+
+.ff-agent-backend-menu > header strong { color: #26364a; font-size: 10px; }
+.ff-agent-backend-menu > header small { color: #7b8998; font-size: 8px; }
+
+.ff-agent-backend-menu > button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  margin-top: 3px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #354356;
+  text-align: left;
+}
+
+.ff-agent-backend-menu > button:hover:not(:disabled),
+.ff-agent-backend-menu > button[aria-checked='true'] { background: #eef3f5; }
+.ff-agent-backend-menu > button:disabled { opacity: .48; }
+.ff-agent-backend-menu > button > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
+.ff-agent-backend-menu strong { font-size: 10px; }
+.ff-agent-backend-menu small { overflow: hidden; color: #7b8998; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.ff-agent-backend-menu i { color: #688095; font-size: 8px; font-style: normal; }
 
 .ff-chat-menu-button,
 .ff-chat-send-button {

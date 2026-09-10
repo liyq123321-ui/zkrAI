@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from app.schemas.workflow import AgentBackendName
+
 
 class ChatRequest(BaseModel):
 
@@ -12,3 +14,5 @@ class ChatRequest(BaseModel):
     agent: str = "planner"
 
     actor_id: str | None = Field(default="legacy-user", min_length=1)
+
+    agent_backend: AgentBackendName = "codex"

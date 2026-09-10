@@ -17,6 +17,7 @@ from app.domain.types import (
 
 ASYNC_COMMAND_ID_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9._~-]{0,254})$"
 _ASYNC_COMMAND_ID = re.compile(ASYNC_COMMAND_ID_PATTERN)
+AgentBackendName = Literal["codex", "deepseek", "glm", "kimi"]
 
 
 class ProjectBrief(BaseModel):
@@ -40,6 +41,7 @@ class SessionCreateRequest(BaseModel):
 
     request_id: str = Field(min_length=1)
     actor_id: str | None = Field(default=None, min_length=1)
+    agent_backend: AgentBackendName = "codex"
     brief: ProjectBrief
 
 
@@ -91,6 +93,30 @@ class SessionCommandRequest(BaseModel):
 class CommandRepairRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    actor_id: str | None = Field(default=None, min_length=1)
+
+
+class AgentBackendOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: AgentBackendName
+    label: str
+    model: str | None
+    available: bool
+    configuration_env: str | None = None
+
+
+class AgentBackendSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: AgentBackendName
+    model: str | None
+
+
+class AgentBackendUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: AgentBackendName
     actor_id: str | None = Field(default=None, min_length=1)
 
 

@@ -17,6 +17,7 @@ from app.services.command_service import CommandService
 from app.services.error_classification import classify_workflow_error
 from app.services.project_service import ProjectService
 from app.services.query_service import QueryService
+from app.services.agent_backends import AgentBackendService
 
 
 def _event(name: str, payload: dict[str, object]) -> str:
@@ -63,6 +64,7 @@ def build_router(
     session_factory: Callable[[], Session],
     agent_gateway: AgentGateway,
     actor_resolver: ActorResolver,
+    agent_backends: AgentBackendService | None = None,
 ) -> APIRouter:
     """Build the facade with the same injected workflow dependencies as ``/sessions``."""
 
@@ -93,6 +95,18 @@ def build_router(
         events: list[tuple[str, dict[str, object]]] = []
 
         if session_id is None:
+            if agent_backends is not None:
+                try:
+                    agent_backends.ensure_available(request_body.agent_backend)
+                except Exception as error:
+                    public_error = classify_workflow_error(error)
+                    raise HTTPException(
+                        status_code=public_error.status_code,
+                        detail={
+                            "code": public_error.code,
+                            "message": public_error.message,
+                        },
+                    ) from error
             creation_request_id = str(uuid4())
             brief = ProjectBrief(
                 motivation=request_body.message,
@@ -110,7 +124,10 @@ def build_router(
             try:
                 state = await projects.create_session(
                     SessionCreateRequest(
-                        request_id=creation_request_id, actor_id=actor_id, brief=brief
+                        request_id=creation_request_id,
+                        actor_id=actor_id,
+                        agent_backend=request_body.agent_backend,
+                        brief=brief,
                     ),
                     propagate_agent_errors=True,
                 )

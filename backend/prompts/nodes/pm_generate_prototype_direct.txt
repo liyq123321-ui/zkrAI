@@ -1,0 +1,17 @@
+Create one complete interactive HTML prototype directly from the frozen Project Spec.
+
+Return a single, complete HTML document through the structured JSON contract.
+The document must:
+
+- represent only behavior supported by the supplied PRD;
+- include usable navigation and local form-interaction simulation;
+- use inline CSS with a Tailwind-like design system and inline JavaScript;
+- contain no JSX, imports, build step, server dependency, external URL, remote
+  image, font, stylesheet, script, iframe, object, embed, or form action;
+- keep all state in the page and never perform network requests;
+- be keyboard usable and responsive;
+- visibly identify itself as a non-production interactive prototype.
+
+Never modify or rewrite the PRD. The PRD is immutable evidence and the HTML is
+a separate derived artifact. Do not write files or run commands; return the
+HTML only in the `html` field, with a concise title and generation summary.

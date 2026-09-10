@@ -1,6 +1,9 @@
 import { apiClient } from './client';
 import { appConfig } from './config';
 import type {
+  AgentBackendName,
+  AgentBackendOptionDto,
+  AgentBackendSelectionDto,
   AgentRuntimeEventDto,
   AgentRuntimeDto,
   AgentSpecDto,
@@ -36,14 +39,36 @@ export function commandTimeoutMs(action: CommandAction): number {
   return STANDARD_COMMAND_TIMEOUT_MS;
 }
 
-export function createSession(requestId: string, brief: ProjectBriefDto, signal?: AbortSignal) {
+export function createSession(
+  requestId: string,
+  brief: ProjectBriefDto,
+  signal?: AbortSignal,
+  agentBackend: AgentBackendName = 'codex',
+) {
   return apiClient.request<SessionStateDto>('/sessions', {
     method: 'POST',
-    body: { request_id: requestId, brief },
+    body: { request_id: requestId, agent_backend: agentBackend, brief },
     signal,
     timeoutMs: SINGLE_AGENT_COMMAND_TIMEOUT_MS,
   });
 }
+
+export const listAgentBackends = (signal?: AbortSignal) =>
+  apiClient.request<AgentBackendOptionDto[]>('/sessions/agent-backends', { signal });
+
+export const getAgentBackend = (sessionId: string, signal?: AbortSignal) =>
+  apiClient.request<AgentBackendSelectionDto>(`/sessions/${sessionId}/agent-backend`, { signal });
+
+export const selectAgentBackend = (
+  sessionId: string,
+  provider: AgentBackendName,
+  actorId: string,
+  signal?: AbortSignal,
+) => apiClient.request<AgentBackendSelectionDto>(`/sessions/${sessionId}/agent-backend`, {
+  method: 'PUT',
+  body: { provider, actor_id: actorId },
+  signal,
+});
 
 export const getLifecycleRoutes = (sessionId: string, signal?: AbortSignal) =>
   apiClient.request<LifecycleRouteDecisionDto | null>(`/sessions/${sessionId}/sdlc/routes`, { signal });

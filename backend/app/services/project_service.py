@@ -443,6 +443,7 @@ class ProjectService:
                 id=pm_session_id,
                 project_id=project_id,
                 role="PM",
+                provider=request.agent_backend,
                 purpose="Analyze Project Brief clarity before specification",
                 metadata_json={},
             )

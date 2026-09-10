@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Bot,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
   FileText,
   FolderPlus,
@@ -24,6 +25,8 @@ import {
 } from 'lucide-react';
 import { apiClient } from './client';
 import type {
+  AgentBackendName,
+  AgentBackendOptionDto,
   CommandAction,
   AgentRuntimeDto,
   AgentRuntimeEventDto,
@@ -56,13 +59,16 @@ import {
   autoRepairCommandJob,
   executeCommand,
   getLifecycleRoutes,
+  getAgentBackend,
   getCommandJob,
   getSessionState,
   isCommandJobAccepted,
   listAgentRuntime,
   listAgentRuntimeEvents,
+  listAgentBackends,
   recommendLifecycleRoutes,
   selectLifecycleRoute,
+  selectAgentBackend,
 } from './sessions';
 import { streamChat } from './chat';
 import { observeCommandJob } from './commandJobs';
@@ -112,6 +118,15 @@ type ChatMessage = {
 };
 
 const NEW_CHAT_KEY = '__new__';
+const DEFAULT_AGENT_BACKENDS: AgentBackendOptionDto[] = [
+  {
+    provider: 'codex',
+    label: 'Codex CLI',
+    model: null,
+    available: true,
+    configuration_env: null,
+  },
+];
 
 const runtimeOperationLabels: Record<string, string> = {
   recommend_lifecycle: '评估 SDLC 顶层路线',
@@ -262,6 +277,10 @@ export function ApiWorkspace() {
   const [chatTool, setChatTool] = useState<ChatTool>(null);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState('');
+  const [agentBackends, setAgentBackends] = useState(DEFAULT_AGENT_BACKENDS);
+  const [agentBackend, setAgentBackend] = useState<AgentBackendName>('codex');
+  const [agentBackendMenuOpen, setAgentBackendMenuOpen] = useState(false);
+  const [switchingAgentBackend, setSwitchingAgentBackend] = useState(false);
   const [chatMessages, setChatMessages] = useState<Record<string, ChatMessage[]>>({});
   const [agentRuntime, setAgentRuntime] = useState<AgentRuntimeDto[]>([]);
   const [topLevelRuntimeEvents, setTopLevelRuntimeEvents] = useState<AgentRuntimeEventDto[]>([]);
@@ -305,8 +324,14 @@ export function ApiWorkspace() {
 
   useEffect(() => {
     const controller = new AbortController();
-    apiClient.request<HealthDto>('/healthz', { signal: controller.signal })
-      .then(() => setHealth('ok'))
+    Promise.all([
+      apiClient.request<HealthDto>('/healthz', { signal: controller.signal }),
+      listAgentBackends(controller.signal),
+    ])
+      .then(([, options]) => {
+        setHealth('ok');
+        setAgentBackends(options.length > 0 ? options : DEFAULT_AGENT_BACKENDS);
+      })
       .catch((reason) => {
         if ((reason as ApiError).code !== 'REQUEST_ABORTED') {
           setHealth('error');
@@ -323,6 +348,19 @@ export function ApiWorkspace() {
     commandObservations.current.forEach((observation) => observation.close());
     commandObservations.current.clear();
   }, []);
+
+  useEffect(() => {
+    if (!activeSessionId) return undefined;
+    const controller = new AbortController();
+    getAgentBackend(activeSessionId, controller.signal)
+      .then((selection) => setAgentBackend(selection.provider))
+      .catch((reason) => {
+        if ((reason as ApiError).code !== 'REQUEST_ABORTED') {
+          setError(errorText(reason));
+        }
+      });
+    return () => controller.abort();
+  }, [activeSessionId]);
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -391,6 +429,9 @@ export function ApiWorkspace() {
     };
   }, [activeSessionId, activeTab, runtimeAgentIds]);
   const visibleChatMessages = chatMessages[activeSessionId ?? NEW_CHAT_KEY] ?? [];
+  const selectedAgentBackend = agentBackends.find(
+    (option) => option.provider === agentBackend,
+  ) ?? DEFAULT_AGENT_BACKENDS[0];
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -612,7 +653,9 @@ export function ApiWorkspace() {
     };
     setWorkflowProgress('正在读取项目简报并判断是否需要澄清…');
     try {
-      const created = await createSession(crypto.randomUUID(), brief);
+      const created = await createSession(
+        crypto.randomUUID(), brief, undefined, agentBackend,
+      );
       appendChatMessage(
         created.session_id,
         'user',
@@ -1173,7 +1216,7 @@ export function ApiWorkspace() {
               : 'Agent 未能完成这次分析。';
             appendChatMessage(createdSessionId, 'agent', '本次分析未完成', errorMessage);
           }
-        });
+        }, { agentBackend });
         const sessionId = createdSessionId ?? responseSessionId;
         if (sessionId) {
           selectSession(sessionId);
@@ -1237,7 +1280,38 @@ export function ApiWorkspace() {
     appendChatMessage(state?.session_id ?? null, 'user', message);
     setChatDraft('');
     setChatMenuOpen(false);
+    setAgentBackendMenuOpen(false);
     await runGlobalInstruction(message);
+  }
+
+  async function chooseAgentBackend(provider: AgentBackendName) {
+    const option = agentBackends.find((item) => item.provider === provider);
+    if (!option?.available || switchingAgentBackend || busy) return;
+    setAgentBackendMenuOpen(false);
+    if (!state) {
+      setAgentBackend(provider);
+      return;
+    }
+    if (provider === agentBackend) return;
+    setSwitchingAgentBackend(true);
+    setError(null);
+    try {
+      const selection = await selectAgentBackend(
+        state.session_id, provider, ownerId,
+      );
+      setAgentBackend(selection.provider);
+      appendChatMessage(
+        state.session_id,
+        'agent',
+        `模型后端已切换为 ${option.label}`,
+        selection.model ? `后续 Agent 调用使用 ${selection.model}` : undefined,
+      );
+      await refreshResources(state.session_id);
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setSwitchingAgentBackend(false);
+    }
   }
 
   const refreshCurrentResources = useCallback(async () => {
@@ -1261,6 +1335,7 @@ export function ApiWorkspace() {
     setRestoreReason('');
     setChatTool(null);
     setChatMenuOpen(false);
+    setAgentBackendMenuOpen(false);
     setError(null);
   }
 
@@ -1591,6 +1666,50 @@ export function ApiWorkspace() {
                 placeholder={state ? '输入全局指令、澄清答案或页面命令…' : '直接描述新项目，或从左侧菜单打开完整表单…'}
                 rows={1}
               />
+              <div className="ff-agent-backend-picker">
+                <button
+                  type="button"
+                  className="ff-agent-backend-trigger"
+                  disabled={busy || switchingAgentBackend}
+                  aria-label="切换 Agent 模型后端"
+                  aria-expanded={agentBackendMenuOpen}
+                  onClick={() => {
+                    setChatMenuOpen(false);
+                    setAgentBackendMenuOpen((open) => !open);
+                  }}
+                >
+                  {switchingAgentBackend
+                    ? <Loader2 className="ff-spin" aria-hidden="true" />
+                    : <span className={`ff-provider-mark is-${agentBackend}`}>{selectedAgentBackend.label.slice(0, 1)}</span>}
+                  <span>{selectedAgentBackend.label}</span>
+                  <ChevronDown aria-hidden="true" />
+                </button>
+                {agentBackendMenuOpen && (
+                  <div className="ff-agent-backend-menu" role="menu">
+                    <header>
+                      <strong>Agent 模型后端</strong>
+                      <small>当前项目后续调用统一使用所选来源</small>
+                    </header>
+                    {agentBackends.map((option) => (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={option.provider === agentBackend}
+                        key={option.provider}
+                        disabled={!option.available || busy || switchingAgentBackend}
+                        onClick={() => void chooseAgentBackend(option.provider)}
+                      >
+                        <span className={`ff-provider-mark is-${option.provider}`}>{option.label.slice(0, 1)}</span>
+                        <span>
+                          <strong>{option.label}</strong>
+                          <small>{option.available ? (option.model || '使用本地默认模型') : `未配置 ${option.configuration_env}`}</small>
+                        </span>
+                        <i>{option.provider === agentBackend ? '当前' : option.available ? '可用' : '未配置'}</i>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button type="submit" className="ff-chat-send-button" disabled={busy || !chatDraft.trim() || health !== 'ok'} aria-label="发送消息">
                 {busy ? <Loader2 className="ff-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
               </button>

@@ -12,7 +12,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.agents.codex import CodexAgentGateway
+from app.agents.compatible import OpenAICompatibleStructuredRunner
 from app.agents.gateway import AgentGateway
+from app.agents.routing import RoutingAgentGateway
 from app.api.chat import build_router as build_chat_router
 from app.api.prd_review import build_router as build_prd_review_router
 from app.api.sessions import build_router as build_sessions_router
@@ -27,6 +29,8 @@ from app.services.gitea import GiteaClient
 from app.services.pm_agent import ReviewPublishCoordinator
 from app.services.prd_review import PrdReviewService
 from app.services.prd_prototype import PrdPrototypeService
+from app.services.agent_backends import AgentBackendService
+from app.services.agent_runtime_events import AgentRuntimeEventStore
 
 
 def create_app(
@@ -41,9 +45,50 @@ def create_app(
     settings = settings or Settings.from_env()
     uses_runtime_database = session_factory is None
     session_factory = session_factory or SessionLocal
-    agent_gateway = agent_gateway or CodexAgentGateway(
-        settings=settings, session_factory=session_factory
-    )
+    agent_backends = AgentBackendService(session_factory, settings)
+    if agent_gateway is None:
+        routed_gateways = {
+            "codex": CodexAgentGateway(
+                settings=settings, session_factory=session_factory
+            )
+        }
+        compatible = (
+            (
+                "deepseek",
+                settings.deepseek_api_key,
+                settings.deepseek_base_url,
+                settings.deepseek_model,
+            ),
+            (
+                "glm",
+                settings.zhipu_api_key,
+                settings.zhipu_base_url,
+                settings.zhipu_model,
+            ),
+            (
+                "kimi",
+                settings.moonshot_api_key,
+                settings.moonshot_base_url,
+                settings.moonshot_model,
+            ),
+        )
+        for provider, api_key, base_url, model in compatible:
+            if not api_key:
+                continue
+            event_store = AgentRuntimeEventStore(session_factory)
+            routed_gateways[provider] = CodexAgentGateway(
+                runner=OpenAICompatibleStructuredRunner(
+                    provider=provider,
+                    api_key=api_key,
+                    base_url=base_url,
+                    model=model,
+                    timeout_seconds=settings.agent_api_timeout_seconds,
+                    runtime_event_store=event_store,
+                ),
+                settings=settings,
+                session_factory=session_factory,
+            )
+        agent_gateway = RoutingAgentGateway(routed_gateways, agent_backends)
     if auto_bind_prd_review is None:
         auto_bind_prd_review = uses_runtime_database
     owns_gitea_client = gitea_client is None
@@ -118,10 +163,13 @@ def create_app(
             review_service if auto_bind_prd_review else None,
             command_jobs,
             prototype_service,
+            agent_backends,
         )
     )
     application.include_router(
-        build_chat_router(session_factory, agent_gateway, actor_resolver)
+        build_chat_router(
+            session_factory, agent_gateway, actor_resolver, agent_backends
+        )
     )
     application.include_router(
         build_prd_review_router(review_service, publish_coordinator, actor_resolver)

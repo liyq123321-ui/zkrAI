@@ -13,6 +13,9 @@ from app.domain.types import CommandAction, ProjectPhase
 from app.domain.sdlc import LifecycleRouteDecision
 from app.identity import ActorResolver
 from app.schemas.workflow import (
+    AgentBackendOption,
+    AgentBackendSelection,
+    AgentBackendUpdateRequest,
     CommandRepairRequest,
     CommandJobAccepted,
     CommandJobRead,
@@ -41,6 +44,7 @@ from app.services.spec_service import SpecService
 from app.services.prd_review import PrdReviewService
 from app.services.prd_prototype import PrdPrototypeService
 from app.services.lifecycle_decision import LifecycleDecisionService
+from app.services.agent_backends import AgentBackendService
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +57,7 @@ def build_router(
     prd_review_service: PrdReviewService | None = None,
     command_jobs: CommandJobCoordinator | None = None,
     prototype_service: PrdPrototypeService | None = None,
+    agent_backends: AgentBackendService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/sessions", tags=["sessions"])
     projects = ProjectService(session_factory, agent_gateway)
@@ -87,6 +92,19 @@ def build_router(
         except Exception as error:
             raise http_error(error) from error
 
+    @router.get("/agent-backends", response_model=list[AgentBackendOption])
+    def list_agent_backends() -> list[AgentBackendOption]:
+        if agent_backends is None:
+            return [
+                AgentBackendOption(
+                    provider="codex",
+                    label="Codex CLI",
+                    model=None,
+                    available=True,
+                )
+            ]
+        return agent_backends.catalogue()
+
     @router.post("", response_model=SessionState, status_code=status.HTTP_201_CREATED)
     async def create_session(
         request_body: SessionCreateRequest, request: Request
@@ -94,6 +112,10 @@ def build_router(
         actor_id = actor_resolver.resolve(request, request_body.actor_id)
         request_body = request_body.model_copy(update={"actor_id": actor_id})
         try:
+            if agent_backends is not None:
+                agent_backends.ensure_available(request_body.agent_backend)
+            elif request_body.agent_backend != "codex":
+                raise ValueError("the requested Agent backend is not configured")
             state = await projects.create_session(
                 request_body, propagate_agent_errors=True
             )
@@ -240,6 +262,37 @@ def build_router(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @router.get(
+        "/{session_id}/agent-backend",
+        response_model=AgentBackendSelection,
+    )
+    def get_agent_backend(session_id: str) -> AgentBackendSelection:
+        try:
+            if agent_backends is None:
+                return AgentBackendSelection(provider="codex", model=None)
+            return agent_backends.read(session_id)
+        except Exception as error:
+            raise http_error(error) from error
+
+    @router.put(
+        "/{session_id}/agent-backend",
+        response_model=AgentBackendSelection,
+    )
+    def select_agent_backend(
+        session_id: str,
+        request_body: AgentBackendUpdateRequest,
+        request: Request,
+    ) -> AgentBackendSelection:
+        try:
+            if agent_backends is None:
+                raise RuntimeError("Agent backend selection is not configured")
+            actor_id = actor_resolver.resolve(request, request_body.actor_id)
+            return agent_backends.select(
+                session_id, request_body.provider, actor_id
+            )
+        except Exception as error:
+            raise http_error(error) from error
 
     @router.get("/{session_id}/state", response_model=SessionState)
     def get_state(session_id: str) -> SessionState:

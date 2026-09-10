@@ -36,6 +36,25 @@ python -m venv .venv
 .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8088
 ```
 
+### Agent 模型后端
+
+输入框中的模型菜单可以按项目选择 `Codex CLI`、`DeepSeek`、`GLM` 或
+`Kimi`。选择会写入项目 AgentSession，后续澄清、PRD、审核、SDLC 拆分与修复
+调用均沿用该来源。远程接口使用 OpenAI 兼容的 Chat Completions 协议，API Key
+只从 `backend/.env` 读取；未配置 Key 的来源会在前端显示为不可用。
+
+```dotenv
+DEEPSEEK_API_KEY=
+DEEPSEEK_MODEL=deepseek-v4-pro
+ZHIPU_API_KEY=
+ZHIPU_MODEL=glm-5.2
+MOONSHOT_API_KEY=
+MOONSHOT_MODEL=kimi-k3
+```
+
+对应 Base URL 和超时时间可通过 `DEEPSEEK_BASE_URL`、`ZHIPU_BASE_URL`、
+`MOONSHOT_BASE_URL`、`AGENT_API_TIMEOUT_SECONDS` 覆盖。修改配置后需要重启后端。
+
 如已激活虚拟环境，启动命令等价于：
 
 ```bash
