@@ -1,5 +1,6 @@
 INFO:     Loading environment from '.env'
-INFO:     Started server process [43548]
+INFO:     Started server process [36268]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8088 (Press CTRL+C to quit)
+Agent output validation failed: contract=ProjectSpecPayload attempt=1 codes=['UNKNOWN_SOURCE_REF']

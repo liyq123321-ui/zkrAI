@@ -13,6 +13,7 @@ from app.domain.types import CommandAction, ProjectPhase
 from app.domain.sdlc import LifecycleRouteDecision
 from app.identity import ActorResolver
 from app.schemas.workflow import (
+    CommandRepairRequest,
     CommandJobAccepted,
     CommandJobRead,
     CommandResult,
@@ -279,6 +280,34 @@ def build_router(
     def list_agent_runtime(session_id: str) -> list[AgentRuntimeRead]:
         try:
             return queries.agent_runtime(session_id)
+        except Exception as error:
+            raise http_error(error) from error
+
+    @router.post(
+        "/{session_id}/commands/{command_id}/auto-repair",
+        response_model=CommandJobAccepted,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def auto_repair_command_job(
+        session_id: str,
+        command_id: str,
+        request_body: CommandRepairRequest,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ) -> CommandJobAccepted:
+        try:
+            if command_jobs is None:
+                raise RuntimeError("command jobs are not configured")
+            actor_id = actor_resolver.resolve(request, request_body.actor_id)
+            accepted, should_schedule = command_jobs.submit_auto_repair(
+                session_id, command_id, actor_id
+            )
+            if should_schedule:
+                background_tasks.add_task(
+                    command_jobs.run,
+                    command_jobs.job_id(session_id, accepted.command_id),
+                )
+            return accepted
         except Exception as error:
             raise http_error(error) from error
 

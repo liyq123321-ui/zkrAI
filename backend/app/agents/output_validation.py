@@ -227,8 +227,12 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
                 require_lifecycle="sdlc_rules" in payload,
             )
         except BreakdownValidationError as error:
-            # A genuinely unresolved decision still fails through the service gate.
-            if error.code in {"BLOCKING_OPEN_QUESTION", "UNACCEPTED_RISK", "SDLC_NEEDS_CLARIFICATION"}:
+            # Decomposition runs only after an approved Spec and a confirmed
+            # lifecycle route exist.  A task plan must not create a new
+            # blocking decision or leave a newly introduced risk unaccepted;
+            # send those outputs through the bounded Agent repair loop instead
+            # of letting them fail minutes later at the persistence gate.
+            if error.code == "SDLC_NEEDS_CLARIFICATION":
                 return
             raise OutputConsistencyError([{
                 "code": error.code, "path": error.local_key, "message": str(error),

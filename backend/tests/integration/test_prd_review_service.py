@@ -357,6 +357,37 @@ async def test_binding_rejects_wrong_gitea_path_and_corrupt_local_projection(
 
 
 @pytest.mark.asyncio
+async def test_existing_file_is_bound_to_refreshed_branch_head(
+    session_factory, db_session
+):
+    """A concurrent publisher must not leave a new file bound to a stale head."""
+    _, _, root, _ = _review_project(db_session)
+    gitea = FakeGitea()
+    path = "docs/prd/root-prd/v1.md"
+    content = "# PRD\n\nA first version.\n"
+    gitea.files[(path, "prd-review/root-prd")] = GiteaFile(
+        path, content, "existing-blob"
+    )
+    gitea.files[(path, "current-commit")] = GiteaFile(
+        path, content, "existing-blob"
+    )
+    heads = iter(("stale-commit", "current-commit"))
+
+    async def moving_head(branch: str) -> GiteaCommit:
+        gitea.calls.append(("ensure_branch", branch))
+        return GiteaCommit(next(heads))
+
+    gitea.ensure_branch = moving_head
+
+    binding = await PrdReviewService(session_factory, gitea).ensure_current_binding(
+        root.id
+    )
+
+    assert binding.commit_sha == "current-commit"
+    assert ("get_file", path, "current-commit") in gitea.calls
+
+
+@pytest.mark.asyncio
 async def test_binding_normalizes_canonically_equivalent_unicode_before_hashing(
     session_factory, db_session
 ):
@@ -955,4 +986,3 @@ def test_public_reply_contract_still_rejects_agent_authorship():
         CommentReplyRequest(
             actor_id="owner-1", text="Forged agent reply", author_type="agent"
         )
-

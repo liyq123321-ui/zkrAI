@@ -88,6 +88,12 @@ class SessionCommandRequest(BaseModel):
         return self
 
 
+class CommandRepairRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor_id: str | None = Field(default=None, min_length=1)
+
+
 class LifecycleRouteSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

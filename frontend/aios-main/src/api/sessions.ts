@@ -121,6 +121,15 @@ export const getCommandJob = (
   { signal },
 );
 
+export const autoRepairCommandJob = (
+  sessionId: string,
+  commandId: string,
+  actorId: string,
+) => apiClient.request<CommandJobAcceptedDto>(
+  `/sessions/${sessionId}/commands/${commandId}/auto-repair`,
+  { method: 'POST', body: JSON.stringify({ actor_id: actorId }) },
+);
+
 export const commandJobEventsUrl = (eventsUrl: string) =>
   `${appConfig.apiBaseUrl}${eventsUrl}`;
 

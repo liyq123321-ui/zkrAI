@@ -534,6 +534,32 @@ async def test_decomposition_does_not_guess_when_source_ref_typo_is_ambiguous(
 
 
 @pytest.mark.asyncio
+async def test_decomposition_repairs_new_blocking_questions_before_service_gate(
+    tmp_path, monkeypatch, valid_spec, valid_breakdown
+):
+    from app.domain.types import OpenQuestion
+
+    broken = valid_breakdown.model_copy(deep=True)
+    broken.agent_specs[0].open_questions = [OpenQuestion(
+        question="What test coverage threshold should be used?",
+        blocking=True,
+    )]
+    gateway, prompts = gateway_with_outputs(
+        tmp_path, monkeypatch, [broken, valid_breakdown]
+    )
+
+    result = await gateway.decompose_spec({
+        "approved_spec": valid_spec.model_dump(mode="json"),
+        "input_refs": valid_spec.source_refs,
+        "decomposition_stage": "base",
+    })
+
+    validate_breakdown(result, valid_spec, require_implementation_plan=False)
+    assert len(prompts) == 2
+    assert "BLOCKING_OPEN_QUESTION" in prompts[1]
+
+
+@pytest.mark.asyncio
 async def test_schema_and_consistency_repairs_share_bounded_attempt_budget(
     tmp_path, monkeypatch, valid_spec
 ):

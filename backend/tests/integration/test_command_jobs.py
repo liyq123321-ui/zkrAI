@@ -11,7 +11,7 @@ from app.database.database import (
     init_database,
     make_session_factory,
 )
-from app.database.models import CommandJob, Project
+from app.database.models import AuditEvent, CommandJob, Project
 from app.agents.progress import report_agent_progress
 from app.domain.types import CommandAction
 from app.schemas.workflow import CommandResult, SessionCommandRequest, SessionState
@@ -151,6 +151,43 @@ def test_duplicate_submission_is_idempotent_and_conflicting_input_is_rejected(se
     changed = request().model_copy(update={"expected_state_version": 8})
     with pytest.raises(CommandConflict):
         coordinator.submit("session-1", changed)
+
+
+def test_auto_repair_creates_fresh_job_with_bounded_diagnostics(session_factory):
+    seed_project(session_factory)
+
+    async def execute(session_id, command):
+        raise AssertionError("executor is not called by submit")
+
+    coordinator = CommandJobCoordinator(session_factory, execute)
+    coordinator.submit("session-1", request("failed-decomposition"))
+    with session_factory() as db:
+        source = db.query(CommandJob).filter_by(
+            command_id="failed-decomposition"
+        ).one()
+        source.status = "failed"
+        source.error_code = "BLOCKING_OPEN_QUESTION"
+        source.error_message = "The plan introduced a new blocking question."
+        db.commit()
+
+    accepted, should_schedule = coordinator.submit_auto_repair(
+        "session-1", "failed-decomposition", "owner-1"
+    )
+
+    assert should_schedule is True
+    assert accepted.command_id != "failed-decomposition"
+    with session_factory() as db:
+        repair = db.query(CommandJob).filter_by(
+            command_id=accepted.command_id
+        ).one()
+        context = repair.request_payload["payload"]["auto_repair"]
+        assert context["source_command_id"] == "failed-decomposition"
+        assert context["error_code"] == "BLOCKING_OPEN_QUESTION"
+        assert context["recipe"]["id"] == "decomposition-generated-blocker"
+        audit = db.query(AuditEvent).filter_by(
+            event_type="AUTO_REPAIR_REQUESTED"
+        ).one()
+        assert audit.payload["repair_command_id"] == accepted.command_id
 
 
 def test_different_command_id_reuses_the_sessions_active_decomposition(session_factory):

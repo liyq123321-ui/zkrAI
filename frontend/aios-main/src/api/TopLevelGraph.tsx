@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import { Activity, AlertCircle, Bot, CheckCircle2, Clock3, Cpu, GitBranch, Layers3, UserRound, Zap } from 'lucide-react';
+import { Activity, AlertCircle, Bot, CheckCircle2, Clock3, Cpu, GitBranch, Layers3, Maximize2, Minimize2, UserRound, Zap } from 'lucide-react';
 import type { AgentRuntimeDto, AgentRuntimeEventDto, AgentSpecDto, LifecycleRouteDecisionDto, WorkItemDto } from './dto';
 import { agentOperationLabel } from './AgentRuntimePanel';
+import { ExpandedSdlcGraph } from './ExpandedSdlcGraph';
 import { MilestoneTaskMonitor } from './MilestoneTaskMonitor';
 import { WorkItemDialog } from './WorkItemDialog';
 import { workItemLane } from './workflowUi';
@@ -300,6 +301,7 @@ export function TopLevelGraph({
   onOpenWorkItem: (workItemId: string) => void;
 }) {
   const [selectedPhaseKey, setSelectedPhaseKey] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const plan = buildTopLevelPlan(agentSpecs, workItems, decision);
   if (!plan) {
     return (
@@ -323,6 +325,11 @@ export function TopLevelGraph({
   const taskCount = workItems.filter((item) => item.kind === 'TASK').length;
   const completedTasks = workItems.filter((item) => item.kind === 'TASK' && workItemLane(item.status) === 'done').length;
   const callCount = runtimes.reduce((total, runtime) => total + runtime.call_count, 0);
+  const canExpand = plan.phases.length > 0 && plan.phases.every((phase) => (
+    Boolean(phase.milestone)
+    && phase.tasks.length > 0
+    && phase.tasks.every((task) => assignee(task) !== '待分配 Agent')
+  ));
   const selectedPhase = plan.phases.find((phase) => `${phase.iteration}:${phase.stage_id}` === selectedPhaseKey) ?? null;
   const selectedMilestone: WorkItemDto | null = selectedPhase ? selectedPhase.milestone ?? {
     id: selectedPhase.milestone_key || selectedPhase.stage_id,
@@ -345,7 +352,7 @@ export function TopLevelGraph({
   } : null;
   return (
     <>
-    <div className="ff-top-level-console">
+    <div className={`ff-top-level-console${expanded ? ' is-expanded' : ''}`}>
       <aside className="ff-top-level-monitor" aria-label="项目监控统计">
         <header><span><Activity aria-hidden="true" /></span><div><small>PROJECT TELEMETRY</small><strong>全局监控</strong></div><i /></header>
         <section className="ff-top-level-token-stat ff-top-level-metric" tabIndex={0}>
@@ -423,9 +430,22 @@ export function TopLevelGraph({
           <h2>{plan.modelName}</h2>
           <p>{projectTitle} · {plan.selectionReason || '依据已批准 PRD 的选择清单确定'}</p>
         </div>
-        <div className="ff-top-level-version">RULESET v{plan.rulesVersion}<small>{plan.rulesHash.slice(0, 10)}</small></div>
+        <div className="ff-top-level-summary-actions">
+          <div className="ff-top-level-version">RULESET v{plan.rulesVersion}<small>{plan.rulesHash.slice(0, 10)}</small></div>
+          <button
+            type="button"
+            className="ff-top-level-expand-button"
+            disabled={!canExpand}
+            aria-pressed={expanded}
+            title={canExpand ? (expanded ? '收起完整任务关系图' : '展开完整任务关系图') : '完整分配所有阶段子任务后可展开'}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? <Minimize2 aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}
+            {expanded ? '收起' : '展开'}
+          </button>
+        </div>
       </header>
-      <div className="ff-top-level-flow">
+      {expanded ? <ExpandedSdlcGraph phases={plan.phases} onOpenWorkItem={onOpenWorkItem} /> : <div className="ff-top-level-flow">
         {plan.phases.map((phase, index) => {
           const phaseKey = `${phase.iteration}:${phase.stage_id}`;
           const body = (
@@ -471,7 +491,7 @@ export function TopLevelGraph({
             </div>
           );
         })}
-      </div>
+      </div>}
       </section>
     </div>
     {selectedPhase && selectedMilestone && (

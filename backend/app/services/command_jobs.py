@@ -12,7 +12,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from app.database.models import CommandJob, Project
+from app.database.models import AgentCall, AuditEvent, CommandAttempt, CommandJob, Project
 from app.agents.progress import bind_agent_progress
 from app.domain.types import CommandAction
 from app.schemas.workflow import (
@@ -28,6 +28,53 @@ from app.services.error_classification import classify_workflow_error
 
 CommandExecutor = Callable[[str, SessionCommandRequest], Awaitable[CommandResult]]
 TERMINAL = frozenset({"succeeded", "failed"})
+AUTO_REPAIR_RECIPES: dict[str, dict[str, object]] = {
+    "BLOCKING_OPEN_QUESTION": {
+        "id": "decomposition-generated-blocker",
+        "summary": "Remove planning-time blockers that were not present in the approved PRD.",
+        "steps": [
+            "Compare every blocking question with the approved PRD.",
+            "Use a conservative testable default for implementation details within approved scope.",
+            "Keep residual uncertainty non-blocking with a risk owner and accepted consequence.",
+        ],
+    },
+    "INVALID_AGENT_RESULT": {
+        "id": "agent-contract-repair",
+        "summary": "Regenerate the failed Agent result from its validation diagnostics.",
+        "steps": [
+            "Preserve approved scope and the selected SDLC route.",
+            "Repair all reported schema and consistency findings together.",
+            "Run every server validation gate before persistence.",
+        ],
+    },
+    "SEMANTIC_REVIEW_BLOCKED": {
+        "id": "semantic-plan-repair",
+        "summary": "Revise the task breakdown from the independent reviewer findings.",
+        "steps": [
+            "Retain valid milestones, task keys and dependencies.",
+            "Correct every connected contract inconsistency.",
+            "Submit the complete plan to independent review again.",
+        ],
+    },
+    "AGENT_UNAVAILABLE": {
+        "id": "agent-call-recovery",
+        "summary": "Retry from durable Agent checkpoints without duplicating materialized work.",
+        "steps": [
+            "Inspect durable AgentCall status and failure evidence.",
+            "Reuse valid completed checkpoints and regenerate only failed work.",
+            "Revalidate current project state before materialization.",
+        ],
+    },
+    "PROCESS_INTERRUPTED": {
+        "id": "interrupted-command-recovery",
+        "summary": "Resume an interrupted command from durable checkpoints.",
+        "steps": [
+            "Inspect the last persisted preparation and Agent calls.",
+            "Resume only work that has no durable successful result.",
+            "Recheck state version and all write guards.",
+        ],
+    },
+}
 _SQLITE_LOCK_RETRY_SECONDS = 1.0
 _SQLITE_LOCK_INITIAL_DELAY = 0.005
 _SQLITE_LOCK_MAX_DELAY = 0.05
@@ -96,6 +143,80 @@ class CommandJobCoordinator:
                     raise
                 sleep(min(delay, remaining))
                 delay = min(delay * 2, _SQLITE_LOCK_MAX_DELAY)
+
+    def submit_auto_repair(
+        self, session_id: str, command_id: str, actor_id: str
+    ) -> tuple[CommandJobAccepted, bool]:
+        """Create a fresh, auditable retry enriched with bounded failure evidence."""
+
+        with self._session_factory() as db:
+            source = db.query(CommandJob).filter_by(
+                session_id=session_id, command_id=command_id
+            ).one_or_none()
+            if source is None:
+                raise KeyError("command job not found")
+            if source.status != "failed" or not source.error_code:
+                raise ValueError("only failed command jobs can be automatically repaired")
+            original = SessionCommandRequest.model_validate(source.request_payload)
+            if original.actor_id != actor_id:
+                raise CommandConflict("automatic repair actor does not own the failed command")
+            project = db.get(Project, source.project_id)
+            if project is None or project.session_id != session_id:
+                raise KeyError("project not found")
+            attempt = db.query(CommandAttempt).filter_by(
+                session_id=session_id, command_id=command_id
+            ).one_or_none()
+            call_ids = list(attempt.agent_call_ids or []) if attempt is not None else []
+            calls = [db.get(AgentCall, call_id) for call_id in call_ids[-8:]]
+            recipe = AUTO_REPAIR_RECIPES.get(source.error_code, {
+                "id": "validated-command-retry",
+                "summary": "Retry the failed workflow command with its durable diagnostics.",
+                "steps": [
+                    "Preserve approved scope and current project state.",
+                    "Use prior failure evidence to correct the next Agent result.",
+                    "Run normal validation and materialization guards.",
+                ],
+            })
+            evidence = [{
+                "agent_call_id": call.id,
+                "operation": call.operation,
+                "status": call.status,
+                "error": (call.error or "")[:1000] or None,
+            } for call in calls if call is not None]
+            repair_context = {
+                "source_command_id": command_id,
+                "error_code": source.error_code,
+                "error_message": (source.error_message or "")[:1000],
+                "attempt_error": ((attempt.error or "")[:2000] if attempt is not None else None),
+                "project_phase": project.phase,
+                "project_state_version": project.state_version,
+                "recipe": recipe,
+                "agent_call_evidence": evidence,
+            }
+            repair_request = original.model_copy(update={
+                "command_id": _id(),
+                "expected_state_version": project.state_version,
+                "payload": {**dict(original.payload), "auto_repair": repair_context},
+            })
+            source_project_id = source.project_id
+            source_error_code = source.error_code
+
+        accepted, should_schedule = self.submit(session_id, repair_request)
+        if accepted.command_id != repair_request.command_id:
+            raise CommandConflict("another decomposition command is already active")
+        with self._session_factory() as db:
+            db.add(AuditEvent(
+                id=_id(), project_id=source_project_id, session_id=session_id,
+                event_type="AUTO_REPAIR_REQUESTED", actor_id=actor_id,
+                payload={
+                    "source_command_id": command_id,
+                    "repair_command_id": accepted.command_id,
+                    "error_code": source_error_code,
+                    "recipe_id": recipe["id"],
+                },
+            ))
+            db.commit()
+        return accepted, should_schedule
 
     def _submit_once(
         self, session_id: str, request: SessionCommandRequest, digest: str
@@ -218,6 +339,11 @@ class CommandJobCoordinator:
 
         try:
             with bind_agent_progress(report_progress):
+                if request.payload.get("auto_repair"):
+                    report_progress(
+                        "auto_repair",
+                        "自动修复 Agent 正在分析失败上下文并按匹配策略重建任务规划。",
+                    )
                 result = await self._execute(session_id, request)
         except Exception as error:
             public = classify_workflow_error(error)

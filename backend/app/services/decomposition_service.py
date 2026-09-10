@@ -479,7 +479,14 @@ class DecompositionService:
             self._record_failures(prepared.project_id, prepared.agent_call_ids, error)
             raise
 
-    async def prepare(self, project_id: str, *, command_id: str | None = None, input_hash: str | None = None) -> PreparedDecomposition:
+    async def prepare(
+        self,
+        project_id: str,
+        *,
+        command_id: str | None = None,
+        input_hash: str | None = None,
+        repair_context: Mapping[str, object] | None = None,
+    ) -> PreparedDecomposition:
         """Revise against the approved snapshot, then independently review each result."""
         with self._session_factory() as db:
             project = self._project(db, project_id)
@@ -536,6 +543,10 @@ class DecompositionService:
                 "decomposition_contract_version": _DECOMPOSITION_CONTRACT_VERSION,
                 "sdlc_rules": planning_context(),
             }
+            if isinstance(repair_context, Mapping):
+                payload["automatic_repair_context"] = json.loads(
+                    json.dumps(dict(repair_context))
+                )
             payload["selected_sdlc_model"] = selected_sdlc_model
             if command_id is not None:
                 payload["command_id"] = command_id
@@ -1452,7 +1463,17 @@ class DecompositionService:
         class _Handler:
             async def prepare(self, context):
                 try:
-                    prepared = await service.prepare(context.project_id, command_id=context.request.command_id, input_hash=context.input_hash)
+                    repair_context = context.request.payload.get("auto_repair")
+                    prepared = await service.prepare(
+                        context.project_id,
+                        command_id=context.request.command_id,
+                        input_hash=context.input_hash,
+                        repair_context=(
+                            repair_context
+                            if isinstance(repair_context, Mapping)
+                            else None
+                        ),
+                    )
                 except SemanticReviewRejected as error:
                     raise CommandHandlerRejected(
                         str(error), agent_call_ids=list(error.agent_call_ids),

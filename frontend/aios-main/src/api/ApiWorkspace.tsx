@@ -19,6 +19,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Wrench,
   X,
 } from 'lucide-react';
 import { apiClient } from './client';
@@ -52,6 +53,7 @@ import { auditTitle, displayLabel, displayTime, progressDescription } from './pr
 import { PrdReviewPanel } from './PrdReviewPanel';
 import {
   createSession,
+  autoRepairCommandJob,
   executeCommand,
   getLifecycleRoutes,
   getCommandJob,
@@ -248,6 +250,12 @@ export function ApiWorkspace() {
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
   const [workItemPreviews, setWorkItemPreviews] = useState<Record<string, WorkItemPreview>>({});
   const [workflowProgress, setWorkflowProgress] = useState<string | null>(null);
+  const [failedCommand, setFailedCommand] = useState<{
+    sessionId: string;
+    commandId: string;
+    code: string;
+  } | null>(null);
+  const [repairingFailure, setRepairingFailure] = useState(false);
   const [observingDecomposition, setObservingDecomposition] = useState(false);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('kanban');
   const [chatOpen, setChatOpen] = useState(true);
@@ -695,6 +703,7 @@ export function ApiWorkspace() {
       const firstTask = refreshed.resources.workItems.find((item) => item.kind === 'TASK');
       if (firstTask) setSelectedWorkItemId(firstTask.id);
       localStorage.removeItem(storageKey);
+      setFailedCommand(null);
       reconciledDecompositionJobs.current.add(reconciliationKey);
       return result.state;
     } finally {
@@ -738,13 +747,24 @@ export function ApiWorkspace() {
       } catch (reason) {
         throwIfObservationCancelled(lifecycle.signal);
         const normalized = normalizeNetworkError(reason);
-        if (normalized.status !== 409 || normalized.code !== 'STALE_STATE') throw reason;
-
         const storageKey = decompositionJobKey(sessionId);
+        // A failed background command is terminal. Keeping its id makes every
+        // later click resume the same failed job instead of submitting a fresh
+        // command, so clear it before surfacing the error. Transport failures
+        // do not reject observeCommandJob and remain resumable through storage.
         if (localStorage.getItem(storageKey) === accepted.command_id) {
           localStorage.removeItem(storageKey);
         }
         pendingCommandIds.current.clear();
+        if (normalized.code !== 'STALE_STATE') {
+          setFailedCommand({
+            sessionId,
+            commandId: accepted.command_id,
+            code: normalized.code,
+          });
+        }
+        if (normalized.status !== 409 || normalized.code !== 'STALE_STATE') throw reason;
+
         if (commandObservations.current.get(observationKey)?.close === close) {
           commandObservations.current.delete(observationKey);
           if (commandObservations.current.size === 0) setObservingDecomposition(false);
@@ -782,7 +802,20 @@ export function ApiWorkspace() {
       action: 'convert_to_work_item',
       stateVersion: baseState.state_version,
     });
-    const savedCommandId = localStorage.getItem(decompositionJobKey(baseState.session_id));
+    const storageKey = decompositionJobKey(baseState.session_id);
+    let savedCommandId = localStorage.getItem(storageKey);
+    if (savedCommandId && !pendingCommandIds.current.has(fingerprint)) {
+      try {
+        const savedJob = await getCommandJob(baseState.session_id, savedCommandId);
+        if (savedJob.status === 'failed') {
+          localStorage.removeItem(storageKey);
+          savedCommandId = null;
+        }
+      } catch {
+        // Keep the durable id when its status cannot be checked; the observer
+        // can resume it once the backend connection recovers.
+      }
+    }
     const commandId = pendingCommandIds.current.get(fingerprint)
       ?? savedCommandId
       ?? crypto.randomUUID();
@@ -1008,6 +1041,32 @@ export function ApiWorkspace() {
       setError(errorText(reason));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function autoRepairFailure() {
+    if (!failedCommand || repairingFailure) return;
+    setRepairingFailure(true);
+    setError(null);
+    setWorkflowProgress('正在收集数据库上下文、失败调用和常用修复策略…');
+    try {
+      const accepted = await autoRepairCommandJob(
+        failedCommand.sessionId,
+        failedCommand.commandId,
+        ownerId,
+      );
+      localStorage.setItem(
+        decompositionJobKey(failedCommand.sessionId),
+        accepted.command_id,
+      );
+      setFailedCommand(null);
+      await observeDecomposition(failedCommand.sessionId, accepted, true);
+    } catch (reason) {
+      const normalized = normalizeNetworkError(reason);
+      if (normalized.code !== 'REQUEST_ABORTED') setError(errorText(reason));
+    } finally {
+      setRepairingFailure(false);
+      setWorkflowProgress(null);
     }
   }
 
@@ -1430,7 +1489,20 @@ export function ApiWorkspace() {
                 <span className="ff-avatar ff-avatar-warning">!</span>
                 <div className="ff-message-content">
                   <p className="ff-message-meta">System Agent</p>
-                  <div role="alert" className="ff-message-bubble ff-error-bubble">{error}</div>
+                  <div role="alert" className="ff-message-bubble ff-error-bubble">
+                    <span>{error}</span>
+                    {failedCommand && (
+                      <button
+                        type="button"
+                        className="ff-auto-repair-button"
+                        disabled={repairingFailure}
+                        onClick={() => void autoRepairFailure()}
+                      >
+                        {repairingFailure ? <Loader2 className="ff-spin" aria-hidden="true" /> : <Wrench aria-hidden="true" />}
+                        自动修复
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -1633,7 +1705,7 @@ export function ApiWorkspace() {
 
           {(error || workflowProgress) && (
             <div className="ff-alert-stack">
-              {error && <div role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{error}</span></div>}
+              {error && <div role="alert" className="ff-page-alert ff-page-alert-error"><AlertCircle aria-hidden="true" /><span>{error}</span>{failedCommand && <button type="button" className="ff-auto-repair-button" disabled={repairingFailure} onClick={() => void autoRepairFailure()}>{repairingFailure ? <Loader2 className="ff-spin" aria-hidden="true" /> : <Wrench aria-hidden="true" />}自动修复</button>}</div>}
               {workflowProgress && <div className="ff-page-alert ff-page-alert-progress"><Loader2 className="ff-spin" aria-hidden="true" /><span>{workflowProgress}</span></div>}
             </div>
           )}

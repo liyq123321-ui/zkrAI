@@ -452,7 +452,21 @@ class PrdReviewService:
         else:
             if existing.path != filename or _markdown_hash(existing.content) != markdown_hash:
                 raise PrdContentConflict("Gitea PRD content conflicts with the Spec version")
-            commit_sha = branch_head.sha
+            # Another request may have created this version after our initial
+            # branch read but before get_file().  Re-read the branch head and
+            # verify the immutable commit before persisting the binding; using
+            # branch_head here can bind a newly observed file to the older
+            # commit where that file does not exist.
+            current_head = await self._gitea.ensure_branch(branch)
+            committed = await self._gitea.get_file(filename, current_head.sha)
+            if (
+                committed.path != filename
+                or _markdown_hash(committed.content) != markdown_hash
+            ):
+                raise PrdContentConflict(
+                    "Gitea PRD content changed while creating its binding"
+                )
+            commit_sha = current_head.sha
         pull_request = await self._gitea.ensure_review_pr(wi, branch)
 
         with self._session_factory() as db:
