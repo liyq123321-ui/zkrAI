@@ -103,6 +103,26 @@ def _normalize_base_breakdown(
             agent_spec.implementation_plan = None
 
 
+def _normalize_waterfall_iterations(
+    result: BaseWorkBreakdown | WorkBreakdown | WorkBreakdownRevision,
+    selected_model: str,
+) -> None:
+    """Treat a waterfall phase's iteration as its cycle index, never stage order.
+
+    The ordered stage number is already defined by the selected SDLC YAML.  Models
+    sometimes copy that number into ``iteration`` (1, 2, 3, ...), but waterfall
+    has no delivery rounds, so the only valid and unambiguous cycle index is 0.
+    """
+
+    if selected_model not in {"strict_waterfall", "overlapping_waterfall"}:
+        return
+    lifecycle = result.lifecycle
+    if lifecycle is None or lifecycle.model != selected_model:
+        return
+    for phase in lifecycle.phases:
+        phase.iteration = 0
+
+
 def merge_breakdown_revision(revision: WorkBreakdownRevision, payload: dict[str, object]) -> WorkBreakdown:
     previous = WorkBreakdown.model_validate(payload.get("previous_breakdown"))
     merged = previous.model_dump(mode="json")
@@ -141,6 +161,10 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
             if isinstance(reference, str)
         }
         _repair_context_refs(result, allowed_refs)
+        if payload.get("selected_sdlc_model"):
+            _normalize_waterfall_iterations(
+                result, str(payload["selected_sdlc_model"])
+            )
     if isinstance(result, WorkBreakdownRevision):
         result = merge_breakdown_revision(result, payload)
     if isinstance(result, (BaseWorkBreakdown, WorkBreakdown)) and payload.get("selected_sdlc_model"):
@@ -166,9 +190,12 @@ def validate_node_output(result: BaseModel, payload: dict[str, object]) -> None:
         source = payload.get("spec", {})
         source_content = source.get("content", {}) if isinstance(source, Mapping) else {}
         refs = payload.get("input_refs", source_content.get("source_refs", spec.source_refs))
+        deferred_review_codes = {"NEEDS_HUMAN_DECISION"}
+        if not payload.get("auto_resolve_review_findings"):
+            deferred_review_codes.add("UNKNOWN_RESPONSIBLE_ACTOR")
         findings = [
             item.model_dump(mode="json") for item in run_rule_review(spec, set(refs))
-            if item.code not in {"NEEDS_HUMAN_DECISION", "UNKNOWN_RESPONSIBLE_ACTOR"}
+            if item.code not in deferred_review_codes
         ]
         declared_objects = "\n".join(spec.core_objects).casefold()
         for index, diagram in enumerate(spec.er_diagrams):

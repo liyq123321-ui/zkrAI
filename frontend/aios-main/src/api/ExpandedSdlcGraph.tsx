@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AlertTriangle, CheckCircle2, Clock3, GitFork } from 'lucide-react';
 import type { WorkItemDto } from './dto';
 import { milestoneTaskLayers, milestoneTaskStats } from './milestoneTaskMonitoring';
@@ -60,6 +60,14 @@ export function ExpandedSdlcGraph({ phases, onOpenWorkItem }: {
 
   useLayoutEffect(() => measureEdges(), [measureEdges]);
   useEffect(() => {
+    const frame = window.requestAnimationFrame(measureEdges);
+    const afterEntrance = window.setTimeout(measureEdges, 720);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(afterEntrance);
+    };
+  }, [measureEdges]);
+  useEffect(() => {
     if (typeof ResizeObserver !== 'undefined') {
       const observer = new ResizeObserver(measureEdges);
       if (graphRef.current) observer.observe(graphRef.current);
@@ -81,7 +89,11 @@ export function ExpandedSdlcGraph({ phases, onOpenWorkItem }: {
     {phases.map((phase, phaseIndex) => {
       const stats = milestoneTaskStats(phase.tasks);
       const layers = milestoneTaskLayers(phase.tasks);
-      return <section key={`${phase.iteration}:${phase.stage_id}`} className={`ff-expanded-sdlc-phase is-${phase.status}`}>
+      return <section
+        key={`${phase.iteration}:${phase.stage_id}`}
+        className={`ff-expanded-sdlc-phase is-${phase.status}`}
+        style={{ '--ff-phase-order': phaseIndex } as CSSProperties}
+      >
         <header>
           <span>阶段 {phase.stage.number}</span>
           <div><h3>{phase.stage.name}</h3><p>{phase.stage.objective}</p></div>
@@ -90,13 +102,14 @@ export function ExpandedSdlcGraph({ phases, onOpenWorkItem }: {
         <div className="ff-expanded-sdlc-phase-body">
           {layers.map((layer) => <div key={`${layer.depth}:${layer.cycle}`} className={`ff-expanded-sdlc-layer${layer.cycle ? ' is-cycle' : ''}`}>
             <span>{layer.cycle ? '依赖异常' : `执行层 ${layer.depth + 1}`}</span>
-            <div>{layer.tasks.map((task) => {
+            <div>{layer.tasks.map((task, taskIndex) => {
               const state = statusClass(task);
               return <button
                 key={task.id}
                 ref={(node) => { if (node) nodeRefs.current.set(task.id, node); else nodeRefs.current.delete(task.id); }}
                 type="button"
                 className={`ff-milestone-node is-${state}`}
+                style={{ '--ff-task-order': layer.depth * 2 + taskIndex } as CSSProperties}
                 onClick={() => onOpenWorkItem(task.id)}
                 aria-label={`打开子任务：${task.title || task.id}，状态：${workItemStatusLabel(task.status)}`}
               >

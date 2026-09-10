@@ -560,6 +560,35 @@ async def test_decomposition_repairs_new_blocking_questions_before_service_gate(
 
 
 @pytest.mark.asyncio
+async def test_automatic_rewrite_repairs_unknown_responsible_actor(
+    tmp_path, monkeypatch, valid_spec
+):
+    from app.domain.types import PrdRewriteOutput
+
+    good = PrdRewriteOutput(
+        spec=valid_spec,
+        responses=[],
+        change_summary="Named the accountable role for every responsibility.",
+    )
+    bad = good.model_copy(deep=True)
+    bad.spec.permissions_and_responsibilities = ["Approve release requests"]
+    gateway, prompts = gateway_with_outputs(tmp_path, monkeypatch, [bad, good])
+
+    result = await gateway.rewrite_prd({
+        "spec": {"content": valid_spec.model_dump(mode="json")},
+        "comment_ids": [],
+        "auto_resolve_review_findings": True,
+        "review_findings": [{"code": "UNKNOWN_RESPONSIBLE_ACTOR"}],
+    })
+
+    assert result.spec.permissions_and_responsibilities == (
+        valid_spec.permissions_and_responsibilities
+    )
+    assert len(prompts) == 2
+    assert "UNKNOWN_RESPONSIBLE_ACTOR" in prompts[1]
+
+
+@pytest.mark.asyncio
 async def test_schema_and_consistency_repairs_share_bounded_attempt_budget(
     tmp_path, monkeypatch, valid_spec
 ):

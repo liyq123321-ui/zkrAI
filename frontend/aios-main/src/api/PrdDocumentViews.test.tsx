@@ -111,3 +111,25 @@ it('mounts an escaped diagram title as one body anchor without creating a forged
   expect(screen.getByRole('region', { name: `ER 图：${unusual.title}` })).toBeTruthy();
   expect(screen.queryByRole('link', { name: /Orders/ })).toBeNull();
 });
+
+it('explains a skipped prototype and lets the user start it manually', () => {
+  const generate = vi.fn();
+  render(
+    <PrdDocumentViews
+      content="# PRD"
+      version={1}
+      patch={null}
+      commentable={null}
+      prototypeSkippedForReview
+      ready={false}
+      selectedLine={null}
+      onSelectLine={() => undefined}
+      onGeneratePrototype={generate}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: 'HTML 原型' }));
+  expect(screen.getByText(/存在待处理审核项/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '手动生成 HTML 原型' }));
+  expect(generate).toHaveBeenCalledOnce();
+});

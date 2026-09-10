@@ -33,6 +33,7 @@ from app.services.prd_review import (
     PrdReviewService,
 )
 from app.services.drawio_diagrams import InvalidDrawioDiagram
+from app.services.prd_prototype import PrdPrototypeService
 
 
 class PublishReviewAccepted(BaseModel):
@@ -140,6 +141,7 @@ def build_router(
     service: PrdReviewService,
     coordinator: ReviewPublishCoordinator,
     actor_resolver: ActorResolver,
+    prototype_service: PrdPrototypeService | None = None,
 ) -> APIRouter:
     """Build the synchronous review endpoints and durable publication boundary."""
 
@@ -181,6 +183,20 @@ def build_router(
                     "Cache-Control": "private, max-age=31536000, immutable",
                 },
             )
+        except Exception as error:
+            raise _http_error(error) from error
+
+    @router.post(
+        "/prd/{wi}/v/{number}/prototype",
+        response_model=PrdDocumentRead,
+    )
+    async def generate_prd_prototype(wi: str, number: int) -> PrdDocumentRead:
+        try:
+            if prototype_service is None:
+                raise RuntimeError("PRD prototype generation is not configured")
+            await service.version(wi, number)
+            await prototype_service.ensure_for_prd(wi, number)
+            return await service.version(wi, number)
         except Exception as error:
             raise _http_error(error) from error
 

@@ -152,7 +152,7 @@ export const autoRepairCommandJob = (
   actorId: string,
 ) => apiClient.request<CommandJobAcceptedDto>(
   `/sessions/${sessionId}/commands/${commandId}/auto-repair`,
-  { method: 'POST', body: JSON.stringify({ actor_id: actorId }) },
+  { method: 'POST', body: { actor_id: actorId } },
 );
 
 export const commandJobEventsUrl = (eventsUrl: string) =>

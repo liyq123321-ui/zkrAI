@@ -22,6 +22,7 @@ from app.database.models import (
     WorkItem,
 )
 from app.domain.types import (
+    CommandAction,
     HtmlPrototypePayload,
     PrdRewriteOutput,
     ProjectPhase,
@@ -1400,3 +1401,59 @@ def test_interrupted_recovery_is_local_only_and_public_errors_are_stable(
         assert db.get(ReviewTask, "task-processing").error_code == "PROCESS_INTERRUPTED"
         assert db.get(ReviewTask, "task-done").status == "done"
         assert db.get(ReviewTask, "task-error").error_code == "OLD_ERROR"
+
+
+def test_retry_settles_orphaned_review_agent_call(
+    session_factory, db_session, complete_brief, valid_spec
+):
+    """A failed publisher retry must not remain blocked by its dead model call."""
+
+    _seed_review(db_session, complete_brief, valid_spec)
+    task = ReviewTask(
+        id="task-interrupted-agent",
+        wi="root-1",
+        initiator_actor_id="owner",
+        status="error",
+        base_version=1,
+        base_commit_sha=BASE_SHA,
+        comment_ids=[101],
+        comment_snapshot=[],
+        comment_snapshot_hash="a" * 64,
+        reply_receipts={},
+        error_code="PROCESS_INTERRUPTED",
+        error="review publication process was interrupted",
+    )
+    command_id = f"publish-review:{task.id}"
+    attempt = CommandAttempt(
+        id="attempt-interrupted-agent",
+        project_id="publish-project",
+        session_id="publish-session",
+        command_id=command_id,
+        input_hash="b" * 64,
+        expected_state_version=4,
+        action=CommandAction.PUBLISH_REVIEW.value,
+        status="PREPARING",
+        agent_call_ids=["call-interrupted-review"],
+    )
+    call = AgentCall(
+        id="call-interrupted-review",
+        project_id="publish-project",
+        agent_session_id="publish-reviewer-session",
+        operation="review_spec",
+        request={"command_id": command_id, "input_hash": attempt.input_hash},
+        status="PENDING",
+    )
+    db_session.add_all([task, attempt, call])
+    db_session.commit()
+
+    with session_factory() as db:
+        with db.begin():
+            ReviewPublishCoordinator._reset_error_task(db, task.id)
+
+    with session_factory() as db:
+        recovered_task = db.get(ReviewTask, task.id)
+        recovered_call = db.get(AgentCall, call.id)
+        assert recovered_task.status == "pending"
+        assert recovered_call.status == "FAILED"
+        assert recovered_call.response == {"error_code": "PROCESS_INTERRUPTED"}
+        assert recovered_call.completed_at is not None

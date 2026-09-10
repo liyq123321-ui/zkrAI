@@ -13,6 +13,7 @@ from app.database.models import (
     AgentSession,
     AuditEvent,
     PrdPrototype,
+    PrdVersion,
     Project,
     SpecVersion,
     utc_now,
@@ -170,6 +171,41 @@ class PrdPrototypeService:
             )
             db.commit()
             return prototype
+
+    async def ensure_for_prd(self, wi: str, version: int) -> PrdPrototype | None:
+        """Generate a prototype for the requested current PRD version on demand."""
+
+        with self._session_factory() as db:
+            binding = db.get(PrdVersion, (wi, version))
+            spec = (
+                db.get(SpecVersion, binding.spec_version_id)
+                if binding is not None
+                else None
+            )
+            project = db.get(Project, spec.project_id) if spec is not None else None
+            if (
+                binding is None
+                or spec is None
+                or project is None
+                or project.current_spec_version_id != spec.id
+            ):
+                raise ValueError("manual prototype generation requires the current PRD version")
+            project_id = project.id
+        return await self.ensure_for_project(project_id)
+
+    def automatic_generation_allowed(self, project_id: str) -> bool:
+        """Return false when the current PRD has any review finding."""
+
+        from app.database.models import SpecReview
+
+        with self._session_factory() as db:
+            project = db.get(Project, project_id)
+            if project is None or project.current_spec_version_id is None:
+                return False
+            reviews = db.query(SpecReview).filter_by(
+                spec_version_id=project.current_spec_version_id
+            ).all()
+            return not any(review.findings for review in reviews)
 
     @staticmethod
     def _agent_session(db: Session, project_id: str) -> AgentSession:

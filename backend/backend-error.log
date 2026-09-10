@@ -1,5 +1,67 @@
 INFO:     Loading environment from '.env'
-INFO:     Started server process [25284]
+INFO:     Started server process [50920]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8088 (Press CTRL+C to quit)
+Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\events.py", line 88, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\events.py", line 88, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+Agent output validation failed: contract=PrdRewriteOutput attempt=1 codes=['REWRITE_COMMENT_COVERAGE']
+Agent output validation failed: contract=ImplementationPlan attempt=1 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Agent output validation failed: contract=ImplementationPlan attempt=1 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Agent output validation failed: contract=ImplementationPlan attempt=1 codes=['MISSING_IMPLEMENTATION_COVERAGE']
+Agent output validation failed: contract=ImplementationPlan attempt=2 codes=['MISSING_IMPLEMENTATION_COVERAGE']
+Agent output validation failed: contract=ImplementationPlan attempt=1 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\events.py", line 88, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\events.py", line 88, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+Agent output validation failed: contract=ImplementationPlan attempt=1 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Agent output validation failed: contract=ImplementationPlan attempt=1 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Agent output validation failed: contract=ImplementationPlan attempt=1 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Agent output validation failed: contract=ImplementationPlan attempt=2 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\events.py", line 88, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\events.py", line 88, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\zkr\AppData\Local\Programs\Python\Python312\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+Agent output validation failed: contract=ImplementationPlan attempt=1 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Agent output validation failed: contract=ImplementationPlan attempt=1 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Agent output validation failed: contract=ImplementationPlan attempt=2 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']
+Agent output validation failed: contract=ImplementationPlan attempt=3 codes=['UNASSIGNED_IMPLEMENTATION_REQUIREMENT']

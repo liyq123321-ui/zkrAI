@@ -154,6 +154,55 @@ def test_create_spec_generates_version_bound_html_prototype_before_returning_rev
         assert stored.html == prototype.html
 
 
+def test_create_spec_skips_automatic_prototype_when_review_has_findings(
+    session_factory,
+):
+    reviewed_spec = make_valid_spec().model_copy(
+        update={"permissions_and_responsibilities": ["Approve release requests"]}
+    )
+    unused_prototype = HtmlPrototypePayload(
+        title="Should not be generated",
+        html="<!doctype html><html><body>unused</body></html>",
+        generation_summary="Unused because review findings exist.",
+    )
+    agent = ScriptedAgentGateway(
+        analyze_results=deque([
+            ClarificationAnalysis(ready_for_spec=True, questions=[], assumptions=[])
+        ]),
+        generate_results=deque([reviewed_spec]),
+        review_results=deque([make_passing_semantic_review()]),
+        prototype_results=deque([unused_prototype]),
+    )
+
+    with TestClient(
+        create_app(agent_gateway=agent, session_factory=session_factory)
+    ) as client:
+        created = client.post(
+            "/sessions",
+            json={
+                "request_id": "skip-prototype-for-review-findings",
+                "actor_id": "approver-1",
+                "brief": make_complete_brief().model_dump(mode="json"),
+            },
+        ).json()
+        response = client.post(
+            f"/sessions/{created['session_id']}/commands",
+            json={
+                "command_id": "generate-prd-with-findings",
+                "action": "create_spec",
+                "expected_state_version": created["state_version"],
+                "actor_id": "approver-1",
+                "payload": {},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"]["current_spec_status"] == "REWORK"
+    assert "generate_prd_prototype" not in [operation for operation, _ in agent.calls]
+    with session_factory() as db:
+        assert db.query(PrdPrototype).count() == 0
+
+
 def test_command_job_openapi_contract_distinguishes_sync_and_async_responses(
     session_factory,
 ):

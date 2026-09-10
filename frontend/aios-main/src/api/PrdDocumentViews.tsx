@@ -29,12 +29,15 @@ export function unchangedDiffRows(content: string): DiffRow[] {
   }));
 }
 
-export function PrdDocumentViews({ content, diagrams = [], prototype = null, version, patch, commentable, ready, selectedLine, onSelectLine, onEditDiagram }: {
+export function PrdDocumentViews({ content, diagrams = [], prototype = null, prototypeSkippedForReview = false, prototypeBusy = false, version, patch, commentable, ready, selectedLine, onSelectLine, onEditDiagram, onGeneratePrototype }: {
   content: string; version: number; patch: string | null; commentable: PrdCommentableLinesDto | null;
   diagrams?: PrdErDiagramDto[];
   prototype?: PrdPrototypeDto | null;
+  prototypeSkippedForReview?: boolean;
+  prototypeBusy?: boolean;
   ready: boolean; selectedLine: number | null; onSelectLine: (line: number) => void;
   onEditDiagram?: (diagram: PrdErDiagramDto) => void;
+  onGeneratePrototype?: () => void;
 }) {
   const [mode, setMode] = useState<'split' | 'document' | 'diff' | 'prototype'>('diff');
   const allowed = new Set(commentable?.lines.map((line) => line.line) ?? []);
@@ -46,7 +49,7 @@ export function PrdDocumentViews({ content, diagrams = [], prototype = null, ver
     : null;
   const modes: Array<readonly ['split' | 'document' | 'diff' | 'prototype', string]> = [
     ['split', '并排查看'], ['document', '正文'], ['diff', 'Diff'],
-    ...(prototype ? [['prototype', 'HTML 原型'] as const] : []),
+    ['prototype', 'HTML 原型'],
   ];
   return <div className="mb-5">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -90,7 +93,10 @@ export function PrdDocumentViews({ content, diagrams = [], prototype = null, ver
         </div>
         {prototypeUrl
           ? <iframe title={prototype?.title || 'HTML 交互原型'} src={prototypeUrl} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" className="h-[65vh] w-full bg-white" />
-          : <div role="alert" className="p-5 text-sm text-rose-700">{prototype?.error_code ? `${prototype.error_code}：` : ''}{prototype?.error_message || 'HTML 原型暂不可用。'}</div>}
+          : <div role="status" className="p-6 text-sm text-slate-600">
+              <p>{prototype?.error_code ? `${prototype.error_code}：` : ''}{prototype?.error_message || (prototypeSkippedForReview ? '当前 PRD 存在待处理审核项，系统已跳过自动生成 HTML 原型，以节省处理时间。' : '当前版本尚未生成 HTML 原型。')}</p>
+              {onGeneratePrototype && <button type="button" disabled={prototypeBusy} onClick={onGeneratePrototype} className="mt-4 rounded-lg bg-slate-900 px-4 py-2 text-xs font-medium text-white disabled:opacity-50">{prototypeBusy ? '正在生成 HTML 原型…' : '手动生成 HTML 原型'}</button>}
+            </div>}
       </section>}
     </div>
   </div>;

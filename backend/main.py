@@ -172,7 +172,12 @@ def create_app(
         )
     )
     application.include_router(
-        build_prd_review_router(review_service, publish_coordinator, actor_resolver)
+        build_prd_review_router(
+            review_service,
+            publish_coordinator,
+            actor_resolver,
+            prototype_service,
+        )
     )
     return application
 

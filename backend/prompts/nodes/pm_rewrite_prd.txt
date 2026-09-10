@@ -33,6 +33,17 @@ the returned Spec must contain concrete corresponding changes and must not be
 semantically identical to the input Spec. Never apply this automatic behavior when
 the flag is false.
 
+For UNKNOWN_RESPONSIBLE_ACTOR, replace every actorless responsibility with an
+actor-first, concrete duty statement. Preserve the existing duty and assign the
+narrowest conservative role supported by the Brief or duty domain: Project Manager
+owns requirements and scope decisions, QA verifies acceptance evidence, Release
+Manager approves release requests, and Operations/SRE owns production operation and
+incident response. Valid examples include "QA verifies acceptance results" and
+"运维负责人负责生产故障响应". "Approval is required", "Approve the release", and
+"负责审批发布申请" remain invalid because they name no accountable actor. A role is
+sufficient when no person's identity is evidenced; never invent a person's name or
+claim that approval has already happened.
+
 The automatic_resolution_policy and repair_feedback fields, when present, are
 workflow constraints rather than source evidence. A repair_attempt means an earlier
 rewrite incorrectly returned the same Spec; make the required concrete edits now.

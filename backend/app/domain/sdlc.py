@@ -62,7 +62,13 @@ class LifecycleRouteDecision(RuleModel):
 class LifecyclePhase(RuleModel):
     milestone_key: str
     stage_id: str
-    iteration: int = Field(ge=0)
+    iteration: int = Field(
+        ge=0,
+        description=(
+            "Iteration cycle index: use 0 for every waterfall phase; "
+            "iterative delivery rounds start at 1. This is not the stage number."
+        ),
+    )
     exit_gate_key: str
     schedule: str = Field(min_length=1)
 

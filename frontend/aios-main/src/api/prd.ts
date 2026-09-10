@@ -60,6 +60,14 @@ export const getReviewTask = (taskId: string, signal?: AbortSignal) =>
 export const getPrdDiff = (wi: string, signal?: AbortSignal) =>
   apiClient.request<PrdDiffDto>(`/prd/${wi}/diff`, { signal });
 
+export const generatePrdPrototype = (
+  wi: string,
+  version: number,
+  signal?: AbortSignal,
+) => apiClient.request<PrdDocumentDto>(`/prd/${wi}/v/${version}/prototype`, {
+  method: 'POST', signal, timeoutMs: 30 * 60 * 1000,
+});
+
 export const publishDiagramRevision = (
   wi: string,
   diagramId: string,

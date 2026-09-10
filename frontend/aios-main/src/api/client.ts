@@ -2,7 +2,10 @@ import { appConfig } from './config';
 import { ApiError, normalizeNetworkError, responseToApiError } from './errors';
 
 export interface RequestOptions extends Omit<RequestInit, 'body'> {
-  body?: unknown;
+  // JSON request bodies stay structured until this shared boundary. Keeping
+  // strings out of the type prevents callers from serializing twice and
+  // turning an object into a JSON string that FastAPI rejects with 422.
+  body?: object;
   timeoutMs?: number;
 }
 

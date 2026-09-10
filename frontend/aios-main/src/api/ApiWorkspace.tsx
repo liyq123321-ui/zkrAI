@@ -10,6 +10,7 @@ import {
   FolderPlus,
   GitFork,
   History,
+  House,
   LayoutGrid,
   Loader2,
   Menu,
@@ -51,6 +52,7 @@ import { WorkItemFilterControls } from './WorkItemFilterControls';
 import { TaskDependencyGraph, type TaskDagProject } from './TaskDependencyGraph';
 import { TopLevelGraph } from './TopLevelGraph';
 import { LifecycleRouteChooser } from './LifecycleRouteChooser';
+import { WorkspaceDashboard } from './WorkspaceDashboard';
 import { emptyResources, projectSpec, projectTitle, useWorkspaceProjects, type ResourceBundle } from './useWorkspaceProjects';
 import { auditTitle, displayLabel, displayTime, progressDescription } from './presentation';
 import { PrdReviewPanel } from './PrdReviewPanel';
@@ -107,7 +109,7 @@ const workItemActionLabels: Partial<Record<CommandAction, string>> = {
   fail_task: '失败',
 };
 
-type WorkspaceTab = 'topLevel' | 'kanban' | 'flow' | 'audit';
+type WorkspaceTab = 'dashboard' | 'topLevel' | 'kanban' | 'flow' | 'audit';
 type ChatTool = 'newProject' | 'resumeSession' | 'restoreSpec' | null;
 type ChatMessage = {
   id: string;
@@ -118,6 +120,7 @@ type ChatMessage = {
 };
 
 const NEW_CHAT_KEY = '__new__';
+const CURRENT_ACTOR_ID = import.meta.env.VITE_LOCAL_ACTOR_HINT?.trim() || 'owner-1';
 const DEFAULT_AGENT_BACKENDS: AgentBackendOptionDto[] = [
   {
     provider: 'codex',
@@ -258,9 +261,7 @@ export function ApiWorkspace() {
   const [objective, setObjective] = useState('');
   const [scope, setScope] = useState('');
   const [deliverables, setDeliverables] = useState('');
-  const [ownerId, setOwnerId] = useState(
-    import.meta.env.VITE_LOCAL_ACTOR_HINT?.trim() || 'owner-1',
-  );
+  const [ownerId, setOwnerId] = useState(CURRENT_ACTOR_ID);
   const [resumeSessionId, setResumeSessionId] = useState('');
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
   const [workItemPreviews, setWorkItemPreviews] = useState<Record<string, WorkItemPreview>>({});
@@ -272,7 +273,7 @@ export function ApiWorkspace() {
   } | null>(null);
   const [repairingFailure, setRepairingFailure] = useState(false);
   const [observingDecomposition, setObservingDecomposition] = useState(false);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('kanban');
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('dashboard');
   const [chatOpen, setChatOpen] = useState(true);
   const [chatTool, setChatTool] = useState<ChatTool>(null);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
@@ -450,6 +451,10 @@ export function ApiWorkspace() {
   ]);
 
   const projectList = useMemo(() => Object.values(projects), [projects]);
+  const dashboardProjects = useMemo(() => projectList.filter((project) => {
+    const root = project.resources.workItems.find((item) => item.kind === 'ROOT');
+    return !root?.suggested_assignee || root.suggested_assignee === CURRENT_ACTOR_ID;
+  }), [projectList]);
   const runtimeProjects = useMemo(() => projectList.map((project) => ({
     sessionId: project.state.session_id,
     title: projectTitle(project),
@@ -1179,6 +1184,7 @@ export function ApiWorkspace() {
   async function runGlobalInstruction(message: string) {
     const normalized = message.trim().replace(/[。！!？?，,]/g, '').toLowerCase();
     const navigation: Array<{ phrases: string[]; tab: WorkspaceTab; reply: string }> = [
+      { phrases: ['打开dashboard', '打开仪表盘', '查看总览', '首页', '仪表盘'], tab: 'dashboard', reply: '已打开个人 Dashboard。' },
       { phrases: ['打开顶层图', '查看顶层图', '顶层图'], tab: 'topLevel', reply: '已打开当前任务的 SDLC 顶层图。' },
       { phrases: ['打开看板', '查看看板', '任务看板', '看板'], tab: 'kanban', reply: '已打开任务看板。' },
       { phrases: ['打开流转图', '查看流转图', '任务流转图'], tab: 'flow', reply: '已打开任务依赖流转图。' },
@@ -1362,6 +1368,15 @@ export function ApiWorkspace() {
           <span className="ff-online-dot" />
         </button>
         <div className="ff-activity-divider" />
+        <button
+          className={'ff-activity-button ' + (activeTab === 'dashboard' ? 'is-active' : '')}
+          onClick={() => setActiveTab('dashboard')}
+          title="Dashboard 总览"
+          aria-label="打开 Dashboard 总览"
+          aria-pressed={activeTab === 'dashboard'}
+        >
+          <House aria-hidden="true" />
+        </button>
         <button
           className={'ff-activity-button ' + (activeTab === 'topLevel' ? 'is-active' : '')}
           onClick={() => setActiveTab('topLevel')}
@@ -1737,6 +1752,11 @@ export function ApiWorkspace() {
       <main className="ff-workspace">
         <header className="ff-top-tabs">
           <div className="ff-tabs">
+            <button className={activeTab === 'dashboard' ? 'is-active' : ''} onClick={() => setActiveTab('dashboard')}>
+              <House aria-hidden="true" />
+              Dashboard
+              <span>{dashboardProjects.length}</span>
+            </button>
             <button className={activeTab === 'topLevel' ? 'is-active' : ''} onClick={() => setActiveTab('topLevel')}>
               <GitFork aria-hidden="true" />
               顶层图
@@ -1764,6 +1784,25 @@ export function ApiWorkspace() {
             </span>
           </div>
         </header>
+
+        <section className={activeTab === 'dashboard' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'dashboard'}>
+          <WorkspaceDashboard
+            projects={dashboardProjects}
+            currentUserId={CURRENT_ACTOR_ID}
+            loading={projectsLoading}
+            onRefresh={() => { void refreshAllProjects(); }}
+            onViewAllProjects={() => setActiveTab('kanban')}
+            onOpenProject={(sessionId) => {
+              if (sessionId !== activeSessionId) switchConversation(sessionId);
+              setActiveTab('topLevel');
+            }}
+            onOpenWorkItem={(sessionId, workItemId) => {
+              if (sessionId !== activeSessionId) switchConversation(sessionId);
+              setSelectedWorkItemId(workItemId);
+              setActiveTab('kanban');
+            }}
+          />
+        </section>
 
         <section className={activeTab === 'topLevel' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'topLevel'}>
           <div className="ff-top-level-toolbar">

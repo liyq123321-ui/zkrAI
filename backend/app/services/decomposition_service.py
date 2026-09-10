@@ -504,7 +504,7 @@ class DecompositionService:
 
         previous, first_round, prior_call_ids = seed or (None, 0, [])
         seen_review_fingerprints: set[str] = set()
-        if previous:
+        if previous and previous.get("review_feedback") is not None:
             seen_review_fingerprints.add(
                 _review_fingerprint(
                     SemanticReview.model_validate(previous["review_feedback"])
@@ -678,10 +678,15 @@ class DecompositionService:
                 and request.get("plan_agent_call_ids")
                 and self._review_targets_plans(review)
             ):
-                # A new explicit command gets a fresh semantic-repair budget, but
-                # starts from exact base/task checkpoints instead of revising the
-                # task tree in response to plan-only findings.
-                return None
+                # A new explicit command gets a fresh semantic-repair budget and
+                # retains the last review as planning context.  The base tree and
+                # unaffected task plans may still come from exact checkpoints;
+                # reviewer-implicated plans are regenerated with this feedback.
+                return {
+                    "inherited_breakdown": breakdown.model_dump(mode="json"),
+                    "inherited_review_feedback": review.model_dump(mode="json"),
+                    "previous_review_call_id": call.id,
+                }, 0, [call.id]
             repeated_review = False
             if same_attempt:
                 fingerprint = _review_fingerprint(review)
@@ -794,6 +799,26 @@ class DecompositionService:
                 "task_planning",
                 f"任务边界已生成，正在规划 {len(breakdown.agent_specs)} 个子任务。",
             )
+            inherited_review = None
+            inherited_plans = None
+            inherited_target_keys = None
+            if payload.get("inherited_review_feedback") is not None:
+                inherited_review = SemanticReview.model_validate(
+                    payload["inherited_review_feedback"]
+                )
+                inherited_breakdown = WorkBreakdown.model_validate(
+                    payload["inherited_breakdown"]
+                )
+                inherited_plans = {
+                    task.work_item_key: task.implementation_plan
+                    for task in inherited_breakdown.agent_specs
+                }
+                inherited_target_keys = {
+                    task.work_item_key
+                    for task in self._plan_repair_targets(
+                        inherited_breakdown, inherited_review
+                    )
+                }
             plan_call_ids = await self._plan_tasks(
                 project_id,
                 snapshot,
@@ -801,6 +826,14 @@ class DecompositionService:
                 base_checkpoint_call_id=base_checkpoint_call_id,
                 command_id=command_id,
                 input_hash=input_hash,
+                previous_plans=inherited_plans,
+                review_feedback=inherited_review,
+                previous_review_call_id=(
+                    str(payload["previous_review_call_id"])
+                    if inherited_review is not None
+                    else None
+                ),
+                review_target_keys=inherited_target_keys,
             )
             validate_breakdown(breakdown, snapshot, require_lifecycle=True)
         except DecompositionPlanningFailure as error:
@@ -1033,6 +1066,11 @@ class DecompositionService:
             if not path.startswith("agent_specs[") or "]" not in path:
                 return list(breakdown.agent_specs)
             key = path.partition("[")[2].partition("]")[0]
+            if key.isdigit():
+                index = int(key)
+                if index >= len(breakdown.agent_specs):
+                    return list(breakdown.agent_specs)
+                key = breakdown.agent_specs[index].work_item_key
             if key not in by_key:
                 return list(breakdown.agent_specs)
             if key not in keys:
@@ -1114,6 +1152,7 @@ class DecompositionService:
         previous_plans: Mapping[str, ImplementationPlan | None] | None = None,
         review_feedback: SemanticReview | None = None,
         previous_review_call_id: str | None = None,
+        review_target_keys: set[str] | None = None,
     ) -> list[str]:
         """Fill only missing task plans and settle every started Agent call."""
 
@@ -1138,8 +1177,18 @@ class DecompositionService:
                         command_id=command_id,
                         input_hash=input_hash,
                         previous_plan=(previous_plans or {}).get(task.work_item_key),
-                        review_feedback=review_feedback,
-                        previous_review_call_id=previous_review_call_id,
+                        review_feedback=(
+                            review_feedback
+                            if review_target_keys is None
+                            or task.work_item_key in review_target_keys
+                            else None
+                        ),
+                        previous_review_call_id=(
+                            previous_review_call_id
+                            if review_target_keys is None
+                            or task.work_item_key in review_target_keys
+                            else None
+                        ),
                     )
                     for task in wave
                 ),
@@ -1240,6 +1289,11 @@ class DecompositionService:
                     str(contract["work_item_key"]): str(contract["contract_hash"])
                     for contract in contracts
                 }
+                prior_failure = self._task_plan_failure_context(
+                    db, project_id, snapshot, payload
+                )
+                if prior_failure is not None:
+                    payload["prior_validation_failure"] = prior_failure
                 call_id = _new_id()
                 checkpoint = self._task_plan_checkpoint(
                     db, project_id, snapshot, payload, task
@@ -1349,6 +1403,53 @@ class DecompositionService:
                 request.get("checkpoint_source_call_id") or call.id
             )
             return plan.model_copy(deep=True), source_call_id
+        return None
+
+    @staticmethod
+    def _task_plan_failure_context(
+        db: Session,
+        project_id: str,
+        snapshot: ApprovedSpecSnapshot,
+        payload: Mapping[str, object],
+    ) -> dict[str, object] | None:
+        """Return the latest exact-task validation failure for a later command."""
+
+        calls = (
+            db.query(AgentCall)
+            .filter_by(
+                project_id=project_id,
+                operation="plan_task",
+                status="FAILED",
+            )
+            .order_by(AgentCall.started_at.desc(), AgentCall.id.desc())
+            .all()
+        )
+        for call in calls:
+            request = call.request
+            if (
+                request.get("decomposition_stage") != "task_plan"
+                or request.get("sdlc_rules", {}).get("hash")
+                != planning_context()["hash"]
+                or request.get("decomposition_contract_version")
+                != _DECOMPOSITION_CONTRACT_VERSION
+                or request.get("source_spec_version_id") != snapshot.id
+                or request.get("source_spec_content_hash")
+                != snapshot.content_hash
+                or tuple(request.get("input_refs", [])) != snapshot.input_refs
+                or request.get("base_checkpoint_call_id")
+                != payload.get("base_checkpoint_call_id")
+                or request.get("task_spec_hash") != payload.get("task_spec_hash")
+                or request.get("task_spec") != payload.get("task_spec")
+            ):
+                continue
+            return {
+                "agent_call_id": call.id,
+                "error": call.error or "The previous task plan failed validation.",
+                "instruction": (
+                    "Correct this prior validation failure; do not repeat the "
+                    "invalid requirement assignment or contract shape."
+                ),
+            }
         return None
 
     def _persist_direct(self, prepared: PreparedDecomposition) -> list[AgentSpec]:

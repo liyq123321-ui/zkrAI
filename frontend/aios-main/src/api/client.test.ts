@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './client';
 import { ApiError } from './errors';
-import { commandTimeoutMs, createSession } from './sessions';
+import { autoRepairCommandJob, commandTimeoutMs, createSession } from './sessions';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -123,5 +123,24 @@ describe('ApiClient', () => {
     const request = fetchMock.mock.calls[0][1] as RequestInit;
     const body = JSON.parse(request.body as string) as Record<string, unknown>;
     expect(body).not.toHaveProperty('actor_id');
+  });
+
+  it('sends auto-repair input as one JSON object', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          command_id: 'repair-1',
+          status_url: '/sessions/session-1/commands/repair-1',
+          events_url: '/sessions/session-1/commands/repair-1/events',
+        }),
+        { status: 202 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await autoRepairCommandJob('session-1', 'failed-1', 'owner-1');
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(request.body as string)).toEqual({ actor_id: 'owner-1' });
   });
 });

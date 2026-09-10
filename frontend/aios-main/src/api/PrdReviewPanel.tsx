@@ -4,6 +4,7 @@ import type { PrdCommentDto, PrdCommentableLinesDto, PrdDocumentDto, PrdErDiagra
 import { normalizeNetworkError } from './errors';
 import {
   createPrdComment,
+  generatePrdPrototype,
   getCommentableLines,
   getLatestPrd,
   getPrdDiff,
@@ -68,6 +69,7 @@ export function PrdReviewPanel({
   const [reviewNote, setReviewNote] = useState('');
   const [autoResolveFindings, setAutoResolveFindings] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [prototypeBusy, setPrototypeBusy] = useState(false);
   const [reviewReady, setReviewReady] = useState(false);
   const [fallbackConfirmed, setFallbackConfirmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -236,6 +238,20 @@ export function PrdReviewPanel({
     setBusy(false);
   }
 
+  async function generatePrototype() {
+    const version = data?.document?.version ?? fallbackSpec.revision;
+    setPrototypeBusy(true);
+    setError(null);
+    try {
+      const document = await generatePrdPrototype(wi, version);
+      setData((current) => current ? { ...current, document } : current);
+    } catch (reason) {
+      setError(`HTML 原型生成失败。${failure(reason)}`);
+    } finally {
+      setPrototypeBusy(false);
+    }
+  }
+
   async function setResolved(comment: PrdCommentDto, resolved: boolean) {
     setBusy(true); setError(null);
     try { await resolvePrdComment(wi, comment.id, resolved); await load(); }
@@ -400,7 +416,7 @@ export function PrdReviewPanel({
       {diagramDraft && <div className="mb-4 rounded-lg border border-violet-500/30 bg-violet-500/10 p-3 text-sm text-violet-100"><p>有一份尚未确认写入新版 PRD 的 ER 图草稿：{diagramDraft.diagramId}（基于 v{diagramDraft.baseVersion}）。</p><div className="mt-2 flex flex-wrap gap-2"><button type="button" disabled={busy || reviewTaskActive} onClick={() => void submitDiagramDraft(diagramDraft, drawioDraftKey(diagramDraft))} className="rounded border border-violet-400/40 px-2 py-1 text-xs disabled:opacity-40">重试提交 ER 图草稿</button><button type="button" onClick={downloadDiagramDraft} className="rounded border border-violet-400/40 px-2 py-1 text-xs">下载 ER 图草稿</button></div></div>}
       {task && <div className="mb-4 flex items-center gap-2 rounded-lg bg-cyan-500/10 p-3 text-sm text-cyan-200">{['pending', 'processing'].includes(task.status) && <Loader2 className="h-4 w-4 animate-spin" />}发布任务：{task.status}{task.new_version ? ` · 已生成 v${task.new_version}` : ''}</div>}
 
-      <PrdDocumentViews content={data?.document?.content ?? fallbackSpec.markdown} diagrams={data?.document?.er_diagrams ?? []} prototype={data?.document?.prototype ?? null} version={data?.document?.version ?? fallbackSpec.revision} patch={data?.diff?.patch ?? null} commentable={data?.commentable ?? null} ready={reviewReady && !busy && !workflowBusy && !reviewTaskActive} selectedLine={selectedLine} onSelectLine={setSelectedLine} onEditDiagram={data?.document?.commit_sha ? openDiagramEditor : undefined} />
+      <PrdDocumentViews content={data?.document?.content ?? fallbackSpec.markdown} diagrams={data?.document?.er_diagrams ?? []} prototype={data?.document?.prototype ?? null} prototypeSkippedForReview={hasReviewFindings} prototypeBusy={prototypeBusy} version={data?.document?.version ?? fallbackSpec.revision} patch={data?.diff?.patch ?? null} commentable={data?.commentable ?? null} ready={reviewReady && !busy && !workflowBusy && !reviewTaskActive} selectedLine={selectedLine} onSelectLine={setSelectedLine} onEditDiagram={data?.document?.commit_sha ? openDiagramEditor : undefined} onGeneratePrototype={() => void generatePrototype()} />
       {selectedLine !== null && reviewReady && <div className="mb-4 flex gap-2"><input value={draftText} onChange={(event) => setDraftText(event.target.value)} placeholder={`给第 ${selectedLine} 行添加批注`} className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm" /><button aria-label="暂存批注" onClick={addDraft} className="rounded-lg bg-cyan-500 px-3 text-slate-950"><MessageSquarePlus className="h-4 w-4" /></button></div>}
       {sessionState.review_findings.length > 0 && <details className="mb-4 rounded-xl border border-amber-500/20 p-4"><summary className="cursor-pointer text-sm text-amber-200">审核发现 · {sessionState.review_findings.length} 项（点击展开）</summary><div className="mt-3"><ReviewFindings findings={sessionState.review_findings} /></div></details>}
       <div className="mb-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">

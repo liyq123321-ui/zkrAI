@@ -8,6 +8,7 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
+from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any, Callable
 
@@ -395,6 +396,21 @@ def build_rewrite_payload(
                 "blocking_open_questions": "CHOOSE_CONSERVATIVE_TESTABLE_DEFAULT",
                 "required_result": "CONCRETE_SPEC_CHANGE",
                 "comment_provenance": "GENERATION_SNAPSHOT_NOT_SOURCE_REFS",
+                "unknown_responsible_actor": {
+                    "required_format": "EXPLICIT_ROLE_OR_ACTOR_PLUS_CONCRETE_DUTY",
+                    "forbidden_forms": [
+                        "actorless obligation such as approval is required",
+                        "actorless verb phrase such as approve the release",
+                        "placeholder actor such as TBD, unknown, or unassigned",
+                    ],
+                    "repair_method": (
+                        "Preserve the duty and name a conservative accountable role "
+                        "supported by the Brief or the duty domain. Use forms such as "
+                        "Project Manager owns requirement approval, QA verifies acceptance "
+                        "results, Release Manager approves release requests, or Operations "
+                        "owns incident response. Do not invent a person's identity."
+                    ),
+                },
             }
             if snapshot.auto_resolve_findings
             else None
@@ -1160,6 +1176,11 @@ class ReviewPublishCoordinator:
     def _reset_error_task(db: Session, task_id: str) -> ReviewTask:
         """CAS-reset one error task without overwriting a concurrent claim."""
 
+        task = db.get(ReviewTask, task_id)
+        if task is not None and task.status == "error":
+            ReviewPublishCoordinator._settle_interrupted_agent_calls(db, task)
+            db.flush()
+
         result = db.execute(
             update(ReviewTask)
             .where(ReviewTask.id == task_id, ReviewTask.status == "error")
@@ -1173,6 +1194,40 @@ class ReviewPublishCoordinator:
         if task is None:
             raise RuntimeError("review task disappeared during reset")
         return task
+
+    @staticmethod
+    def _settle_interrupted_agent_calls(db: Session, task: ReviewTask) -> None:
+        """Close model calls orphaned by an interrupted review publisher.
+
+        A retry is an explicit request to rerun the deterministic generation step.
+        Calls still marked PENDING have no live owner once their enclosing review
+        task is in the error state, so keeping them unresolved permanently blocks
+        the command preparation lease.
+        """
+
+        item = db.get(WorkItem, task.wi)
+        if item is None or item.project_id is None:
+            return
+        command_id = f"publish-review:{task.id}"
+        attempt = (
+            db.query(CommandAttempt)
+            .filter_by(project_id=item.project_id, command_id=command_id)
+            .one_or_none()
+        )
+        if attempt is None or attempt.status != "PREPARING":
+            return
+        now = datetime.now(UTC)
+        for call in db.query(AgentCall).filter_by(project_id=item.project_id).all():
+            if (
+                call.status == "PENDING"
+                and isinstance(call.request, dict)
+                and call.request.get("command_id") == command_id
+                and call.request.get("input_hash") == attempt.input_hash
+            ):
+                call.status = "FAILED"
+                call.error = "Review publication Agent call was interrupted"
+                call.response = {"error_code": "PROCESS_INTERRUPTED"}
+                call.completed_at = now
 
     def _retry_candidate(
         self, wi: str, actor_id: str, auto_resolve_findings: bool
@@ -1430,6 +1485,8 @@ class ReviewPublishCoordinator:
             item = db.get(WorkItem, task.wi) if task is not None else None
             project_id = item.project_id if item is not None else None
         if project_id is None:
+            return
+        if not self._prototypes.automatic_generation_allowed(project_id):
             return
         try:
             await self._prototypes.ensure_for_project(project_id)

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { Activity, AlertCircle, Bot, CheckCircle2, Clock3, Cpu, GitBranch, Layers3, Maximize2, Minimize2, UserRound, Zap } from 'lucide-react';
 import type { AgentRuntimeDto, AgentRuntimeEventDto, AgentSpecDto, LifecycleRouteDecisionDto, WorkItemDto } from './dto';
 import { agentOperationLabel } from './AgentRuntimePanel';
@@ -302,6 +302,26 @@ export function TopLevelGraph({
 }) {
   const [selectedPhaseKey, setSelectedPhaseKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [graphMotion, setGraphMotion] = useState<'idle' | 'preparing-expand' | 'reveal-expanded' | 'hide-expanded' | 'restore-collapsed'>('idle');
+  useEffect(() => {
+    if (graphMotion === 'idle') return undefined;
+    const duration = graphMotion === 'preparing-expand' ? 420
+      : graphMotion === 'reveal-expanded' ? 1_000
+        : graphMotion === 'hide-expanded' ? 520
+          : 760;
+    const timer = window.setTimeout(() => {
+      if (graphMotion === 'preparing-expand') {
+        setExpanded(true);
+        setGraphMotion('reveal-expanded');
+      } else if (graphMotion === 'hide-expanded') {
+        setExpanded(false);
+        setGraphMotion('restore-collapsed');
+      } else {
+        setGraphMotion('idle');
+      }
+    }, duration);
+    return () => window.clearTimeout(timer);
+  }, [graphMotion]);
   const plan = buildTopLevelPlan(agentSpecs, workItems, decision);
   if (!plan) {
     return (
@@ -330,6 +350,11 @@ export function TopLevelGraph({
     && phase.tasks.length > 0
     && phase.tasks.every((task) => assignee(task) !== '待分配 Agent')
   ));
+  const graphTransitioning = graphMotion !== 'idle';
+  const toggleExpanded = () => {
+    if (!canExpand || graphTransitioning) return;
+    setGraphMotion(expanded ? 'hide-expanded' : 'preparing-expand');
+  };
   const selectedPhase = plan.phases.find((phase) => `${phase.iteration}:${phase.stage_id}` === selectedPhaseKey) ?? null;
   const selectedMilestone: WorkItemDto | null = selectedPhase ? selectedPhase.milestone ?? {
     id: selectedPhase.milestone_key || selectedPhase.stage_id,
@@ -435,16 +460,17 @@ export function TopLevelGraph({
           <button
             type="button"
             className="ff-top-level-expand-button"
-            disabled={!canExpand}
-            aria-pressed={expanded}
+            disabled={!canExpand || graphTransitioning}
+            aria-pressed={expanded || graphMotion === 'preparing-expand'}
             title={canExpand ? (expanded ? '收起完整任务关系图' : '展开完整任务关系图') : '完整分配所有阶段子任务后可展开'}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={toggleExpanded}
           >
             {expanded ? <Minimize2 aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}
-            {expanded ? '收起' : '展开'}
+            {graphTransitioning ? '切换中' : expanded ? '收起' : '展开'}
           </button>
         </div>
       </header>
+      <div className={`ff-top-level-graph-switch is-${graphMotion}`} aria-busy={graphTransitioning}>
       {expanded ? <ExpandedSdlcGraph phases={plan.phases} onOpenWorkItem={onOpenWorkItem} /> : <div className="ff-top-level-flow">
         {plan.phases.map((phase, index) => {
           const phaseKey = `${phase.iteration}:${phase.stage_id}`;
@@ -478,7 +504,7 @@ export function TopLevelGraph({
             </>
           );
           return (
-            <div key={phaseKey} className="ff-top-level-step">
+            <div key={phaseKey} className="ff-top-level-step" style={{ '--ff-phase-order': index } as CSSProperties}>
               {index > 0 && <div className="ff-top-level-connector" aria-hidden="true"><span>↓</span></div>}
               <button
                 type="button"
@@ -492,6 +518,7 @@ export function TopLevelGraph({
           );
         })}
       </div>}
+      </div>
       </section>
     </div>
     {selectedPhase && selectedMilestone && (

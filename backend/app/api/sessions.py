@@ -177,6 +177,7 @@ def build_router(
                 }
                 and result.state.current_spec_status
                 in {"HUMAN_REVIEW", "REWORK", "NEED_CLARIFICATION"}
+                and not result.state.review_findings
             ):
                 try:
                     await prototype_service.ensure_for_project(

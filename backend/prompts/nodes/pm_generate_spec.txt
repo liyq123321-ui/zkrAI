@@ -12,6 +12,15 @@ update all related acceptance references. Otherwise link to an existing matching
 requirement. Complete related omissions without expanding the agreed scope or
 inventing approvals, evidence, URLs, or completed implementation work.
 
+Every permissions_and_responsibilities entry must identify an explicit accountable
+role or actor and its concrete duty. Use actor-first statements such as "Project
+Manager approves scope changes", "QA verifies acceptance results", "Release Manager
+approves release requests", or "运维负责人负责生产故障响应". Never return actorless
+obligations such as "Approval is required", commands such as "Approve the release",
+Chinese phrases such as "负责审批发布申请" without a subject, or TBD/unknown/unassigned
+actors. When a person's identity is not established by evidence, name the narrowest
+ordinary role that owns the duty; do not invent a person, approval, or completed act.
+
 If clarification history contains decision `SKIP_CLARIFICATION` with assumption
 policy `AGENT_DISCRETION`, do not ask more questions. Resolve ambiguity with the
 most conservative reasonable assumptions, list every material assumption in the
