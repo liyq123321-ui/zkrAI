@@ -43,6 +43,9 @@ from app.services.gitea import GiteaClient, GiteaError, GiteaThread
 from app.services.drawio_diagrams import diagram_anchor, normalize_agent_table_layout
 
 
+READ_ONLY_TEMPLATE_SOURCE = "PRD_TEMPLATE_READ_ONLY"
+
+
 class PrdServiceError(RuntimeError):
     """A stable, public-safe PRD review service failure."""
 
@@ -148,15 +151,37 @@ class PrdReviewService:
             raise PrdForbidden("actor is not authorized for PRD review")
 
     async def latest(self, wi: str) -> PrdDocumentRead:
+        with self._session_factory() as db:
+            _, project, current_spec = self._root_context(db, wi)
+            snapshot = (
+                db.query(PrdVersion)
+                .join(SpecVersion, SpecVersion.id == PrdVersion.spec_version_id)
+                .filter(
+                    PrdVersion.wi == wi,
+                    SpecVersion.project_id == project.id,
+                    SpecVersion.generation_source == READ_ONLY_TEMPLATE_SOURCE,
+                    SpecVersion.revision > current_spec.revision,
+                )
+                .order_by(PrdVersion.version.desc())
+                .first()
+            )
+        if snapshot is not None:
+            return await self._preflight_binding(snapshot)
         binding = await self._ensure_current_binding(wi)
         return await self._preflight_binding(binding)
 
     async def version(self, wi: str, number: int) -> PrdDocumentRead:
-        await self._ensure_current_binding(wi)
         with self._session_factory() as db:
             binding = db.get(PrdVersion, (wi, number))
             if binding is None:
                 raise PrdNotFound("PRD version not found")
+            spec = db.get(SpecVersion, binding.spec_version_id)
+            is_snapshot = (
+                spec is not None
+                and spec.generation_source == READ_ONLY_TEMPLATE_SOURCE
+            )
+        if not is_snapshot:
+            await self._ensure_current_binding(wi)
         return await self._preflight_binding(binding)
 
     async def versions(self, wi: str) -> list[PrdDocumentRead]:
@@ -173,18 +198,26 @@ class PrdReviewService:
     async def prototype_html(self, wi: str, number: int) -> str:
         """Return only a validated prototype bound to the requested PRD version."""
 
-        await self._ensure_current_binding(wi)
         with self._session_factory() as db:
             binding = db.get(PrdVersion, (wi, number))
             spec = db.get(SpecVersion, binding.spec_version_id) if binding else None
+            is_snapshot = (
+                spec is not None
+                and spec.generation_source == READ_ONLY_TEMPLATE_SOURCE
+            )
+        if binding is None or spec is None:
+            raise PrdNotFound("PRD version not found")
+        if is_snapshot:
+            await self._preflight_binding(binding)
+        else:
+            await self._ensure_current_binding(wi)
+        with self._session_factory() as db:
             prototype = (
                 db.query(PrdPrototype)
                 .filter_by(spec_version_id=spec.id)
                 .one_or_none()
-                if spec is not None
-                else None
             )
-            if binding is None or spec is None or prototype is None:
+            if prototype is None:
                 raise PrdNotFound("PRD HTML prototype was not found")
             if (
                 prototype.project_id != spec.project_id
@@ -540,28 +573,47 @@ class PrdReviewService:
         with self._session_factory() as db:
             spec = db.get(SpecVersion, binding.spec_version_id)
             item = db.get(WorkItem, binding.wi)
+            project = db.get(Project, item.project_id) if item is not None else None
             if (
                 spec is None
                 or item is None
+                or project is None
                 or item.kind != WorkItemKind.ROOT.value
                 or item.parent_id is not None
                 or item.project_id != spec.project_id
             ):
                 raise PrdContentConflict("PRD binding has no matching root Spec")
-            self._validate_binding(binding, binding.wi, spec)
+            workflow_spec = (
+                db.get(SpecVersion, project.current_spec_version_id)
+                if project.current_spec_version_id
+                else None
+            )
+            if workflow_spec is None or workflow_spec.project_id != project.id:
+                raise PrdContentConflict("Project has no matching workflow Spec")
+            read_only = (
+                spec.generation_source == READ_ONLY_TEMPLATE_SOURCE
+                and spec.id != workflow_spec.id
+            )
+            if read_only:
+                self._validate_read_only_binding(binding, binding.wi, spec)
+            else:
+                self._validate_binding(binding, binding.wi, spec)
             diagrams = self._bound_diagrams(binding, spec)
             prototype = self._bound_prototype(db, binding, spec)
-        external = await self._gitea.get_file(
-            binding.filename,
-            self._required_commit(binding),
-        )
-        content = _normalized_markdown(external.content)
-        if (
-            external.path != binding.filename
-            or content != _normalized_markdown(spec.markdown)
-            or _markdown_hash(content) != binding.content_hash
-        ):
-            raise PrdContentConflict("Gitea PRD content conflicts with its binding")
+        if read_only:
+            content = _normalized_markdown(spec.markdown)
+        else:
+            external = await self._gitea.get_file(
+                binding.filename,
+                self._required_commit(binding),
+            )
+            content = _normalized_markdown(external.content)
+            if (
+                external.path != binding.filename
+                or content != _normalized_markdown(spec.markdown)
+                or _markdown_hash(content) != binding.content_hash
+            ):
+                raise PrdContentConflict("Gitea PRD content conflicts with its binding")
         return PrdDocumentRead(
             wi=binding.wi,
             version=binding.version,
@@ -572,6 +624,8 @@ class PrdReviewService:
             change_summary=binding.change_summary,
             er_diagrams=diagrams,
             prototype=prototype,
+            read_only=read_only,
+            workflow_version=workflow_spec.revision,
         )
 
     @staticmethod
@@ -752,6 +806,29 @@ class PrdReviewService:
             or binding.pr_number <= 0
         ):
             raise PrdContentConflict("PRD binding conflicts with its Spec version")
+
+    @staticmethod
+    def _validate_read_only_binding(
+        binding: PrdVersion, wi: str, spec: SpecVersion
+    ) -> None:
+        """Validate a database-backed display snapshot without requiring Gitea."""
+
+        expected_filename = f"docs/prd/{wi}/v{spec.revision}.md"
+        if (
+            spec.generation_source != READ_ONLY_TEMPLATE_SOURCE
+            or not _valid_spec_content_hash(spec)
+            or binding.wi != wi
+            or binding.version != spec.revision
+            or binding.filename != expected_filename
+            or binding.content_hash != _markdown_hash(spec.markdown)
+            or binding.spec_content_hash != spec.content_hash
+            or binding.commit_sha is not None
+            or not isinstance(binding.pr_number, int)
+            or binding.pr_number <= 0
+        ):
+            raise PrdContentConflict(
+                "Read-only PRD binding conflicts with its Spec version"
+            )
 
     async def _check_capabilities(self) -> None:
         checker = getattr(self._gitea, "check_capabilities", None)

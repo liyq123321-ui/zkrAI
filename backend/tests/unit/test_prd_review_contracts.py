@@ -79,6 +79,7 @@ def test_public_reply_cannot_forge_agent_author_type():
                 "commit_sha": "a" * 40,
                 "content": "# PRD",
                 "change_summary": "Initial version",
+                "workflow_version": 1,
             },
         ),
         (
@@ -130,4 +131,3 @@ def test_text_fields_are_trimmed_before_exposing_contracts():
     assert request.text == "Add an owner."
     assert response.path == "docs/prd/root-1/v1.md"
     assert response.body == "Clarify ownership."
-

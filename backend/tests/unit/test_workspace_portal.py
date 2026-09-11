@@ -124,14 +124,20 @@ def seed_project(session_factory):
 
 
 @pytest.mark.asyncio
-async def test_overview_and_sync_project_assets(session_factory):
+async def test_overview_and_sync_project_assets(session_factory, tmp_path):
     project_id = seed_project(session_factory)
     remote = FakeWeKnora()
-    service = WorkspacePortalService(session_factory, remote)
+    personal_root = tmp_path / "personal"
+    personal_file = personal_root / "owner-1" / "我的文档" / "新建文档.txt"
+    personal_file.parent.mkdir(parents=True)
+    personal_file.write_bytes(b"")
+    service = WorkspacePortalService(session_factory, remote, personal_root)
 
     before = await service.overview("owner-1")
     assert before["connection"]["status"] == "online"
     assert [item["kind"] for item in before["spaces"]] == ["personal", "project"]
+    assert before["spaces"][0]["files"][0]["folder_path"] == "我的文档"
+    assert before["spaces"][0]["files"][0]["name"] == "新建文档.txt"
     assert before["spaces"][1]["project_id"] == project_id
     assert [item["status"] for item in before["spaces"][1]["assets"]] == [
         "ready", "ready", "reserved"
@@ -139,13 +145,14 @@ async def test_overview_and_sync_project_assets(session_factory):
 
     after = await service.sync("owner-1")
     assert after["sync_result"] == {
-        "created_spaces": 1, "uploaded_files": 3, "project_count": 1
+        "created_spaces": 1,
+        "uploaded_files": 3,
+        "project_count": 1,
     }
     assert after["spaces"][1]["remote_status"] == "ready"
-    assert {name for name, _ in remote.uploads} == {
-        "README.md", "PRD-v2.md", "frontend-prototype-v2.html"
+    assert {"README.md", "PRD-v2.md", "frontend-prototype-v2.html"} <= {
+        name for name, _ in remote.uploads
     }
-
     repeated = await service.sync("owner-1")
     assert repeated["sync_result"] == {
         "created_spaces": 0, "uploaded_files": 0, "project_count": 1

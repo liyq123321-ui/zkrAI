@@ -108,6 +108,8 @@ class PrdDocumentRead(BaseModel):
     change_summary: str | None = Field(default=None, min_length=1, max_length=8000)
     er_diagrams: list[PrdErDiagramRead] = Field(default_factory=list, max_length=8)
     prototype: PrdPrototypeRead | None = None
+    read_only: bool = False
+    workflow_version: int = Field(gt=0)
 
     _normalize_identifiers = _plain_text_validator("wi", max_length=255)
     _normalize_filename = _plain_text_validator("filename", max_length=4096)

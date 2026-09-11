@@ -7,7 +7,14 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.database.models import CommentIndex, PrdVersion, Project, SpecVersion, WorkItem
+from app.database.models import (
+    CommentIndex,
+    PrdPrototype,
+    PrdVersion,
+    Project,
+    SpecVersion,
+    WorkItem,
+)
 from app.domain.types import ProjectPhase, SpecStatus, WorkItemKind
 from pydantic import ValidationError
 
@@ -29,6 +36,7 @@ from app.services.gitea import (
     GiteaThread,
 )
 from app.services.prd_review import (
+    READ_ONLY_TEMPLATE_SOURCE,
     PrdContentConflict,
     PrdForbidden,
     PrdNotFound,
@@ -624,6 +632,80 @@ async def test_document_queries_read_authoritative_gitea_content(
 
     with pytest.raises(PrdNotFound):
         await service.version(root.id, 2)
+
+
+@pytest.mark.asyncio
+async def test_latest_prefers_database_backed_read_only_template_snapshot(
+    session_factory, db_session
+):
+    """A display-only rewrite must not replace the workflow Spec or require Gitea."""
+
+    project, current_spec, root, _ = _review_project(db_session)
+    gitea = FakeGitea()
+    service = PrdReviewService(session_factory, gitea)
+    current_binding = await service.ensure_current_binding(root.id)
+    snapshot_markdown = "# Formal PRD\n\nTemplate-shaped display document.\n"
+    snapshot = SpecVersion(
+        id="spec-prd-display-2",
+        project_id=project.id,
+        revision=2,
+        content=current_spec.content,
+        markdown=snapshot_markdown,
+        generation_source=READ_ONLY_TEMPLATE_SOURCE,
+        input_refs=["template:ali", "template:tencent"],
+        generator_agent_session_id="template-import",
+        generator_call_id="template-import-project-prd-v2",
+        parent_version_id=current_spec.id,
+        change_summary="Template rewrite for read-only display",
+        content_hash=_markdown_hash(snapshot_markdown),
+        status=SpecStatus.DRAFT.value,
+    )
+    db_session.add(snapshot)
+    db_session.add(
+        PrdVersion(
+            wi=root.id,
+            version=2,
+            spec_version_id=snapshot.id,
+            filename=f"docs/prd/{root.id}/v2.md",
+            pr_number=current_binding.pr_number,
+            commit_sha=None,
+            content_hash=_markdown_hash(snapshot_markdown),
+            spec_content_hash=snapshot.content_hash,
+            change_summary=snapshot.change_summary,
+        )
+    )
+    prototype_html = "<!doctype html><title>Mapped prototype</title>"
+    db_session.add(
+        PrdPrototype(
+            id="prototype-prd-display-2",
+            project_id=project.id,
+            spec_version_id=snapshot.id,
+            generator_agent_session_id="template-import",
+            generator_call_id="template-import-project-prd-v2-prototype",
+            status="ready",
+            title="Mapped prototype",
+            html=prototype_html,
+            content_hash=hashlib.sha256(prototype_html.encode("utf-8")).hexdigest(),
+            generation_summary="Mapped from an existing prototype without regeneration.",
+        )
+    )
+    db_session.commit()
+    gitea.calls.clear()
+
+    latest = await service.latest(root.id)
+    specific = await service.version(root.id, 2)
+
+    assert latest == specific
+    assert latest.version == 2
+    assert latest.content == snapshot_markdown
+    assert latest.read_only is True
+    assert latest.workflow_version == 1
+    assert latest.prototype is not None
+    assert latest.prototype.status == "ready"
+    assert latest.prototype.content_url == f"/prd/{root.id}/v/2/prototype"
+    assert await service.prototype_html(root.id, 2) == prototype_html
+    assert project.current_spec_version_id == current_spec.id
+    assert gitea.calls == []
 
 
 def _thread(

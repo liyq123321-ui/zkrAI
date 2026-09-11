@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -14,6 +17,7 @@ from app.services.weknora import WeKnoraClient, WeKnoraError, WeKnoraSession
 
 PROJECT_MARKER = "firstFlight-project:"
 PROJECT_KB_NAME = "firstFlight 项目资产"
+DEFAULT_PERSONAL_ROOT = Path(__file__).resolve().parents[2] / "data" / "personal_workspaces"
 
 
 def _plain(value: Any, fallback: str = "") -> str:
@@ -44,9 +48,36 @@ class WorkspacePortalService:
         self,
         session_factory: Callable[[], Session],
         weknora: WeKnoraClient,
+        personal_root: Path | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._weknora = weknora
+        self._personal_root = personal_root or DEFAULT_PERSONAL_ROOT
+
+    def _personal_files(self, actor_id: str) -> list[dict[str, Any]]:
+        safe_actor = re.sub(r"[^A-Za-z0-9_.-]", "_", actor_id).strip(".")
+        actor_root = self._personal_root / (safe_actor or "anonymous")
+        if not actor_root.is_dir():
+            return []
+        files: list[dict[str, Any]] = []
+        for path in sorted(actor_root.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(actor_root)
+            folder = relative.parent.as_posix()
+            stat = path.stat()
+            files.append({
+                "id": sha256(relative.as_posix().encode("utf-8")).hexdigest()[:24],
+                "name": path.name,
+                "folder_path": "" if folder == "." else folder,
+                "file_type": path.suffix.lstrip(".") or "file",
+                "parse_status": "ready",
+                "chunk_count": 0,
+                "updated_at": datetime.fromtimestamp(
+                    stat.st_mtime, timezone.utc
+                ).isoformat(),
+            })
+        return files
 
     def _projects(self, actor_id: str) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -243,7 +274,7 @@ class WorkspacePortalService:
                 "tenant_id": tenant_id,
                 "remote_status": "ready",
                 "knowledge_base_id": None,
-                "files": [],
+                "files": self._personal_files(actor_id),
                 "assets": [
                     {"kind": "knowledge", "name": f"{len(knowledge_bases)} 个知识库", "folder": "knowledge", "status": "ready", "revision": None, "source_url": None},
                     {"kind": "skill", "name": f"{len(skills)} 个技能", "folder": "skills", "status": "ready", "revision": None, "source_url": None},

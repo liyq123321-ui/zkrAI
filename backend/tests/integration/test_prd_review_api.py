@@ -281,8 +281,10 @@ def test_document_endpoints_return_only_the_prd_document_contract(prd_api_client
         "content",
         "change_summary",
         "er_diagrams",
-        "prototype",
-    }
+            "prototype",
+            "read_only",
+            "workflow_version",
+        }
     assert latest.status_code == 200
     assert latest.json()["content"] == "# PRD\n\nA first version.\n"
     assert latest.json()["er_diagrams"] == []
@@ -336,6 +338,8 @@ def test_openapi_exposes_diagram_reads_and_revision_endpoint(prd_api_client):
 
     assert "/prd/{wi}/diagrams/{diagram_id}/revisions" in schema["paths"]
     assert "er_diagrams" in schema["components"]["schemas"]["PrdDocumentRead"]["properties"]
+    assert "read_only" in schema["components"]["schemas"]["PrdDocumentRead"]["properties"]
+    assert "workflow_version" in schema["components"]["schemas"]["PrdDocumentRead"]["properties"]
     assert "PrdErDiagramRead" in schema["components"]["schemas"]
     assert "/prd/{wi}/v/{number}/prototype" in schema["paths"]
     assert "prototype" in schema["components"]["schemas"]["PrdDocumentRead"]["properties"]
