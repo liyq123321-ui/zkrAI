@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -7,10 +7,13 @@ import {
   FolderLock,
   ListChecks,
   Network,
+  Pencil,
+  Plus,
   ShieldCheck,
   TestTube2,
   UserRound,
   Wrench,
+  X,
 } from 'lucide-react';
 import type { AgentSpecDto, SpecVersionDto, WorkItemDto } from './dto';
 import { AgentSpecDetails } from './AgentSpecDetails';
@@ -55,9 +58,21 @@ function text(value: unknown, fallback = '未提供'): string {
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+    ? [...new Set(value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()))]
     : [];
 }
+
+const skillSuggestions = [
+  'requirements analysis', 'traceability', 'solution design', 'frontend development',
+  'backend development', 'test design', 'security review', 'technical writing',
+];
+const toolSuggestions = [
+  '文档编辑器', '版本控制', '代码编辑器', '终端', '单元测试框架', 'API 调试工具',
+  '浏览器开发者工具', '静态检查工具',
+];
+const pathSuggestions = [
+  '项目文档目录', '前端源码目录', '后端源码目录', '测试目录', '配置目录', '输出目录',
+];
 
 function StructuredValue({ value }: { value: unknown }) {
   if (Array.isArray(value)) {
@@ -102,19 +117,92 @@ function SpecSection({ title, icon, children }: { title: string; icon: ReactNode
   );
 }
 
-function MetaCard({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
+function MetaCard({ title, icon, action, children }: { title: string; icon: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
     <section className="ff-spec-meta-card">
-      <header>{icon}<h3>{title}</h3></header>
+      <header>{icon}<h3>{title}</h3>{action}</header>
       <div>{children}</div>
     </section>
   );
+}
+
+function EditableRecommendations({ label, values, suggestions, editing, onChange }: {
+  label: string;
+  values: string[];
+  suggestions: string[];
+  editing: boolean;
+  onChange?: (values: string[]) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const listId = useId();
+  const candidate = draft.trim();
+  const hasCandidate = values.some((value) => value.toLocaleLowerCase() === candidate.toLocaleLowerCase());
+  const add = () => {
+    if (!onChange || !candidate || hasCandidate) return;
+    onChange([...values, candidate]);
+    setDraft('');
+  };
+  return <div className="ff-editable-recommendations">
+    {values.length ? <div className="ff-spec-chips">
+      {values.map((value) => <span className="ff-editable-chip" key={value}>
+        {value}
+        {editing && onChange && <button type="button" aria-label={`删除${label}：${value}`} onClick={() => onChange(values.filter((item) => item !== value))}><X aria-hidden="true" /></button>}
+      </span>)}
+    </div> : <p className="ff-editable-recommendations-empty">尚未添加{label}</p>}
+    {editing && onChange && <>
+      <div className="ff-recommendation-add">
+        <input
+          value={draft}
+          list={listId}
+          aria-label={`新增${label}`}
+          placeholder="选择或输入自定义内容"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              add();
+            }
+          }}
+        />
+        <datalist id={listId}>{suggestions.filter((option) => !values.includes(option)).map((option) => <option key={option} value={option} />)}</datalist>
+        <button type="button" disabled={!candidate || hasCandidate} onClick={add}><Plus aria-hidden="true" />添加</button>
+      </div>
+      <small>默认推荐来自 Agent Spec，当前修改仅保留在本页预览。</small>
+    </>}
+  </div>;
+}
+
+function EditableRecommendationCard({ title, icon, values, suggestions, onChange }: {
+  title: string;
+  icon: ReactNode;
+  values: string[];
+  suggestions: string[];
+  onChange?: (values: string[]) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const action = onChange
+    ? <button
+        type="button"
+        className="ff-meta-edit-button"
+        aria-label={editing ? `完成编辑${title}` : `编辑${title}`}
+        onClick={() => setEditing((current) => !current)}
+      >
+        {!editing && <Pencil aria-hidden="true" />}{editing ? '完成' : '编辑'}
+      </button>
+    : undefined;
+
+  return <MetaCard title={title} icon={icon} action={action}>
+    <EditableRecommendations label={title} values={values} suggestions={suggestions} editing={editing} onChange={onChange} />
+  </MetaCard>;
 }
 
 export interface WorkItemPreview {
   draft: string;
   // Undefined preserves the server suggestion; empty explicitly means unassigned.
   assigneeId?: string;
+  requiredSkills?: string[];
+  allowedTools?: string[];
+  allowedPaths?: string[];
 }
 
 export function AgentSpecDetail({ item, agentSpecs, sourceSpecs = [], employees = [], preview = { draft: '' }, onPreviewChange, workItems = [], onOpenWorkItem }: {
@@ -137,9 +225,12 @@ export function AgentSpecDetail({ item, agentSpecs, sourceSpecs = [], employees 
     ? [{ id: assigneeId, name: assigneeId }, ...employees]
     : employees;
   const objective = text(content.objective, item.objective || item.description || '未提供任务目标');
-  const skills = stringList(content.required_skills).length > 0
+  const defaultSkills = stringList(content.required_skills).length > 0
     ? stringList(content.required_skills)
     : item.required_skills ?? [];
+  const skills = preview.requiredSkills ?? defaultSkills;
+  const tools = preview.allowedTools ?? stringList(content.allowed_tools);
+  const paths = preview.allowedPaths ?? stringList(content.allowed_paths);
   const dependencies = primary?.dependency_work_item_ids?.length
     ? primary.dependency_work_item_ids
     : item.dependency_work_item_ids;
@@ -223,9 +314,9 @@ export function AgentSpecDetail({ item, agentSpecs, sourceSpecs = [], employees 
               return <button key={id} type="button" aria-label={`打开依赖任务：${label}`} disabled={!dependency || !onOpenWorkItem} onClick={() => onOpenWorkItem?.(id)}><span>{label}<ArrowUpRight aria-hidden="true" /></span><small>#{id}</small></button>;
             })}</div> : <p>无前置依赖</p>}
           </MetaCard>
-          {skills.length > 0 && <MetaCard title="所需技能" icon={<Wrench aria-hidden="true" />}><div className="ff-spec-chips">{skills.map((skill) => <span key={skill}>{skill}</span>)}</div></MetaCard>}
-          {present(content.allowed_tools) && <MetaCard title="允许工具" icon={<TestTube2 aria-hidden="true" />}><StructuredValue value={content.allowed_tools} /></MetaCard>}
-          {present(content.allowed_paths) && <MetaCard title="允许路径" icon={<FolderLock aria-hidden="true" />}><StructuredValue value={content.allowed_paths} /></MetaCard>}
+          <EditableRecommendationCard title="所需技能" icon={<Wrench aria-hidden="true" />} values={skills} suggestions={skillSuggestions} onChange={onPreviewChange ? (values) => onPreviewChange({ requiredSkills: values }) : undefined} />
+          <EditableRecommendationCard title="允许工具" icon={<TestTube2 aria-hidden="true" />} values={tools} suggestions={toolSuggestions} onChange={onPreviewChange ? (values) => onPreviewChange({ allowedTools: values }) : undefined} />
+          <EditableRecommendationCard title="允许路径" icon={<FolderLock aria-hidden="true" />} values={paths} suggestions={pathSuggestions} onChange={onPreviewChange ? (values) => onPreviewChange({ allowedPaths: values }) : undefined} />
         </aside>
       </div>}
 

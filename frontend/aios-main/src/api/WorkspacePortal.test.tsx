@@ -15,7 +15,10 @@ const overview = {
     {
       kind: 'personal', project_id: null, session_id: null, name: 'owner-1 的个人空间',
       description: '个人知识入口', phase: 'ACTIVE', tenant_id: 10000, remote_status: 'ready',
-      knowledge_base_id: null, files: [], assets: [
+      knowledge_base_id: '44444444-4444-4444-8444-444444444444', files: [
+        { id: 'personal-doc-1', name: '新建文档.md', folder_path: '我的文档', file_type: 'md', parse_status: 'completed', chunk_count: 0, updated_at: null },
+        { id: 'personal-code-1', name: '代码草稿.md', folder_path: 'Code', file_type: 'md', parse_status: 'completed', chunk_count: 0, updated_at: null },
+      ], assets: [
         { kind: 'knowledge', name: '9 个知识库', folder: 'knowledge', status: 'ready', revision: null, source_url: null },
       ], created_at: '2026-09-11T00:00:00Z', storage_used: 20, storage_quota: 100,
     },
@@ -58,6 +61,10 @@ describe('WorkspacePortal', () => {
     render(<WorkspacePortal />);
 
     expect((await screen.findAllByText('owner-1 的个人空间')).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: /我的文档/ }));
+    expect(await screen.findByText('新建文档.md')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '返回上一级' }));
+    expect(screen.getByRole('button', { name: /Code/ })).toBeTruthy();
     fireEvent.click(screen.getByText('项目管理系统'));
     expect(screen.getByText('docs/PRD-v9.md')).toBeTruthy();
     expect(screen.getByText('当前项目尚未生成此文件')).toBeTruthy();

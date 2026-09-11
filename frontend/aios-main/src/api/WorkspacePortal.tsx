@@ -79,6 +79,38 @@ function FileRows({ files, empty }: { files: WorkspaceFile[]; empty: string }) {
   ))}</div>;
 }
 
+function PersonalDirectory({ files }: { files: WorkspaceFile[] }) {
+  const [currentPath, setCurrentPath] = useState('');
+  const prefix = currentPath ? `${currentPath}/` : '';
+  const folders = Array.from(new Set(files.flatMap((item) => {
+    const path = item.folder_path.trim().replace(/^\/+|\/+$/g, '');
+    if (!path || (currentPath && !path.startsWith(prefix))) return [];
+    const remainder = currentPath ? path.slice(prefix.length) : path;
+    const child = remainder.split('/')[0];
+    return child && path !== currentPath ? [child] : [];
+  }))).sort((left, right) => left.localeCompare(right, 'zh-CN'));
+  const visibleFiles = files.filter((item) =>
+    item.folder_path.trim().replace(/^\/+|\/+$/g, '') === currentPath);
+  const crumbs = currentPath ? currentPath.split('/') : [];
+
+  return <div className="wk-personal-directory">
+    <div className="wk-folder-toolbar">
+      <div>
+        {currentPath && <button type="button" aria-label="返回上一级" onClick={() => setCurrentPath(crumbs.slice(0, -1).join('/'))}><ArrowLeft aria-hidden="true" /></button>}
+        <button type="button" className={!currentPath ? 'is-current' : ''} onClick={() => setCurrentPath('')}>个人空间</button>
+        {crumbs.map((crumb, index) => <span key={`${crumb}-${index}`}><ChevronRight aria-hidden="true" /><button type="button" className={index === crumbs.length - 1 ? 'is-current' : ''} onClick={() => setCurrentPath(crumbs.slice(0, index + 1).join('/'))}>{crumb}</button></span>)}
+      </div>
+      <small>{folders.length} 个文件夹 · {visibleFiles.length} 个文件</small>
+    </div>
+    <div className="wk-folder-rows">
+      {folders.map((folder) => <button type="button" key={folder} onClick={() => setCurrentPath(`${prefix}${folder}`)}>
+        <span><Folder aria-hidden="true" /></span><div><strong>{folder}</strong><small>文件夹</small></div><ChevronRight aria-hidden="true" />
+      </button>)}
+    </div>
+    <FileRows files={visibleFiles} empty={folders.length ? '选择一个文件夹查看内容' : '这个文件夹当前没有文件'} />
+  </div>;
+}
+
 export function WorkspacePortal() {
   const [tab, setTab] = useState<PortalTab>('spaces');
   const [overview, setOverview] = useState<WorkspaceOverview | null>(null);
@@ -213,7 +245,9 @@ export function WorkspacePortal() {
                 {asset.source_url ? <a href={`${appConfig.apiBaseUrl}${asset.source_url}`} target="_blank" rel="noreferrer">打开<ArrowUpRight aria-hidden="true" /></a> : <i>{asset.status === 'reserved' ? 'EMPTY' : 'PENDING'}</i>}
               </div>)}
             </div>
-            {selectedSpace.files.length > 0 && <div className="wk-remote-files"><h3>远端已收录文件</h3><FileRows files={selectedSpace.files} empty="尚未同步文件" /></div>}
+            {selectedSpace.kind === 'personal'
+              ? <PersonalDirectory files={selectedSpace.files} />
+              : selectedSpace.files.length > 0 && <div className="wk-remote-files"><h3>远端已收录文件</h3><FileRows files={selectedSpace.files} empty="尚未同步文件" /></div>}
             {selectedSpace.kind === 'personal' && <div className="wk-storage"><HardDrive aria-hidden="true" /><div><strong>{formatBytes(selectedSpace.storage_used)} / {formatBytes(selectedSpace.storage_quota)}</strong><span><i style={{ width: `${Math.min(100, (selectedSpace.storage_used || 0) / Math.max(1, selectedSpace.storage_quota || 1) * 100)}%` }} /></span><small>远端存储用量</small></div></div>}
           </section>}
         </div>}

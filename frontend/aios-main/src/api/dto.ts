@@ -249,6 +249,8 @@ export interface PrdDocumentDto {
   change_summary: string | null;
   er_diagrams: PrdErDiagramDto[];
   prototype?: PrdPrototypeDto | null;
+  read_only: boolean;
+  workflow_version: number;
 }
 
 export interface PrdPrototypeDto {

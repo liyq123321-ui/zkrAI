@@ -10,6 +10,7 @@ import {
   getPrdDiff,
   getReviewTask,
   listPrdComments,
+  listPrdVersions,
   publishPrdReview,
   publishDiagramRevision,
   replyPrdComment,
@@ -30,7 +31,7 @@ import { ReviewFindings } from './ReviewFindings';
 import { nextPrdConfirmationStep, reviewTaskRecoveryAction } from './workflowUi';
 
 type Draft = { id: string; line: number; text: string; anchor: string; status: 'ready' | 'sending' | 'done' | 'error'; error?: string };
-type ReviewData = { document: PrdDocumentDto | null; commentable: PrdCommentableLinesDto | null; diff: PrdDiffDto | null; comments: PrdCommentDto[]; commentsAvailable: boolean; versionCount: number };
+type ReviewData = { document: PrdDocumentDto | null; versions: PrdDocumentDto[]; commentable: PrdCommentableLinesDto | null; diff: PrdDiffDto | null; comments: PrdCommentDto[]; commentsAvailable: boolean };
 
 const taskKey = (wi: string) => `firstflight.prd-task.${wi}`;
 const diagramTaskDraftKey = (wi: string) => `firstflight.drawio-task-draft.${wi}`;
@@ -61,6 +62,7 @@ export function PrdReviewPanel({
   onResourcesChanged?: () => Promise<void>;
 }) {
   const [data, setData] = useState<ReviewData | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [selectedLine, setSelectedLine] = useState<number | null>(null);
   const [draftText, setDraftText] = useState('');
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -80,30 +82,63 @@ export function PrdReviewPanel({
     setReviewReady(false);
     setFallbackConfirmed(false);
     setError(null);
-    const [document, commentable, comments, diff] = await Promise.allSettled([
-      getLatestPrd(wi, signal), getCommentableLines(wi, signal),
-      listPrdComments(wi, signal), getPrdDiff(wi, signal),
+    const document = await getLatestPrd(wi, signal).then(
+      (value) => ({ status: 'fulfilled' as const, value }),
+      (reason) => ({ status: 'rejected' as const, reason }),
+    );
+    if (signal?.aborted) return;
+    const currentDocument = document.status === 'fulfilled' ? document.value : null;
+    const versions = await listPrdVersions(wi, signal).then(
+      (value) => ({ status: 'fulfilled' as const, value }),
+      (reason) => ({ status: 'rejected' as const, reason }),
+    );
+    if (signal?.aborted) return;
+    const availableVersions = versions.status === 'fulfilled'
+      ? versions.value.filter((item) => item.version !== currentDocument?.version)
+      : [];
+    if (currentDocument) {
+      availableVersions.push(currentDocument);
+    }
+    availableVersions.sort((left, right) => right.version - left.version);
+    if (currentDocument?.read_only) {
+      setData({
+        document: currentDocument,
+        versions: availableVersions,
+        commentable: null,
+        comments: [],
+        commentsAvailable: false,
+        diff: null,
+      });
+      setSelectedVersion(currentDocument.version);
+      return;
+    }
+    const [commentable, comments, diff] = await Promise.allSettled([
+      getCommentableLines(wi, signal), listPrdComments(wi, signal), getPrdDiff(wi, signal),
     ]);
     if (signal?.aborted) return;
     const next = {
-      document: document.status === 'fulfilled' ? document.value : null,
+      document: currentDocument,
+      versions: availableVersions,
       commentable: commentable.status === 'fulfilled' ? commentable.value : null,
       comments: comments.status === 'fulfilled' ? comments.value : [],
       commentsAvailable: comments.status === 'fulfilled',
-      versionCount: document.status === 'fulfilled' ? document.value.version : 0,
       diff: diff.status === 'fulfilled' ? diff.value : null,
     };
     setData(next);
+    setSelectedVersion((current) => current !== null && availableVersions.some((item) => item.version === current)
+      ? current
+      : currentDocument?.version ?? availableVersions[0]?.version ?? null);
     const failures = [document, commentable, comments, diff].filter((result) => result.status === 'rejected');
     if (failures.length) {
       setError(`批注或审核数据暂不可用，正文仍可阅读。${failure(failures[0].reason)}`);
-    } else if (next.document?.version !== next.commentable?.version
-      || next.document?.commit_sha !== next.commentable?.commit_sha
-      || next.document?.version !== next.diff?.version
-      || next.document?.commit_sha !== next.diff?.commit_sha) {
+    } else if ((next.document?.workflow_version ?? next.document?.version) !== next.commentable?.version
+      || (next.document?.workflow_version ?? next.document?.version) !== next.diff?.version) {
       setError('PRD 与 Diff 的版本不一致，请重试加载后再审核。');
     } else {
       setReviewReady(true);
+      if (versions.status === 'rejected') {
+        setError(`版本列表暂不可用，仍可阅读当前正文。${failure(versions.reason)}`);
+      }
     }
   }, [wi]);
 
@@ -182,6 +217,13 @@ export function PrdReviewPanel({
   }, [load, onResourcesChanged, task?.status, task?.task_id, wi]);
 
   const unresolved = useMemo(() => data?.comments.filter((comment) => !comment.resolved) ?? [], [data]);
+  const latestVersion = data?.document?.version ?? fallbackSpec.revision;
+  const workflowVersion = data?.document?.workflow_version ?? latestVersion;
+  const displayedDocument = data?.versions.find((item) => item.version === selectedVersion)
+    ?? data?.document
+    ?? null;
+  const displayedVersion = displayedDocument?.version ?? fallbackSpec.revision;
+  const viewingHistorical = Boolean(displayedDocument?.read_only) || displayedVersion !== workflowVersion;
   const hasReviewFindings = sessionState.review_findings.length > 0;
   const reviewTaskActive = Boolean(task && ['pending', 'processing'].includes(task.status));
   const hasPendingDrafts = drafts.some((item) => item.status !== 'done');
@@ -244,7 +286,11 @@ export function PrdReviewPanel({
     setError(null);
     try {
       const document = await generatePrdPrototype(wi, version);
-      setData((current) => current ? { ...current, document } : current);
+      setData((current) => current ? {
+        ...current,
+        document,
+        versions: current.versions.map((item) => item.version === document.version ? document : item),
+      } : current);
     } catch (reason) {
       setError(`HTML 原型生成失败。${failure(reason)}`);
     } finally {
@@ -388,8 +434,8 @@ export function PrdReviewPanel({
   }
 
   function downloadMarkdown() {
-    const content = data?.document?.content ?? fallbackSpec.markdown;
-    const version = data?.document?.version ?? fallbackSpec.revision;
+    const content = displayedDocument?.content ?? fallbackSpec.markdown;
+    const version = displayedVersion;
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
     const href = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -405,19 +451,39 @@ export function PrdReviewPanel({
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="font-medium">PRD 正文与审核</h2>
-          <p className="text-xs text-slate-500">v{data?.document?.version ?? fallbackSpec.revision} · {data?.versionCount || 1} 个版本{data?.document?.commit_sha ? ` · ${data.document.commit_sha.slice(0,8)}` : ' · 已保存的正文'}</p>
+          <p className="text-xs text-slate-500">v{displayedVersion} · {data?.versions.length || 1} 个版本{displayedDocument?.commit_sha ? ` · ${displayedDocument.commit_sha.slice(0,8)}` : ' · 已保存的正文'}</p>
         </div>
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-2 text-xs text-slate-500">
+            <span>查看版本</span>
+            <select
+              aria-label="查看 PRD 版本"
+              value={displayedVersion}
+              onChange={(event) => {
+                setSelectedVersion(Number(event.target.value));
+                setSelectedLine(null);
+                setDraftText('');
+              }}
+              className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200"
+            >
+              {(data?.versions.length ? data.versions : [displayedDocument].filter(Boolean) as PrdDocumentDto[]).map((item) => (
+                <option key={item.version} value={item.version}>
+                  v{item.version}{item.version === latestVersion ? (item.read_only ? '（最新·只读）' : '（当前）') : item.version === workflowVersion ? '（任务基线）' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
           <button type="button" onClick={downloadMarkdown} className="flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-xs"><Download className="h-3.5 w-3.5" />下载 .md</button>
           <button aria-label="刷新 PRD" onClick={() => load()}><RefreshCw className="h-4 w-4" /></button>
         </div>
       </div>
       {error && <div role="alert" className="mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-200"><p>{error}</p><button type="button" onClick={() => load()} className="mt-2 rounded border border-amber-500/40 px-3 py-1">重试加载</button></div>}
-      {diagramDraft && <div className="mb-4 rounded-lg border border-violet-500/30 bg-violet-500/10 p-3 text-sm text-violet-100"><p>有一份尚未确认写入新版 PRD 的 ER 图草稿：{diagramDraft.diagramId}（基于 v{diagramDraft.baseVersion}）。</p><div className="mt-2 flex flex-wrap gap-2"><button type="button" disabled={busy || reviewTaskActive} onClick={() => void submitDiagramDraft(diagramDraft, drawioDraftKey(diagramDraft))} className="rounded border border-violet-400/40 px-2 py-1 text-xs disabled:opacity-40">重试提交 ER 图草稿</button><button type="button" onClick={downloadDiagramDraft} className="rounded border border-violet-400/40 px-2 py-1 text-xs">下载 ER 图草稿</button></div></div>}
+      {diagramDraft && <div className="mb-4 rounded-lg border border-violet-500/30 bg-violet-500/10 p-3 text-sm text-violet-100"><p>有一份尚未确认写入新版 PRD 的 ER 图草稿：{diagramDraft.diagramId}（基于 v{diagramDraft.baseVersion}）。</p><div className="mt-2 flex flex-wrap gap-2"><button type="button" disabled={busy || reviewTaskActive || viewingHistorical} onClick={() => void submitDiagramDraft(diagramDraft, drawioDraftKey(diagramDraft))} className="rounded border border-violet-400/40 px-2 py-1 text-xs disabled:opacity-40">重试提交 ER 图草稿</button><button type="button" onClick={downloadDiagramDraft} className="rounded border border-violet-400/40 px-2 py-1 text-xs">下载 ER 图草稿</button></div></div>}
       {task && <div className="mb-4 flex items-center gap-2 rounded-lg bg-cyan-500/10 p-3 text-sm text-cyan-200">{['pending', 'processing'].includes(task.status) && <Loader2 className="h-4 w-4 animate-spin" />}发布任务：{task.status}{task.new_version ? ` · 已生成 v${task.new_version}` : ''}</div>}
 
-      <PrdDocumentViews content={data?.document?.content ?? fallbackSpec.markdown} diagrams={data?.document?.er_diagrams ?? []} prototype={data?.document?.prototype ?? null} prototypeSkippedForReview={hasReviewFindings} prototypeBusy={prototypeBusy} version={data?.document?.version ?? fallbackSpec.revision} patch={data?.diff?.patch ?? null} commentable={data?.commentable ?? null} ready={reviewReady && !busy && !workflowBusy && !reviewTaskActive} selectedLine={selectedLine} onSelectLine={setSelectedLine} onEditDiagram={data?.document?.commit_sha ? openDiagramEditor : undefined} onGeneratePrototype={() => void generatePrototype()} />
-      {selectedLine !== null && reviewReady && <div className="mb-4 flex gap-2"><input value={draftText} onChange={(event) => setDraftText(event.target.value)} placeholder={`给第 ${selectedLine} 行添加批注`} className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm" /><button aria-label="暂存批注" onClick={addDraft} className="rounded-lg bg-cyan-500 px-3 text-slate-950"><MessageSquarePlus className="h-4 w-4" /></button></div>}
+      {viewingHistorical && <div role="status" className="mb-4 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 text-sm text-cyan-100">正在只读查看 v{displayedVersion}；该版本是展示文档，不会改变 v{workflowVersion} 任务基线，也不提供批注、审核、Diff、原型编辑或重新生成；若已映射历史原型，可直接查看。</div>}
+      <PrdDocumentViews content={displayedDocument?.content ?? fallbackSpec.markdown} diagrams={displayedDocument?.er_diagrams ?? []} prototype={displayedDocument?.prototype ?? null} prototypeSkippedForReview={!viewingHistorical && hasReviewFindings} prototypeBusy={prototypeBusy} readOnly={Boolean(displayedDocument?.read_only)} version={displayedVersion} patch={viewingHistorical ? null : data?.diff?.patch ?? null} commentable={viewingHistorical ? null : data?.commentable ?? null} ready={!viewingHistorical && reviewReady && !busy && !workflowBusy && !reviewTaskActive} selectedLine={selectedLine} onSelectLine={setSelectedLine} onEditDiagram={!viewingHistorical && displayedDocument?.commit_sha ? openDiagramEditor : undefined} onGeneratePrototype={viewingHistorical ? undefined : () => void generatePrototype()} />
+      {selectedLine !== null && reviewReady && !viewingHistorical && <div className="mb-4 flex gap-2"><input value={draftText} onChange={(event) => setDraftText(event.target.value)} placeholder={`给第 ${selectedLine} 行添加批注`} className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm" /><button aria-label="暂存批注" onClick={addDraft} className="rounded-lg bg-cyan-500 px-3 text-slate-950"><MessageSquarePlus className="h-4 w-4" /></button></div>}
       {sessionState.review_findings.length > 0 && <details className="mb-4 rounded-xl border border-amber-500/20 p-4"><summary className="cursor-pointer text-sm text-amber-200">审核发现 · {sessionState.review_findings.length} 项（点击展开）</summary><div className="mt-3"><ReviewFindings findings={sessionState.review_findings} /></div></details>}
       <div className="mb-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
         <h3 className="text-sm font-medium text-cyan-100">人工审核门禁</h3>
@@ -438,19 +504,19 @@ export function PrdReviewPanel({
               <input
                 type="checkbox"
                 checked={autoResolveFindings}
-                disabled={!hasReviewFindings || busy || workflowBusy || reviewTaskActive}
+                disabled={!hasReviewFindings || busy || workflowBusy || reviewTaskActive || viewingHistorical}
                 onChange={(event) => setAutoResolveFindings(event.target.checked)}
               />
               <span>agent自动处理待审核项</span>
             </label>
-            <button disabled={busy || workflowBusy || !canPublishRevision} onClick={publish} className="mt-3 flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-xs font-medium text-white disabled:opacity-40">
+            <button disabled={busy || workflowBusy || !canPublishRevision || viewingHistorical} onClick={publish} className="mt-3 flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-xs font-medium text-white disabled:opacity-40">
               <Send className="h-3.5 w-3.5" />确认批注并生成新版 PRD
             </button>
           </div>
           <div className="rounded-lg border border-slate-700 bg-slate-950 p-3">
             <h4 className="text-xs font-medium">方向 2 · 进入任务拆分</h4>
             <p className="mt-1 min-h-10 text-xs leading-5 text-slate-500">仅确认当前已通过 Agent 自动审核的版本；该动作不会处理批注。</p>
-            <button disabled={busy || workflowBusy || !canEnterDecomposition || (!reviewReady && !fallbackConfirmed)} onClick={confirmAndDecompose} className="mt-3 flex items-center gap-2 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-medium text-slate-950 disabled:opacity-40">
+            <button disabled={busy || workflowBusy || !canEnterDecomposition || (!reviewReady && !fallbackConfirmed) || viewingHistorical} onClick={confirmAndDecompose} className="mt-3 flex items-center gap-2 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-medium text-slate-950 disabled:opacity-40">
               {(busy || workflowBusy) && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {confirmationStep === 'convert_to_work_item' ? '开始任务拆分' : '确认当前 PRD，进入任务拆分'}
             </button>
@@ -463,9 +529,9 @@ export function PrdReviewPanel({
         </div>
       </div>
 
-      {drafts.length > 0 && <div className="mt-4 space-y-2"><div className="flex items-center justify-between"><h3 className="text-sm font-medium">待提交批注</h3><button disabled={busy || !reviewReady || drafts.every((item) => item.status === 'done')} onClick={submitDrafts} className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-medium text-slate-950 disabled:opacity-50">逐条提交</button></div>{drafts.map((draft) => <div key={draft.id} className="rounded-lg border border-slate-800 p-3 text-sm"><p>第 {draft.line} 行：{draft.text}</p><p className={`mt-1 text-xs ${draft.status === 'error' ? 'text-rose-300' : draft.status === 'done' ? 'text-emerald-300' : 'text-slate-500'}`}>{draft.status}{draft.error ? ` · ${draft.error}` : ''}</p></div>)}</div>}
+      {drafts.length > 0 && <div className="mt-4 space-y-2"><div className="flex items-center justify-between"><h3 className="text-sm font-medium">待提交批注</h3><button disabled={busy || !reviewReady || viewingHistorical || drafts.every((item) => item.status === 'done')} onClick={submitDrafts} className="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-medium text-slate-950 disabled:opacity-50">逐条提交</button></div>{drafts.map((draft) => <div key={draft.id} className="rounded-lg border border-slate-800 p-3 text-sm"><p>第 {draft.line} 行：{draft.text}</p><p className={`mt-1 text-xs ${draft.status === 'error' ? 'text-rose-300' : draft.status === 'done' ? 'text-emerald-300' : 'text-slate-500'}`}>{draft.status}{draft.error ? ` · ${draft.error}` : ''}</p></div>)}</div>}
 
-      <div className="mt-5 space-y-3"><div className="flex items-center justify-between"><h3 className="text-sm font-medium">Gitea 评论（{(data?.comments.length ?? 0)}）</h3><span className="text-xs text-slate-500">{unresolved.length} 条未解决</span></div>{data?.comments.map((comment) => <article key={comment.id} className="rounded-xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-start justify-between gap-2"><div><p className="text-xs text-slate-500">第 {comment.line} 行 · {comment.author_type}</p><p className="mt-1 text-sm">{comment.body}</p></div><button disabled={busy || !reviewReady || workflowBusy || reviewTaskActive} onClick={() => setResolved(comment, !comment.resolved)} className={`rounded px-2 py-1 text-xs ${comment.resolved ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}><Check className="mr-1 inline h-3 w-3" />{comment.resolved ? '已解决，点击恢复' : '标记解决'}</button></div>{comment.replies.map((reply) => <div key={reply.id} className="mt-2 border-l border-slate-700 pl-3 text-sm"><span className="text-xs text-slate-500">{reply.author_type}</span><p>{reply.body}</p></div>)}<div className="mt-3 flex gap-2"><input value={replyText[comment.id] || ''} onChange={(event) => setReplyText((current) => ({ ...current, [comment.id]: event.target.value }))} placeholder="人工回复（不会自动解决）" className="min-w-0 flex-1 rounded border border-slate-800 bg-slate-900 px-2 py-1.5 text-xs" /><button disabled={busy || !reviewReady || workflowBusy || reviewTaskActive} onClick={() => sendReply(comment)} className="rounded bg-slate-800 px-2 text-xs">回复</button></div></article>)}</div>
+      <div className="mt-5 space-y-3"><div className="flex items-center justify-between"><h3 className="text-sm font-medium">Gitea 评论（{(data?.comments.length ?? 0)}）</h3><span className="text-xs text-slate-500">{unresolved.length} 条未解决</span></div>{data?.comments.map((comment) => <article key={comment.id} className="rounded-xl border border-slate-800 bg-slate-950 p-3"><div className="flex items-start justify-between gap-2"><div><p className="text-xs text-slate-500">第 {comment.line} 行 · {comment.author_type}</p><p className="mt-1 text-sm">{comment.body}</p></div><button disabled={busy || !reviewReady || workflowBusy || reviewTaskActive || viewingHistorical} onClick={() => setResolved(comment, !comment.resolved)} className={`rounded px-2 py-1 text-xs ${comment.resolved ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-800 text-slate-300'}`}><Check className="mr-1 inline h-3 w-3" />{comment.resolved ? '已解决，点击恢复' : '标记解决'}</button></div>{comment.replies.map((reply) => <div key={reply.id} className="mt-2 border-l border-slate-700 pl-3 text-sm"><span className="text-xs text-slate-500">{reply.author_type}</span><p>{reply.body}</p></div>)}<div className="mt-3 flex gap-2"><input value={replyText[comment.id] || ''} onChange={(event) => setReplyText((current) => ({ ...current, [comment.id]: event.target.value }))} placeholder="人工回复（不会自动解决）" className="min-w-0 flex-1 rounded border border-slate-800 bg-slate-900 px-2 py-1.5 text-xs" /><button disabled={busy || !reviewReady || workflowBusy || reviewTaskActive || viewingHistorical} onClick={() => sendReply(comment)} className="rounded bg-slate-800 px-2 text-xs">回复</button></div></article>)}</div>
     </section>
   );
 }

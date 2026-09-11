@@ -133,3 +133,34 @@ it('explains a skipped prototype and lets the user start it manually', () => {
   fireEvent.click(screen.getByRole('button', { name: '手动生成 HTML 原型' }));
   expect(generate).toHaveBeenCalledOnce();
 });
+
+it('lets a read-only formal document display a mapped HTML prototype without edit controls', () => {
+  render(
+    <PrdDocumentViews
+      content="# 正式 PRD"
+      version={5}
+      patch={null}
+      commentable={null}
+      prototype={{
+        status: 'ready',
+        title: '已有原型',
+        content_url: '/prd/root/v/5/prototype',
+        generation_summary: '映射自历史版本',
+        error_code: null,
+        error_message: null,
+      }}
+      readOnly
+      ready={false}
+      selectedLine={null}
+      onSelectLine={() => undefined}
+    />,
+  );
+
+  expect(screen.getByRole('region', { name: 'PRD 正文' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Diff' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'HTML 原型' }));
+  expect(screen.getByRole('region', { name: 'HTML 原型' })).toBeTruthy();
+  expect(screen.getByTitle('已有原型')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: '手动生成 HTML 原型' })).toBeNull();
+  expect(screen.getByText(/只读正式文档/)).toBeTruthy();
+});

@@ -1,72 +1,64 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { AgentSpecDetail } from './AgentSpecDetail';
+import { AgentSpecDetail, type WorkItemPreview } from './AgentSpecDetail';
 import type { AgentSpecDto, WorkItemDto } from './dto';
-
-const item: WorkItemDto = {
-  id: 'task-api',
-  parent_id: 'milestone-1',
-  kind: 'TASK',
-  title: '实现 Session API',
-  summary: null,
-  description: null,
-  objective: '提供受工作流保护的 API',
-  status: 'todo',
-  scope: [],
-  exclusions: [],
-  outputs: null,
-  acceptance_criteria: null,
-  required_skills: ['FastAPI'],
-  responsible_role: 'Backend Engineer',
-  suggested_assignee: 'Backend Agent',
-  dependency_work_item_ids: ['task-domain'],
-};
-
-const agentSpec: AgentSpecDto = {
-  id: 'agent-spec-1',
-  work_item_id: item.id,
-  source_spec_version_id: 'spec-v1',
-  dependency_work_item_ids: ['task-domain'],
-  created_at: '2026-09-03T00:00:00Z',
-  content: {
-    objective: '实现 Session 的创建与查询接口',
-    scope: ['实现 POST /sessions', '实现 GET /sessions/{id}'],
-    exclusions: ['不实现部署'],
-    inputs: ['已批准 PRD'],
-    outputs: [{ name: 'Session API', format: 'JSON', required: true }],
-    acceptance_criteria: [{ requirement_ids: ['FR-001'], criterion: '可创建 Session', verification_method: 'API 测试', expected_result: '返回 201' }],
-    test_obligations: ['覆盖成功和冲突场景'],
-    fixed_constraints: ['保持接口幂等'],
-    required_skills: ['FastAPI', 'SQLAlchemy'],
-    allowed_tools: ['pytest'],
-    allowed_paths: ['backend/app/api'],
-    responsible_role: 'Backend Engineer',
-    suggested_assignee: 'Backend Agent',
-    risks: ['并发写入冲突'],
-  },
-};
 
 afterEach(cleanup);
 
-describe('AgentSpecDetail', () => {
-  it('presents an Agent Spec as readable sections instead of raw JSON', () => {
-    render(<AgentSpecDetail item={item} agentSpecs={[agentSpec]} employees={[
-      {id: 'Backend Agent', name: 'Backend Agent', role: 'Project Owner'},
-    ]} />);
+const item: WorkItemDto = {
+  id: 'task-1', parent_id: 'root-1', kind: 'TASK', title: '编写需求文档', description: null,
+  summary: null, objective: '完成需求分析', status: 'todo', scope: [], exclusions: [], outputs: null,
+  acceptance_criteria: null, required_skills: null, responsible_role: '产品经理', suggested_assignee: 'owner-1',
+  dependency_work_item_ids: [],
+};
 
-    expect(screen.getAllByText('待开始')).toHaveLength(2);
-    expect(screen.getByRole('heading', { name: '工作范围' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '输入与交付物' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '验收标准与测试' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '实施边界与扩展点' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '风险与待确认事项' })).toBeTruthy();
-    expect(screen.getByText('实现 POST /sessions')).toBeTruthy();
-    expect(screen.getByText('返回 201')).toBeTruthy();
-    expect(screen.queryByText(/"objective"/)).toBeNull();
+const agentSpec: AgentSpecDto = {
+  id: 'agent-spec-1', work_item_id: 'task-1', source_spec_version_id: 'spec-1', dependency_work_item_ids: [],
+  created_at: '2026-09-11T00:00:00Z', content: {
+    required_skills: ['requirements analysis', 'traceability'],
+    allowed_tools: ['文档编辑器', '版本控制'],
+    allowed_paths: ['项目文档目录'],
+  },
+};
 
-    const agentCard = screen.getByRole('heading', { name: '责任 Agent' }).closest('section')!;
-    expect(within(agentCard).getByText('Backend Agent')).toBeTruthy();
-    expect(within(agentCard).getByText('Backend Engineer')).toBeTruthy();
+function Harness() {
+  const [preview, setPreview] = useState<WorkItemPreview>({ draft: '' });
+  return <AgentSpecDetail
+    item={item}
+    agentSpecs={[agentSpec]}
+    preview={preview}
+    onPreviewChange={(patch) => setPreview((current) => ({ ...current, ...patch }))}
+  />;
+}
+
+describe('AgentSpecDetail editable recommendations', () => {
+  it('keeps defaults and supports suggested, custom and removed entries', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: '协作与依赖' }));
+
+    expect(screen.getByText('requirements analysis')).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: '新增所需技能' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '删除所需技能：requirements analysis' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '编辑所需技能' }));
+    fireEvent.change(screen.getByRole('combobox', { name: '新增所需技能' }), { target: { value: 'test design' } });
+    fireEvent.click(screen.getAllByRole('button', { name: '添加' })[0]);
+    expect(screen.getByText('test design')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '删除所需技能：requirements analysis' }));
+    expect(screen.queryByText('requirements analysis')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '完成编辑所需技能' }));
+    expect(screen.queryByRole('combobox', { name: '新增所需技能' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑允许工具' }));
+    fireEvent.change(screen.getByRole('combobox', { name: '新增允许工具' }), { target: { value: 'API 调试工具' } });
+    fireEvent.keyDown(screen.getByRole('combobox', { name: '新增允许工具' }), { key: 'Enter' });
+    expect(screen.getByText('API 调试工具')).toBeTruthy();
+
+    const paths = within(screen.getByRole('heading', { name: '允许路径' }).closest('section')!);
+    fireEvent.click(paths.getByRole('button', { name: '编辑允许路径' }));
+    fireEvent.change(paths.getByRole('combobox', { name: '新增允许路径' }), { target: { value: '自定义交付目录' } });
+    fireEvent.click(paths.getByRole('button', { name: '添加' }));
+    expect(paths.getByText('自定义交付目录')).toBeTruthy();
   });
 });

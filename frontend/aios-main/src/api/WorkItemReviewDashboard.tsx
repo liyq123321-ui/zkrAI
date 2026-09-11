@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowUpRight, CheckCircle2, ClipboardCheck, Network, PackageCheck, ShieldCheck, TestTube2, UserRound } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, ClipboardCheck, Network, PackageCheck, ShieldCheck, TestTube2, UserRound, X } from 'lucide-react';
 import type { WorkItemDto } from './dto';
 import type { EmployeeOption } from './employeeDirectory';
 import { workItemLane, workItemStatusLabel } from './workflowUi';
@@ -18,6 +18,23 @@ function strings(value: unknown): string[] {
 
 function valueText(value: unknown, fallback = '未提供'): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
+function firstValue(source: Record<string, unknown>, keys: string[]): unknown {
+  return keys.map((key) => source[key]).find((value) => value !== null && value !== undefined && value !== '');
+}
+
+function detailText(value: unknown, fallback = '未提供'): string {
+  if (Array.isArray(value)) {
+    const items = value.filter((item) => item !== null && item !== undefined && item !== '').map((item) => (
+      typeof item === 'string' ? item : JSON.stringify(item, null, 2)
+    ));
+    return items.length ? items.join('\n') : fallback;
+  }
+  if (value !== null && typeof value === 'object') return JSON.stringify(value, null, 2);
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  const text = String(value ?? '').trim();
+  return text || fallback;
 }
 
 function requirementText(value: unknown): string {
@@ -40,6 +57,70 @@ function ReviewCheck({ id, checked, onToggle, label }: { id: string; checked: bo
   return <input type="checkbox" checked={checked} onChange={() => onToggle(id)} aria-label={label} />;
 }
 
+type AgentAcceptanceKind = 'pending' | 'passed' | 'failed';
+type AgentAcceptance = { kind: AgentAcceptanceKind; label: '尚未交付' | '验收通过' | '未通过' };
+type ContentPreview = {
+  id: string;
+  title: string;
+  status: AgentAcceptance;
+  rows: Array<{ label: string; value: unknown }>;
+  body?: unknown;
+  externalUrl?: string;
+};
+
+const acceptanceLabels: Record<AgentAcceptanceKind, AgentAcceptance['label']> = {
+  pending: '尚未交付',
+  passed: '验收通过',
+  failed: '未通过',
+};
+
+function acceptanceStatus(entry: Record<string, unknown>, itemStatus: WorkItemDto['status']): AgentAcceptance {
+  const nested = record(entry.agent_acceptance);
+  const source = firstValue(nested ?? entry, [
+    'status', 'verdict', 'result', 'agent_acceptance_status', 'acceptance_status', 'review_status',
+  ]);
+  const raw = typeof source === 'string' ? source.trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_') : '';
+  let kind: AgentAcceptanceKind;
+  if (/(未通过|驳回|失败|reject|fail|not_pass|blocked)/.test(raw)) kind = 'failed';
+  else if (/(验收通过|已通过|通过|approve|accept|pass|success|succeed|done|completed)/.test(raw)) kind = 'passed';
+  else if (/(尚未交付|未交付|待交付|待验收|pending|todo|not_delivered|in_progress|started)/.test(raw)) kind = 'pending';
+  else {
+    const taskStatus = String(itemStatus ?? '').trim().toLowerCase();
+    if (/^(done|completed|succeeded|success)$/.test(taskStatus)) kind = 'passed';
+    else if (/^(failed|blocked|rejected)$/.test(taskStatus)) kind = 'failed';
+    else kind = 'pending';
+  }
+  return { kind, label: acceptanceLabels[kind] };
+}
+
+function AgentAcceptanceStatus({ value }: { value: AgentAcceptance }) {
+  return <span className={`ff-agent-acceptance is-${value.kind}`} aria-label={`Agent 验收：${value.label}`}>{value.label}</span>;
+}
+
+function ContentLink({ preview, disabled, onOpen }: { preview: ContentPreview; disabled?: boolean; onOpen: (preview: ContentPreview) => void }) {
+  if (disabled) return <span className="ff-review-content-link is-disabled" aria-disabled="true" title="交付物尚未交付，暂无可查看内容">{preview.title}</span>;
+  return <a href={`#${preview.id}`} className="ff-review-content-link" onClick={(event) => {
+    event.preventDefault();
+    onOpen(preview);
+  }}>{preview.title}</a>;
+}
+
+function ContentPreviewPanel({ preview, onClose }: { preview: ContentPreview; onClose: () => void }) {
+  return <section id={preview.id} className="ff-review-content-preview" aria-label={`${preview.title} 详情`}>
+    <header>
+      <div><small>可复核内容</small><h3>{preview.title}</h3></div>
+      <AgentAcceptanceStatus value={preview.status} />
+      <button type="button" onClick={onClose} aria-label={`关闭 ${preview.title} 详情`}><X aria-hidden="true" /></button>
+    </header>
+    <dl>
+      {preview.rows.map((row) => <div key={row.label}><dt>{row.label}</dt><dd>{detailText(row.value)}</dd></div>)}
+    </dl>
+    {preview.body !== undefined && <div className="ff-review-content-body"><strong>交付内容</strong><pre>{detailText(preview.body, '当前历史记录只保留了交付物定义，未记录正文或文件路径。')}</pre></div>}
+    {preview.externalUrl && <a className="ff-review-external-link" href={preview.externalUrl} target="_blank" rel="noreferrer">打开原始交付物 <ArrowUpRight aria-hidden="true" />
+    </a>}
+  </section>;
+}
+
 export function WorkItemReviewDashboard({
   item,
   content,
@@ -60,6 +141,7 @@ export function WorkItemReviewDashboard({
   onOpenWorkItem?: (workItemId: string) => void;
 }) {
   const [checked, setChecked] = useState<Set<string>>(() => new Set());
+  const [contentPreview, setContentPreview] = useState<ContentPreview | null>(null);
   const outputs = records(content.outputs ?? item.outputs);
   const criteria = records(content.acceptance_criteria ?? item.acceptance_criteria);
   const obligations = strings(content.test_obligations);
@@ -77,6 +159,53 @@ export function WorkItemReviewDashboard({
     return next;
   });
   const completedChecks = useMemo(() => [...checked].filter((id) => /^(delivery|case|obligation):/.test(id)).length, [checked]);
+  const taskInputs = firstValue(content, ['test_inputs', 'inputs', 'context_refs']);
+  const outputPreview = (output: Record<string, unknown>, index: number): ContentPreview => {
+    const status = acceptanceStatus(output, item.status);
+    const reference = firstValue(output, ['path', 'file_path', 'artifact_path', 'external_ref', 'url', 'href']);
+    const externalUrl = typeof reference === 'string' && /^https?:\/\//i.test(reference) ? reference : undefined;
+    const body = firstValue(output, ['content', 'markdown', 'text', 'body', 'evidence']) ?? (status.kind === 'pending' ? undefined : '');
+    return {
+      id: `review-delivery-${item.id}-${index}`,
+      title: valueText(output.name, `交付物 ${index + 1}`),
+      status,
+      rows: [
+        { label: '格式', value: output.format },
+        { label: '交付要求', value: output.required === true ? '必须交付' : output.required === false ? '可选' : '未标记' },
+        { label: '内容引用', value: reference },
+      ],
+      body,
+      externalUrl,
+    };
+  };
+  const casePreview = (criterion: Record<string, unknown>, index: number): ContentPreview => {
+    const title = `TC-${String(index + 1).padStart(2, '0')}`;
+    const input = firstValue(criterion, ['test_input', 'test_inputs', 'input', 'inputs', 'precondition', 'preconditions']) ?? taskInputs ?? criterion.criterion;
+    return {
+      id: `review-case-${item.id}-${index}`,
+      title,
+      status: acceptanceStatus(criterion, item.status),
+      rows: [
+        { label: '输入 / 前置条件', value: input },
+        { label: '关联需求', value: requirementText(criterion.requirement_ids) },
+        { label: '验证内容', value: criterion.criterion },
+        { label: '验证方法', value: criterion.verification_method },
+        { label: '期望输出', value: criterion.expected_result },
+      ],
+    };
+  };
+  const obligationPreview = (obligation: string, index: number): ContentPreview => ({
+    id: `review-obligation-${item.id}-${index}`,
+    title: `TO-${String(index + 1).padStart(2, '0')}`,
+    status: acceptanceStatus({}, item.status),
+    rows: [
+      { label: '输入 / 前置条件', value: taskInputs },
+      { label: '关联需求', value: '测试义务' },
+      { label: '验证内容', value: obligation },
+      { label: '验证方法', value: '按 Spec 执行' },
+      { label: '期望输出', value: '留存可复核证据' },
+    ],
+  });
 
   return <div className={`ff-review-dashboard is-${template.kind}`}>
     <section className="ff-review-command-bar">
@@ -107,18 +236,29 @@ export function WorkItemReviewDashboard({
 
     <section className="ff-review-table-section">
       <header><PackageCheck aria-hidden="true" /><div><h3>交付物核验表</h3><p>逐项确认名称、格式和交付要求</p></div></header>
-      {outputs.length ? <div className="ff-review-table-scroll"><table><thead><tr><th>核验</th><th>交付物</th><th>格式</th><th>要求</th></tr></thead><tbody>
-        {outputs.map((output, index) => <tr key={index}><td><ReviewCheck id={`delivery:${index}`} checked={checked.has(`delivery:${index}`)} onToggle={toggle} label={`核验交付物 ${valueText(output.name)}`} /></td><th>{valueText(output.name, `交付物 ${index + 1}`)}</th><td>{valueText(output.format)}</td><td>{output.required === true ? '必须交付' : output.required === false ? '可选' : '未标记'}</td></tr>)}
+      {outputs.length ? <div className="ff-review-table-scroll"><table className="ff-review-delivery-table"><thead><tr><th>核验</th><th>交付物</th><th>格式</th><th>要求</th><th>Agent 验收</th></tr></thead><tbody>
+        {outputs.map((output, index) => {
+          const preview = outputPreview(output, index);
+          return <tr key={index}><td><ReviewCheck id={`delivery:${index}`} checked={checked.has(`delivery:${index}`)} onToggle={toggle} label={`核验交付物 ${valueText(output.name)}`} /></td><th><ContentLink preview={preview} disabled={preview.status.kind === 'pending'} onOpen={setContentPreview} /></th><td>{valueText(output.format)}</td><td>{output.required === true ? '必须交付' : output.required === false ? '可选' : '未标记'}</td><td><AgentAcceptanceStatus value={preview.status} /></td></tr>;
+        })}
       </tbody></table></div> : <p className="ff-review-empty">Agent Spec 尚未列出交付物。</p>}
     </section>
 
     <section className="ff-review-table-section">
       <header><TestTube2 aria-hidden="true" /><div><h3>验收与 Test Case</h3><p>将验收标准转换为可逐项复核的测试表</p></div></header>
-      {criteria.length || obligations.length ? <div className="ff-review-table-scroll"><table className="ff-review-test-table"><thead><tr><th>核验</th><th>Case</th><th>关联需求</th><th>验证内容</th><th>验证方法</th><th>预期结果</th></tr></thead><tbody>
-        {criteria.map((criterion, index) => <tr key={`case:${index}`}><td><ReviewCheck id={`case:${index}`} checked={checked.has(`case:${index}`)} onToggle={toggle} label={`核验测试用例 TC-${String(index + 1).padStart(2, '0')}`} /></td><th>TC-{String(index + 1).padStart(2, '0')}</th><td>{requirementText(criterion.requirement_ids)}</td><td>{valueText(criterion.criterion)}</td><td>{valueText(criterion.verification_method)}</td><td>{valueText(criterion.expected_result)}</td></tr>)}
-        {obligations.map((obligation, index) => <tr key={`obligation:${index}`}><td><ReviewCheck id={`obligation:${index}`} checked={checked.has(`obligation:${index}`)} onToggle={toggle} label={`核验测试义务 ${index + 1}`} /></td><th>TO-{String(index + 1).padStart(2, '0')}</th><td>测试义务</td><td>{obligation}</td><td>按 Spec 执行</td><td>留存可复核证据</td></tr>)}
+      {criteria.length || obligations.length ? <div className="ff-review-table-scroll"><table className="ff-review-test-table"><thead><tr><th>核验</th><th>Case</th><th>关联需求</th><th>验证内容</th><th>验证方法</th><th>预期结果</th><th>Agent 验收</th></tr></thead><tbody>
+        {criteria.map((criterion, index) => {
+          const preview = casePreview(criterion, index);
+          return <tr key={`case:${index}`}><td><ReviewCheck id={`case:${index}`} checked={checked.has(`case:${index}`)} onToggle={toggle} label={`核验测试用例 ${preview.title}`} /></td><th><ContentLink preview={preview} onOpen={setContentPreview} /></th><td>{requirementText(criterion.requirement_ids)}</td><td>{valueText(criterion.criterion)}</td><td>{valueText(criterion.verification_method)}</td><td>{valueText(criterion.expected_result)}</td><td><AgentAcceptanceStatus value={preview.status} /></td></tr>;
+        })}
+        {obligations.map((obligation, index) => {
+          const preview = obligationPreview(obligation, index);
+          return <tr key={`obligation:${index}`}><td><ReviewCheck id={`obligation:${index}`} checked={checked.has(`obligation:${index}`)} onToggle={toggle} label={`核验测试义务 ${index + 1}`} /></td><th><ContentLink preview={preview} onOpen={setContentPreview} /></th><td>测试义务</td><td>{obligation}</td><td>按 Spec 执行</td><td>留存可复核证据</td><td><AgentAcceptanceStatus value={preview.status} /></td></tr>;
+        })}
       </tbody></table></div> : <p className="ff-review-empty">Agent Spec 尚未列出验收标准或测试义务。</p>}
     </section>
+
+    {contentPreview && <ContentPreviewPanel preview={contentPreview} onClose={() => setContentPreview(null)} />}
 
     <div className="ff-review-bottom-grid">
       <section className="ff-review-boundary">

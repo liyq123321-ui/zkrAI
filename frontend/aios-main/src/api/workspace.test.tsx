@@ -1597,11 +1597,42 @@ describe('workspace regression', () => {
   });
 });
 
-it('uses the current PRD version as the count without downloading every historical XML payload', async () => {
+it('lists saved PRD versions and switches the rendered正文 in read-only mode', async () => {
+  const oldDocument = {
+    ...doc,
+    version: 1,
+    filename: 'docs/prd/root-1/v1.md',
+    commit_sha: 'abc123',
+    content: '# 需求说明\n这是第一版 PRD 正文。',
+  };
+  const currentDocument = {
+    ...doc,
+    version: 2,
+    filename: 'docs/prd/root-1/v2.md',
+    commit_sha: 'def456',
+    content: '# 需求说明\n这是第二版 PRD 正文。',
+  };
+  resourceOverrides = {
+    '/prd/root-1': currentDocument,
+    '/prd/root-1/versions': [oldDocument, currentDocument],
+    '/prd/root-1/diff': {wi:'root-1', version:2, filename:currentDocument.filename, commit_sha:'def456', patch:'@@ -1,2 +1,2 @@\n # 需求说明\n-这是第一版 PRD 正文。\n+这是第二版 PRD 正文。\n'},
+    '/prd/root-1/commentable-lines': {wi:'root-1', version:2, filename:currentDocument.filename, commit_sha:'def456', lines:[]},
+  };
   renderPanel();
 
-  expect(await screen.findByText(/1 个版本/)).toBeTruthy();
-  expect(getRequestCount('/prd/root-1/versions')).toBe(0);
+  expect(await screen.findByText(/2 个版本/)).toBeTruthy();
+  expect(getRequestCount('/prd/root-1/versions')).toBe(1);
+  const selector = screen.getByRole('combobox', {name:'查看 PRD 版本'});
+  expect(within(selector).getByRole('option', {name:'v2（当前）'})).toBeTruthy();
+  expect(within(selector).getByRole('option', {name:'v1'})).toBeTruthy();
+
+  fireEvent.click(screen.getByRole('button', {name:'正文'}));
+  expect(screen.getByText('这是第二版 PRD 正文。')).toBeTruthy();
+  fireEvent.change(selector, {target:{value:'1'}});
+
+  expect(await screen.findByText('这是第一版 PRD 正文。')).toBeTruthy();
+  expect(screen.getByText(/正在只读查看 v1/)).toBeTruthy();
+  expect(screen.getByRole('heading', {name:'PRD 正文 · v1 · 完整文档'})).toBeTruthy();
 });
 
 it('shows the complete rendered PRD alongside a diff that includes removed lines', async () => {

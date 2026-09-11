@@ -1,0 +1,34 @@
+{
+  "passed": false,
+  "checks": {
+    "minimum_length": false,
+    "markdown_title": true,
+    "section_count": false,
+    "all_requirement_ids_preserved": true,
+    "template_sections_present": true,
+    "no_html_diff_or_kb_markers": true
+  },
+  "characters": 2211,
+  "sections": 5,
+  "source_requirement_ids": [
+    "FR-001",
+    "FR-002",
+    "FR-003",
+    "FR-004",
+    "FR-005",
+    "FR-006",
+    "NFR-001",
+    "NFR-002"
+  ],
+  "missing_requirement_ids": [],
+  "missing_template_terms": [],
+  "forbidden_markers": [],
+  "project_id": "73ccaabe-7647-441d-9697-0228f45dfb87",
+  "project_title": "交付一个仅在本机运行的长度单位换算器。用户输入英寸长度，点击“换算”后显示对应的厘米数；点击“重置”可清空输入和结果。",
+  "source_spec_id": "8441a975-7002-4102-a915-761f6fc2cf57",
+  "source_revision": 28,
+  "candidate_revision": 29,
+  "weknora_session_id": "90e13cbe-9acb-4230-b45a-c697ceddcc5e",
+  "generation_seconds": 172.087,
+  "template_knowledge_base_id": "d029257d-d090-4b26-b6c9-3be0af0a7ac5"
+}
