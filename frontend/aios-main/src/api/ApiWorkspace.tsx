@@ -1351,6 +1351,12 @@ export function ApiWorkspace() {
     setChatOpen(true);
   }
 
+  function openSharedWorkspace() {
+    const configured = import.meta.env.VITE_WORKSPACE_URL?.trim();
+    const url = configured || new URL('/workspace', window.location.origin).toString();
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
   return (
     <div className="ff-shell">
       <nav className="ff-activity-bar" aria-label="工作区导航">
@@ -1791,6 +1797,7 @@ export function ApiWorkspace() {
             currentUserId={CURRENT_ACTOR_ID}
             loading={projectsLoading}
             onRefresh={() => { void refreshAllProjects(); }}
+            onOpenWorkspace={openSharedWorkspace}
             onViewAllProjects={() => setActiveTab('kanban')}
             onOpenProject={(sessionId) => {
               if (sessionId !== activeSessionId) switchConversation(sessionId);

@@ -41,6 +41,13 @@ class Settings:
     magic_mcp_url: str = "https://21st.dev/api/mcp"
     magic_mcp_api_key_env: str = "API_KEY_21ST"
     magic_mcp_tool_timeout_seconds: int = 300
+    weknora_base_url: str = "http://192.168.240.70:9971/api/v1"
+    weknora_web_url: str = "http://192.168.240.70:9972"
+    weknora_api_key: str | None = None
+    weknora_admin_email: str | None = None
+    weknora_admin_password: str | None = None
+    weknora_personal_tenant_id: int | None = None
+    weknora_timeout_seconds: float = 30
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -127,5 +134,22 @@ class Settings:
             magic_mcp_api_key_env=magic_mcp_api_key_env,
             magic_mcp_tool_timeout_seconds=int(
                 os.getenv("MAGIC_MCP_TOOL_TIMEOUT_SECONDS", "300")
+            ),
+            weknora_base_url=os.getenv(
+                "WEKNORA_BASE_URL", "http://192.168.240.70:9971/api/v1"
+            ).rstrip("/"),
+            weknora_web_url=os.getenv(
+                "WEKNORA_WEB_URL", "http://192.168.240.70:9972"
+            ).rstrip("/"),
+            weknora_api_key=os.getenv("WEKNORA_API_KEY") or None,
+            weknora_admin_email=os.getenv("WEKNORA_ADMIN_EMAIL") or None,
+            weknora_admin_password=os.getenv("WEKNORA_ADMIN_PASSWORD") or None,
+            weknora_personal_tenant_id=(
+                int(os.environ["WEKNORA_PERSONAL_TENANT_ID"])
+                if os.getenv("WEKNORA_PERSONAL_TENANT_ID")
+                else None
+            ),
+            weknora_timeout_seconds=float(
+                os.getenv("WEKNORA_TIMEOUT_SECONDS", "30")
             ),
         )

@@ -18,6 +18,7 @@ from app.agents.routing import RoutingAgentGateway
 from app.api.chat import build_router as build_chat_router
 from app.api.prd_review import build_router as build_prd_review_router
 from app.api.sessions import build_router as build_sessions_router
+from app.api.workspace_portal import build_router as build_workspace_router
 from app.config import Settings
 from app.database.database import SessionLocal, init_database
 from app.domain.types import CommandAction
@@ -31,6 +32,8 @@ from app.services.prd_review import PrdReviewService
 from app.services.prd_prototype import PrdPrototypeService
 from app.services.agent_backends import AgentBackendService
 from app.services.agent_runtime_events import AgentRuntimeEventStore
+from app.services.weknora import WeKnoraClient
+from app.services.workspace_portal import WorkspacePortalService
 
 
 def create_app(
@@ -39,6 +42,7 @@ def create_app(
     session_factory: Callable[[], Session] | None = None,
     gitea_client: GiteaClient | None = None,
     auto_bind_prd_review: bool | None = None,
+    workspace_service: WorkspacePortalService | None = None,
 ) -> FastAPI:
     """Build an application whose runtime dependencies can be safely injected."""
 
@@ -112,6 +116,9 @@ def create_app(
         },
     )
     command_jobs = CommandJobCoordinator(session_factory, decomposition_commands.execute)
+    workspace_service = workspace_service or WorkspacePortalService(
+        session_factory, WeKnoraClient(settings)
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -178,6 +185,9 @@ def create_app(
             actor_resolver,
             prototype_service,
         )
+    )
+    application.include_router(
+        build_workspace_router(workspace_service, actor_resolver)
     )
     return application
 

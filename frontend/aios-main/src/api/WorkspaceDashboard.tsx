@@ -11,6 +11,7 @@ import {
   FolderKanban,
   Gauge,
   Loader2,
+  PanelsTopLeft,
   RefreshCw,
   Sparkles,
   Zap,
@@ -107,6 +108,7 @@ export function WorkspaceDashboard({
   currentUserId,
   loading,
   onRefresh,
+  onOpenWorkspace,
   onViewAllProjects,
   onOpenProject,
   onOpenWorkItem,
@@ -115,6 +117,7 @@ export function WorkspaceDashboard({
   currentUserId: string;
   loading: boolean;
   onRefresh: () => void;
+  onOpenWorkspace: () => void;
   onViewAllProjects: () => void;
   onOpenProject: (sessionId: string) => void;
   onOpenWorkItem: (sessionId: string, workItemId: string) => void;
@@ -210,9 +213,14 @@ export function WorkspaceDashboard({
             <span><CircleUserRound aria-hidden="true" /></span>
             <div><small>PROJECT COMMAND CENTER</small><h1>早上好，{currentUserId}</h1><p>Project Manager · 今天有 {todos.length} 项待办，{activeProjects} 个项目正在推进</p></div>
           </div>
-          <button type="button" onClick={() => { onRefresh(); void refreshTelemetry(); }} disabled={loading || telemetryLoading}>
-            <RefreshCw className={loading || telemetryLoading ? 'ff-spin' : ''} aria-hidden="true" />刷新总览
-          </button>
+          <div className="ff-dashboard-hero-actions">
+            <button type="button" className="is-workspace" onClick={onOpenWorkspace}>
+              <PanelsTopLeft aria-hidden="true" />进入工作空间
+            </button>
+            <button type="button" onClick={() => { onRefresh(); void refreshTelemetry(); }} disabled={loading || telemetryLoading}>
+              <RefreshCw className={loading || telemetryLoading ? 'ff-spin' : ''} aria-hidden="true" />刷新总览
+            </button>
+          </div>
         </header>
 
         <section className="ff-dashboard-metrics" aria-label="用户总览统计">
