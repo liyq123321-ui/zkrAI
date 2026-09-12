@@ -76,6 +76,10 @@ def _write_fake_codex(path: Path) -> Path:
         "    time.sleep(float(sleep_seconds))\n"
         "output_path = Path(args[args.index('--output-last-message') + 1])\n"
         "output_path.write_text(os.environ.get('FAKE_CODEX_OUTPUT', '{}'), encoding='utf-8')\n",
+        "sleep_after_output_seconds = os.environ.get('FAKE_CODEX_SLEEP_AFTER_OUTPUT_SECONDS')\n"
+        "if sleep_after_output_seconds:\n"
+        "    import time\n"
+        "    time.sleep(float(sleep_after_output_seconds))\n",
     )
     script_text = "".join(script)
     if os.name == "nt":
@@ -895,6 +899,65 @@ def test_structured_runner_reaps_timed_out_process(
     if os.name != "nt":
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+
+
+def test_structured_runner_recovers_valid_output_written_before_process_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A complete typed result must survive a CLI tail process that never exits."""
+
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    monkeypatch.setenv("FAKE_CODEX_STDOUT", '{"type":"turn.started"}')
+    monkeypatch.setenv(
+        "FAKE_CODEX_OUTPUT",
+        '{"ready_for_spec":true,"questions":[],"assumptions":["recovered"]}',
+    )
+    monkeypatch.setenv("FAKE_CODEX_SLEEP_AFTER_OUTPUT_SECONDS", "10")
+    monkeypatch.setattr("app.agents.codex._CODEX_PROGRESS_HEARTBEAT_SECONDS", 0.05)
+    runner = CodexStructuredRunner(_settings(tmp_path, executable, timeout_seconds=5))
+    spawned_processes: list[asyncio.subprocess.Process] = []
+    create_subprocess_exec = asyncio.create_subprocess_exec
+
+    async def capture_spawned_process(*args, **kwargs):
+        process = await create_subprocess_exec(*args, **kwargs)
+        spawned_processes.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_spawned_process)
+
+    started_at = monotonic()
+    result = asyncio.run(
+        runner.run("Analyze this brief.", ClarificationAnalysis, tmp_path)
+    )
+    elapsed = monotonic() - started_at
+
+    assert result == ClarificationAnalysis(
+        ready_for_spec=True,
+        questions=[],
+        assumptions=["recovered"],
+    )
+    assert elapsed < 1.5
+    assert len(spawned_processes) == 1
+    assert spawned_processes[0].returncode is not None
+
+
+def test_structured_runner_does_not_recover_invalid_output_from_tail_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A file is recoverable only after the typed output contract is complete."""
+
+    executable = _write_fake_codex(tmp_path / "fake-codex")
+    attempt_log = tmp_path / "attempts.log"
+    monkeypatch.setenv("FAKE_CODEX_ATTEMPT_LOG", str(attempt_log))
+    monkeypatch.setenv("FAKE_CODEX_OUTPUT", "{not-complete-json")
+    monkeypatch.setenv("FAKE_CODEX_SLEEP_AFTER_OUTPUT_SECONDS", "10")
+    monkeypatch.setattr("app.agents.codex._CODEX_PROGRESS_HEARTBEAT_SECONDS", 0.05)
+    runner = CodexStructuredRunner(_settings(tmp_path, executable, timeout_seconds=1))
+
+    with pytest.raises(AgentExecutionError, match="timed out"):
+        asyncio.run(runner.run("Analyze this brief.", ClarificationAnalysis, tmp_path))
+
+    assert attempt_log.read_text(encoding="utf-8").splitlines() == ["attempt"]
 
 
 def test_structured_runner_reaps_cancelled_process(

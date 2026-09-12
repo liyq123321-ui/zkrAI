@@ -384,6 +384,24 @@ class CodexStructuredRunner:
                     try:
                         line = await asyncio.wait_for(events.get(), timeout=wait_seconds)
                     except TimeoutError as error:
+                        recovered_output = self._read_complete_output(
+                            output_path, output_type
+                        )
+                        if recovered_output is not None:
+                            await self._terminate_and_reap(process)
+                            await asyncio.gather(
+                                stdout_task, stderr_task, return_exceptions=True
+                            )
+                            self._persist_runtime_event(
+                                {
+                                    "type": "structured_output_recovered",
+                                    "status": "completed",
+                                    "message": (
+                                        "已收取完整结构化结果，并结束未退出的模型尾进程。"
+                                    ),
+                                }
+                            )
+                            return recovered_output
                         now = loop.time()
                         if now >= hard_deadline:
                             raise AgentExecutionError(
@@ -412,6 +430,20 @@ class CodexStructuredRunner:
                 await self._terminate_and_reap(process)
                 await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
                 if isinstance(error, AgentExecutionError):
+                    recovered_output = self._read_complete_output(
+                        output_path, output_type
+                    )
+                    if recovered_output is not None:
+                        self._persist_runtime_event(
+                            {
+                                "type": "structured_output_recovered",
+                                "status": "completed",
+                                "message": (
+                                    "已在超时清理时收取完整结构化结果。"
+                                ),
+                            }
+                        )
+                        return recovered_output
                     raise
                 if isinstance(error, TimeoutError):
                     raise AgentExecutionError(
@@ -445,6 +477,19 @@ class CodexStructuredRunner:
                 {"type": "structured_output", "message": output}
             )
             return output
+
+    @staticmethod
+    def _read_complete_output(
+        output_path: Path, output_type: type[BaseModel]
+    ) -> str | None:
+        """Read only a fully written result that already satisfies its typed schema."""
+
+        try:
+            output = output_path.read_text(encoding="utf-8")
+            output_type.model_validate_json(output)
+        except (OSError, UnicodeDecodeError, ValidationError):
+            return None
+        return output
 
     @staticmethod
     def _append_diagnostic(buffer: bytearray, chunk: bytes) -> None:

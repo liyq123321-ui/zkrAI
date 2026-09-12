@@ -28,6 +28,7 @@ def make_session_factory(engine):
 
 def init_database(target_engine: Engine) -> None:
     from app.database import models  # noqa: F401
+    from app import models as prd_models  # noqa: F401
 
     if target_engine.url.get_backend_name() == "sqlite":
         database_path = target_engine.url.database

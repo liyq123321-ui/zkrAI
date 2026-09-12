@@ -931,6 +931,11 @@ export function ApiWorkspace() {
 
   async function runAction(action: CommandAction, inputMessage?: string) {
     if (!state || busy) return;
+    if (action === 'create_spec' || (action === 'revise' && resources.specs.some(spec =>
+      spec.id === state.current_spec_version_id && spec.generation_source === 'BLOCK_EDITOR'))) {
+      window.location.assign(`/prd-editor/${encodeURIComponent(state.session_id)}`);
+      return;
+    }
     const sourceMessage = inputMessage ?? answer;
     const effectiveAction = action === 'message'
       && state.phase === 'NEED_CLARIFICATION'
@@ -1161,11 +1166,10 @@ export function ApiWorkspace() {
         state.session_id,
         'agent',
         `已确认顶层路线：${decision.options.find((option) => option.model === model)?.name ?? model}`,
-        '正在基于已确认路线生成 PRD；PRD 审核通过后，完整任务规划将严格按该路线展开。',
+        '可以进入全屏 Block 编辑器编写 PRD；PRD 审核通过后再展开完整任务规划。',
       );
-      setWorkflowProgress('路线已确认，正在生成 PRD…');
-      await submitCommand(refreshedState, 'create_spec');
-      await refreshResources(state.session_id);
+      setWorkflowProgress('路线已确认，正在打开 Block 编辑器…');
+      window.location.assign(`/prd-editor/${encodeURIComponent(state.session_id)}`);
     } catch (reason) {
       const normalized = normalizeNetworkError(reason);
       if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
@@ -1737,6 +1741,7 @@ export function ApiWorkspace() {
             </form>
             {state && (
               <div className="ff-composer-actions ff-suggested-actions">
+                <a className="ff-secondary-button" href={`/prd-editor/${encodeURIComponent(state.session_id)}`}>编写 PRD</a>
                 {sidebarActions.filter((action) => action !== 'message' && !(
                   action === 'create_spec'
                   && state.phase === 'SPECIFICATION'

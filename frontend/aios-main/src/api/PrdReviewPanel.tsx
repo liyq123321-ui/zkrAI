@@ -454,6 +454,7 @@ export function PrdReviewPanel({
           <p className="text-xs text-slate-500">v{displayedVersion} · {data?.versions.length || 1} 个版本{displayedDocument?.commit_sha ? ` · ${displayedDocument.commit_sha.slice(0,8)}` : ' · 已保存的正文'}</p>
         </div>
         <div className="flex items-center gap-2">
+          <a className="rounded-lg border border-emerald-500/40 px-3 py-2 text-sm text-emerald-200" href={`/prd-editor/${encodeURIComponent(sessionState.session_id)}`}>编写 PRD · Block 编辑</a>
           <label className="flex items-center gap-2 text-xs text-slate-500">
             <span>查看版本</span>
             <select
@@ -498,6 +499,11 @@ export function PrdReviewPanel({
         )}
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           <div className="rounded-lg border border-slate-700 bg-slate-950 p-3">
+            {fallbackSpec.generation_source === 'BLOCK_EDITOR' ? <>
+              <h4 className="text-xs font-medium">方向 1 · 按 Block 修改 PRD</h4>
+              <p className="mt-1 text-xs leading-5 text-slate-500">回到全屏编辑器，针对指定章节添加批注、修改并提交新的评审快照。</p>
+              <a className="mt-3 inline-block rounded-lg bg-violet-500 px-3 py-2 text-xs text-white" href={`/prd-editor/${encodeURIComponent(sessionState.session_id)}`}>打开 Block 编辑器</a>
+            </> : <>
             <h4 className="text-xs font-medium">方向 1 · 根据批注更新 PRD</h4>
             <p className="mt-1 min-h-10 text-xs leading-5 text-slate-500">Agent 优先融合所有未解决批注；勾选自动处理后，再按推荐建议修复剩余审核发现。生成新版本后仍停留在 PRD 审核阶段。</p>
             <label className={`mt-3 flex items-center gap-2 text-xs ${hasReviewFindings ? 'cursor-pointer text-slate-300' : 'cursor-not-allowed text-slate-600'}`}>
@@ -512,10 +518,11 @@ export function PrdReviewPanel({
             <button disabled={busy || workflowBusy || !canPublishRevision || viewingHistorical} onClick={publish} className="mt-3 flex items-center gap-2 rounded-lg bg-violet-500 px-3 py-2 text-xs font-medium text-white disabled:opacity-40">
               <Send className="h-3.5 w-3.5" />确认批注并生成新版 PRD
             </button>
+            </>}
           </div>
           <div className="rounded-lg border border-slate-700 bg-slate-950 p-3">
             <h4 className="text-xs font-medium">方向 2 · 进入任务拆分</h4>
-            <p className="mt-1 min-h-10 text-xs leading-5 text-slate-500">仅确认当前已通过 Agent 自动审核的版本；该动作不会处理批注。</p>
+            <p className="mt-1 min-h-10 text-xs leading-5 text-slate-500">{fallbackSpec.generation_source === 'BLOCK_EDITOR' ? '当前快照已通过结构规则校验，请人工确认各块内容；该动作不会处理批注。' : '仅确认当前已通过 Agent 自动审核的版本；该动作不会处理批注。'}</p>
             <button disabled={busy || workflowBusy || !canEnterDecomposition || (!reviewReady && !fallbackConfirmed) || viewingHistorical} onClick={confirmAndDecompose} className="mt-3 flex items-center gap-2 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-medium text-slate-950 disabled:opacity-40">
               {(busy || workflowBusy) && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {confirmationStep === 'convert_to_work_item' ? '开始任务拆分' : '确认当前 PRD，进入任务拆分'}

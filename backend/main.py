@@ -34,6 +34,12 @@ from app.services.agent_backends import AgentBackendService
 from app.services.agent_runtime_events import AgentRuntimeEventStore
 from app.services.weknora import WeKnoraClient
 from app.services.workspace_portal import WorkspacePortalService
+from app.api.documents import build_router as build_documents_router
+from app.api.blocks import build_router as build_blocks_router
+from app.services.block_service import BlockService, BlockError
+from app.services.ai_service import AIService
+from app.ai.codex_provider import CodexProvider
+from app.ai.provider import AIProvider
 
 
 def create_app(
@@ -43,6 +49,7 @@ def create_app(
     gitea_client: GiteaClient | None = None,
     auto_bind_prd_review: bool | None = None,
     workspace_service: WorkspacePortalService | None = None,
+    block_provider: AIProvider | None = None,
 ) -> FastAPI:
     """Build an application whose runtime dependencies can be safely injected."""
 
@@ -101,6 +108,8 @@ def create_app(
     review_service = PrdReviewService(session_factory, gitea_client)
     prototype_service = PrdPrototypeService(session_factory, agent_gateway)
     actor_resolver = ActorResolver(settings)
+    block_service = BlockService(session_factory)
+    block_ai = AIService(block_service, block_provider or CodexProvider(settings))
     publish_coordinator = ReviewPublishCoordinator(
         session_factory,
         gitea_client,
@@ -127,12 +136,22 @@ def create_app(
                 init_database(db.get_bind())
             command_jobs.mark_interrupted_jobs()
             publish_coordinator.mark_interrupted_tasks()
+            block_ai.recover()
             yield
         finally:
+            await block_ai.close()
             if owns_gitea_client:
                 await gitea_client.aclose()
 
     application = FastAPI(lifespan=lifespan)
+    application.state.block_ai = block_ai
+
+    @application.exception_handler(BlockError)
+    async def block_error(_, error: BlockError):
+        return JSONResponse(status_code=error.status, content={"detail": {"code": "BLOCK_ERROR", "message": str(error)}})
+
+    application.include_router(build_documents_router(block_service, block_ai, actor_resolver))
+    application.include_router(build_blocks_router(block_service, block_ai, actor_resolver))
 
     if settings.cors_allowed_origins:
         application.add_middleware(
