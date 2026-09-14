@@ -60,7 +60,17 @@ describe('Block editor draft isolation', () => {
   it('never sends a whole-document generation request on entry', async () => {
     await editor();
     expect(fetchMock.mock.calls.some(([, options]) => String(options?.body).includes('create_spec'))).toBe(false);
-    expect(screen.getByLabelText('水平文档规划图')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '展开文档规划图' })).toBeTruthy();
+    expect(screen.getByLabelText('文档规划缩略图')).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: '文档规划图' })).toBeNull();
+  });
+  it('opens the full document plan in a modal and closes it again', async () => {
+    await editor();
+    fireEvent.click(screen.getByRole('button', { name: '展开文档规划图' }));
+    const dialog = screen.getByRole('dialog', { name: '文档规划图' });
+    expect(within(dialog).getByLabelText('水平文档规划图')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭文档规划图' }));
+    expect(screen.queryByRole('dialog', { name: '文档规划图' })).toBeNull();
   });
   it('retains unsaved input when switching blocks', async () => {
     const input = await editor();

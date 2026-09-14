@@ -4,3 +4,31 @@
    would make its upper half unreachable above the scroll origin. */
 .prd-map{align-items:flex-start}.prd-map-root{position:sticky;top:40px;margin-top:40px}
 .prd-map-dependencies{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 15px;border-top:1px solid var(--p-border);color:var(--p-muted);font-size:11px}.prd-map-dependencies button{font-size:11px;padding:4px 8px}
+
+/* The legacy workspace locks #root to the viewport. The full-page PRD editor
+   owns its scrolling so long documents remain reachable. */
+.prd-page{width:100vw;height:100vh;min-width:0;overflow:auto;scrollbar-color:#50627a #172235}
+
+/* Keep the planning overview present without letting a deep tree dominate the
+   editor. The same tree is rendered at its natural size in the modal below. */
+.prd-page button.prd-map-thumbnail{position:relative;display:block;width:100%;height:116px;overflow:hidden;padding:0;border:0;border-radius:0 0 11px 11px;background:#111c2c;text-align:left}
+.prd-page button.prd-map-thumbnail:hover{border-color:transparent;background:#142236}
+.prd-map-thumbnail .prd-map{height:116px;min-height:0;max-height:none;overflow:hidden;align-items:center;padding:10px 18px;background-size:14px 14px;pointer-events:none}
+.prd-map-thumbnail .prd-map-root{position:static;align-self:center;margin:0;padding:8px 13px;border-radius:7px;font-size:10px}
+.prd-map-thumbnail .prd-map-children{gap:2px;padding-left:18px}
+.prd-map-thumbnail .prd-map-branch:before{left:-18px;width:18px}
+.prd-map-thumbnail .prd-map-children:before{left:7px;top:13px;bottom:13px}
+.prd-page .prd-map-thumbnail .prd-map-node{display:flex;width:108px;align-items:center;gap:5px;padding:3px 6px;border:1px solid #31465c;border-radius:5px;background:#192b40;color:#e5edf7;font-size:8px;line-height:1}
+.prd-map-thumbnail .prd-map-node>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prd-map-thumbnail .prd-map-node small{display:none}
+.prd-map-thumbnail .prd-dot{width:5px;height:5px}
+.prd-map-thumbnail-hint{position:absolute;right:14px;bottom:11px;display:flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid #4c6f77;border-radius:8px;background:#132a31e8;color:#8de6d2;font-size:11px;box-shadow:0 4px 14px #07101b99}
+
+.prd-plan-modal{width:min(920px,calc(100vw - 40px));padding:0;overflow:hidden}
+.prd-plan-modal>header{margin:0;padding:16px 18px;border-bottom:1px solid var(--p-border)}
+.prd-plan-modal>header>div{display:grid;gap:4px}
+.prd-plan-modal>header button{display:grid;width:34px;height:34px;padding:0;place-items:center}
+.prd-plan-modal .prd-map{min-height:320px;max-height:min(68vh,620px);padding:28px 32px}
+.prd-plan-modal .prd-map-dependencies{padding:12px 18px}
+
+@media(max-width:700px){.prd-page button.prd-map-thumbnail,.prd-map-thumbnail .prd-map{height:96px}.prd-plan-modal{width:calc(100vw - 20px)}.prd-plan-modal .prd-map{min-height:260px;max-height:70vh;padding:20px}}

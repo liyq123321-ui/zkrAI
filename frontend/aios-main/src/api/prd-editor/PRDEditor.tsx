@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, FileText, Network, Download, Settings2 } from 'lucide-react';
+import { ArrowLeft, FileText, Network, Download, Settings2, Maximize2, X } from 'lucide-react';
 import { apiClient } from '../client';
 import { appConfig } from '../config';
 import { documentPath, getDocument, mutate, openDocument } from './api';
@@ -33,6 +33,7 @@ export function PRDEditor({ sessionId }: { sessionId: string }) {
   const [diffRun, setDiffRun] = useState<AgentRun | null>(null);
   const [history, setHistory] = useState<{ blockId: string; versions: Version[] } | null>(null);
   const [showImport, setShowImport] = useState(false);
+  const [showPlan, setShowPlan] = useState(false);
   const [outline, setOutline] = useState('');
   const [template, setTemplate] = useState('alibaba');
   const [settings, setSettings] = useState<{ background: string; global_rules: string } | null>(null);
@@ -74,6 +75,12 @@ export function PRDEditor({ sessionId }: { sessionId: string }) {
     window.addEventListener('beforeunload', before);
     return () => window.removeEventListener('beforeunload', before);
   }, []);
+  useEffect(() => {
+    if (!showPlan) return;
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setShowPlan(false); };
+    document.addEventListener('keydown', close);
+    return () => document.removeEventListener('keydown', close);
+  }, [showPlan]);
 
   const save = useCallback(async (id: string, rebase = false) => {
     const snapshot = dataRef.current, captured = draftRef.current[id];
@@ -202,7 +209,12 @@ export function PRDEditor({ sessionId }: { sessionId: string }) {
     {error && <div className="prd-alert" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
     {notice && <div className="prd-notice" role="status">{notice}<button onClick={() => setNotice('')}>关闭</button></div>}
     {!data ? <div className="prd-loading">{error ? <button onClick={() => void attempt(async () => ingest(await openDocument(sessionId)))}>重新加载</button> : '正在恢复文档…'}</div> : <>
-      <section className="prd-map-panel"><div className="prd-section-heading"><span><Network size={16} />文档规划 <small>{data.blocks.length} 个 Block · {data.blocks.filter(b => b.content).length} 个已有内容</small></span><button disabled={data.document.plan_status === 'generating' || data.blocks.some(b => b.content || drafts[b.id]?.dirty)} onClick={() => void attempt(async () => { await mutate(data.document.id, '/plan', { request_id: crypto.randomUUID() }); await refresh(); })}>{data.document.plan_status === 'generating' ? '正在规划…' : 'AI 规划大纲'}</button></div><BlockPlanMap blocks={viewBlocks} selected={selected} onSelect={select} /></section>
+      <section className="prd-map-panel"><div className="prd-section-heading"><span><Network size={16} />文档规划 <small>{data.blocks.length} 个 Block · {data.blocks.filter(b => b.content).length} 个已有内容</small></span><button disabled={data.document.plan_status === 'generating' || data.blocks.some(b => b.content || drafts[b.id]?.dirty)} onClick={() => void attempt(async () => { await mutate(data.document.id, '/plan', { request_id: crypto.randomUUID() }); await refresh(); })}>{data.document.plan_status === 'generating' ? '正在规划…' : 'AI 规划大纲'}</button></div>
+        <button className="prd-map-thumbnail" aria-label="展开文档规划图" onClick={() => setShowPlan(true)}>
+          <BlockPlanMap blocks={viewBlocks} selected={selected} onSelect={() => {}} interactive={false} maxDepth={1} />
+          <span className="prd-map-thumbnail-hint"><Maximize2 size={14} />点击展开</span>
+        </button>
+      </section>
       <div className="prd-columns"><aside className="prd-directory"><div className="prd-section-heading">文档目录<small>{checked.size ? `${checked.size} 已选` : '可多选批注'}</small></div><BlockTree blocks={viewBlocks} selected={selected} checked={checked} onSelect={select} onCheck={id => setChecked(old => { const next = new Set(old); next.has(id) ? next.delete(id) : next.add(id); return next; })} /></aside>
         <section className="prd-main-editor">{block && draft && <>
           <div className="prd-save-state"><span className={`prd-dot is-${draft.dirty ? 'editing' : block.status}`} />{saving.has(selected) ? '保存中…' : draft.error ? '保存失败，输入已保留' : draft.dirty ? '未保存' : '已保存'}<span>{statusNames[block.status]} · {block.fragment_version === block.version ? '结构已同步' : '提交前需审核本块'}</span></div>
@@ -214,6 +226,7 @@ export function PRDEditor({ sessionId }: { sessionId: string }) {
         </>}</section>
         <aside className="prd-right"><GenerationStatus runs={data.runs} blocks={data.blocks} onCancel={r => void attempt(async () => { await mutate(data.document.id, `/runs/${r.id}/cancel`, {}); await refresh(); })} /><BlockCommentPanel comments={data.comments} blocks={data.blocks} current={selected} feedback={feedback} onFeedback={setFeedback} start={start} end={end} onRange={(s, e) => { setStart(s); setEnd(e); }} count={checked.size} onAdd={() => void attempt(addComment)} onRevise={c => void attempt(() => reviseComment(c))} onResolve={c => void attempt(async () => ingest(await mutate(data.document.id, `/comments/${c.id}`, { resolved: !c.resolved }, 'PATCH')))} /></aside></div>
     </>}
+    {showPlan && data && <div className="prd-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShowPlan(false); }}><section className="prd-modal prd-plan-modal" role="dialog" aria-modal="true" aria-label="文档规划图"><header><div><h2>文档规划</h2><small>点击节点可跳转到对应 Block</small></div><button aria-label="关闭文档规划图" onClick={() => setShowPlan(false)}><X size={17} /></button></header><BlockPlanMap blocks={viewBlocks} selected={selected} onSelect={id => { select(id); setShowPlan(false); }} /></section></div>}
     {showImport && <div className="prd-modal-backdrop"><section className="prd-modal" role="dialog" aria-modal="true" aria-label="导入 PRD 大纲"><h2>模板与大纲</h2><p>内置模板来自提供的阿里、鹅厂附件；教程和示例业务不作为项目需求。有正文或批注时不会覆盖现有大纲。</p><select aria-label="选择模板" value={template} onChange={e => setTemplate(e.target.value)}><option value="alibaba">阿里 PRD 模板</option><option value="tencent">鹅厂 PRD 模板</option><option value="custom">自定义大纲</option></select><input aria-label="上传大纲文件" type="file" accept=".md,.txt,.pdf" onChange={e => { if (e.target.files?.[0]) void attempt(() => readFile(e.target.files![0])); }} />{template === 'custom' && <textarea aria-label="大纲内容" rows={14} value={outline} onChange={e => setOutline(e.target.value)} placeholder={'# 产品背景\n# 功能设计\n## 具体功能'} />}<footer><button onClick={() => setShowImport(false)}>关闭</button><button className="prd-primary" disabled={busy} onClick={() => void attempt(importOutline)}>导入并规划</button></footer></section></div>}
     {settings && <div className="prd-modal-backdrop"><section className="prd-modal" role="dialog" aria-modal="true" aria-label="文档背景与规则"><h2>文档背景与全局规则</h2><label className="prd-field">项目背景<textarea rows={10} value={settings.background} onChange={e => setSettings({ ...settings, background: e.target.value })} /></label><label className="prd-field">全局规则<textarea rows={5} value={settings.global_rules} onChange={e => setSettings({ ...settings, global_rules: e.target.value })} /></label><p>更新后已有正文标记为待更新。</p><footer><button onClick={() => setSettings(null)}>关闭</button><button onClick={() => void attempt(async () => { ingest(await mutate(data!.document.id, '/context', { ...settings, expected_revision: dataRef.current!.document.revision }, 'PUT')); setSettings(null); })}>保存设置</button></footer></section></div>}
     {(diffRun || history) && <div className="prd-modal-backdrop"><section className="prd-modal prd-modal-wide" role="dialog" aria-modal="true" aria-label={history ? 'Block 历史版本' : 'AI 结果 Diff'}><header><h2>{history ? '历史版本' : '当前内容 → AI 候选结果'}</h2><button onClick={() => { setDiffRun(null); setHistory(null); }}>关闭</button></header>{diffRun && <BlockDiff before={drafts[diffRun.block_id!]?.content ?? ''} after={diffRun.result?.content ?? ''} />}{history && <BlockHistory versions={history.versions} content={drafts[history.blockId]?.content ?? ''} onRestore={v => void attempt(async () => { await save(history.blockId); if (draftRef.current[history.blockId].dirty) throw new Error('请先保存当前输入'); ingest(await mutate(data!.document.id, `/blocks/${history.blockId}/restore`, { version: v, expected_version: draftRef.current[history.blockId].version })); setHistory(null); })} />}</section></div>}
