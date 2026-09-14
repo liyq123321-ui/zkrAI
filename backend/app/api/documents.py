@@ -13,6 +13,7 @@ from app.services.block_service import BlockError
 
 class Open(Input):
     session_id: str
+    auto_generate: bool = False
 
 
 class Outline(Input):
@@ -48,8 +49,14 @@ def build_router(service, ai, actors):
         return TEMPLATES
 
     @router.post("")
-    def open_document(body: Open, request: Request):
-        return service.open(body.session_id, actors.resolve(request, body.actor_id))
+    async def open_document(body: Open, request: Request):
+        actor = actors.resolve(request, body.actor_id)
+        snapshot = service.open(body.session_id, actor)
+        if body.auto_generate:
+            service_id = snapshot["document"]["id"]
+            ai.start_initial(service_id, actor)
+            return service.snapshot(service_id, actor)
+        return snapshot
 
     @router.get("/{document_id}")
     def snapshot(document_id: str, request: Request, actor_id: str | None = None):

@@ -112,3 +112,40 @@ describe('Block editor draft isolation', () => {
     ]);
   });
 });
+
+it('requests first-draft automation on entry, leaving eligibility to the server', async () => {
+  await editor();
+  const request = fetchMock.mock.calls.find(([url, options]) => new URL(url).pathname === '/prd-documents' && options?.method === 'POST');
+  expect(JSON.parse(request![1]!.body as string)).toMatchObject({ session_id: 's', auto_generate: true });
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/runs'))).toBe(false);
+  expect(screen.queryByText(/首版正在按模块连续生成/)).toBeNull();
+});
+
+it('shows first-draft progress and lets the user stop the entire sequence', async () => {
+  snapshot.runs = [{ id: 'initial', block_id: null, type: 'initial', base_version: 1, status: 'running', apply_status: 'pending', error: null, result: { completed: 1, total: 2 } }];
+  await editor();
+  expect(screen.getByText(/首版正在按模块连续生成（1\/2）/)).toBeTruthy();
+  expect((screen.getByRole('button', { name: '重新生成' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: '停止自动生成' }));
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/runs/initial/cancel'))).toBe(true));
+});
+
+it('preserves a local draft when the server applies a first-generation result', async () => {
+  const input = await editor();
+  fireEvent.change(input, { target: { value: 'Human input while auto-generating' } });
+  snapshot = structuredClone(snapshot);
+  snapshot.blocks[0].content = 'Generated first draft'; snapshot.blocks[0].version = 2; snapshot.document.revision++;
+  Source.current.emit(snapshot);
+  await screen.findByText('保存版本已变化，人工输入已保留');
+  expect((input as HTMLTextAreaElement).value).toBe('Human input while auto-generating');
+});
+
+it('does not auto-apply a candidate rejected by first-draft automation', async () => {
+  snapshot.runs = [
+    { id: 'initial', block_id: null, type: 'initial', base_version: 1, status: 'failed', apply_status: 'pending', error: '自动生成已停止', result: { completed: 0, total: 2 } },
+    { id: 'child', request_id: 'initial:A', block_id: 'A', type: 'generate', base_version: 1, status: 'completed', apply_status: 'pending', error: null, result: { content: '' } },
+  ];
+  await editor();
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/apply'))).toBe(false);
+  expect((screen.getByRole('button', { name: '重新生成' }) as HTMLButtonElement).disabled).toBe(false);
+});

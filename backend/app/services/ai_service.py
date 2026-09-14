@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from app.models import Block, AgentRun
+from app.database.models import SpecVersion
 from app.ai.provider import BlockPlan, BlockResult
 from .block_service import BlockError, uid, record
 
@@ -14,7 +15,75 @@ class AIService:
         self.tasks = {}
         self.limit = asyncio.Semaphore(3)
 
-    def enqueue(self, document_id, actor, kind, request_id, block_id=None, feedback="", line_range=None, comment_id=None):
+    def start_initial(self, document_id, actor):
+        """Claim a first draft once, durably, even across tabs and page reloads."""
+        with self.blocks.write() as db:
+            doc = self.blocks.document(db, document_id, actor)
+            runs = db.query(AgentRun).filter_by(document_id=doc.id).all()
+            existing = next((r for r in runs if r.type == "initial"), None)
+            if existing:
+                return
+            blocks = self.blocks.blocks(db, doc)
+            if (doc.source_spec_version_id or doc.submitted_spec_id
+                    or db.query(SpecVersion).filter_by(project_id=doc.project_id).count()
+                    or not blocks or any(b.content or b.version > 1 for b in blocks)
+                    or any(r.type != "plan" or r.status != "completed" or r.apply_status != "applied" for r in runs)):
+                return
+            # Stable topological order: preserve directory order when dependencies allow.
+            ordered, remaining = [], list(blocks)
+            while remaining:
+                ready = next((b for b in remaining if set(b.dependencies) <= set(ordered)), None)
+                if ready is None:
+                    raise BlockError("模块依赖无法排序，请先检查大纲")
+                ordered.append(ready.id)
+                remaining.remove(ready)
+            run = AgentRun(id=uid("run"), document_id=doc.id, type="initial", status="queued",
+                           base_version=doc.revision, context_revision=doc.context_revision,
+                           request_id="initial-generation-v1", actor_id=actor, apply_status="pending",
+                           input_snapshot={"block_ids": ordered, "versions": {b.id: b.version for b in blocks}},
+                           result={"completed": 0, "total": len(ordered)})
+            db.add(run)
+            db.flush()
+            run_id = run.id
+        self.tasks[run_id] = asyncio.create_task(self.execute_initial(run_id))
+        self.tasks[run_id].add_done_callback(lambda task: self.tasks.pop(run_id, None))
+
+    async def execute_initial(self, run_id):
+        try:
+            with self.blocks.write() as db:
+                run = db.get(AgentRun, run_id)
+                if run.status != "queued":
+                    return
+                run.status = "running"
+                document_id, actor, inputs = run.document_id, run.actor_id, run.input_snapshot
+            for index, block_id in enumerate(inputs["block_ids"]):
+                child = self.enqueue(document_id, actor, "generate", f"{run_id}:{block_id}",
+                                     block_id, initial_run_id=run_id)
+                await self.tasks[child["id"]]
+                with self.blocks.factory() as db:
+                    result = db.get(AgentRun, child["id"])
+                    if result.status == "cancelled":
+                        raise asyncio.CancelledError()
+                    if result.status != "completed":
+                        raise BlockError(result.error or "模块生成失败")
+                    if not (result.result or {}).get("content", "").strip():
+                        raise BlockError("模块生成内容为空，请手动重试")
+                # Applying before the next enqueue makes upstream summaries available.
+                self.apply(document_id, child["id"], actor, inputs["versions"][block_id])
+                with self.blocks.write() as db:
+                    run = db.get(AgentRun, run_id)
+                    run.result = {"completed": index + 1, "total": len(inputs["block_ids"])}
+            with self.blocks.write() as db:
+                run = db.get(AgentRun, run_id)
+                run.status, run.apply_status = "completed", "applied"
+        except asyncio.CancelledError:
+            self.fail(run_id, "首版连续生成已停止，已有内容已保留", "cancelled")
+            raise
+        except Exception as error:
+            logger.exception("Initial PRD generation %s stopped", run_id)
+            self.fail(run_id, "首版连续生成已停止：" + (str(error) if isinstance(error, BlockError) else "请检查服务日志"))
+
+    def enqueue(self, document_id, actor, kind, request_id, block_id=None, feedback="", line_range=None, comment_id=None, initial_run_id=None):
         with self.blocks.write() as db:
             doc = self.blocks.document(db, document_id, actor)
             existing = db.query(AgentRun).filter_by(document_id=doc.id, request_id=request_id).one_or_none()
@@ -23,10 +92,22 @@ class AIService:
                     raise BlockError("请求 ID 已用于另一项操作")
                 return record(existing)
             active = db.query(AgentRun).filter_by(document_id=doc.id).filter(AgentRun.status.in_(["queued", "running"])).all()
+            if any(r.type == "initial" and r.id != initial_run_id for r in active):
+                raise BlockError("首版正在连续生成，请先停止自动生成再运行其他 AI 操作")
+            if initial_run_id:
+                parent = next((r for r in active if r.id == initial_run_id and r.type == "initial"), None)
+                if not parent:
+                    raise BlockError("首版连续生成已停止")
+                b = self.blocks.block(db, doc, block_id)
+                if (b.content or b.version != parent.input_snapshot["versions"].get(block_id)
+                        or doc.context_revision != parent.context_revision):
+                    raise BlockError("模块或文档背景已有人工修改，保留当前内容，请手动继续")
             if any(r.type == "plan" or kind == "plan" or r.block_id == block_id for r in active):
                 raise BlockError("该 Block 或结构规划已有运行中的作业")
             deps = {}
             context = {"background": doc.background, "global_rules": doc.global_rules}
+            if initial_run_id:
+                context["initial_run_id"] = initial_run_id
             if kind == "plan":
                 if any(b.content or b.version > 1 for b in self.blocks.blocks(db, doc)):
                     raise BlockError("已有内容，结构规划不能覆盖现有 Block")
@@ -79,7 +160,8 @@ class AIService:
                     if not run or run.status != "queued":
                         return
                     run.status = "running"
-                    kind, context = run.type, run.input_snapshot
+                    kind = run.type
+                    context = {key: value for key, value in run.input_snapshot.items() if key != "initial_run_id"}
                 method = {"plan": self.provider.plan_outline, "generate": self.provider.generate_block,
                           "revise": self.provider.revise_block, "review": self.provider.review_block}[kind]
                 output = await method(context)
@@ -133,7 +215,7 @@ class AIService:
                 raise BlockError("作业不存在", 404)
             if run.apply_status == "applied":
                 return {"applied": True}
-            if run.status != "completed" or run.type == "plan" or not run.result:
+            if run.status != "completed" or run.type in ("plan", "initial") or not run.result:
                 raise BlockError("作业没有可应用的 Block 结果")
             b = self.blocks.block(db, doc, run.block_id)
             stale = self.stale(db, doc, run)
@@ -160,6 +242,7 @@ class AIService:
         return {"applied": True}
 
     def cancel(self, document_id, run_id, actor):
+        children = []
         with self.blocks.write() as db:
             doc = self.blocks.document(db, document_id, actor)
             run = db.get(AgentRun, run_id)
@@ -173,10 +256,16 @@ class AIService:
                                                            AgentRun.status.in_(["queued", "running"])).count()
                     if not other_active:
                         b.status = "outdated" if self.stale(db, doc, run) and b.content else ("ready" if b.content else "pending")
-                else:
+                elif run.type == "plan":
                     doc.plan_status = "pending"
+                elif run.type == "initial":
+                    children = [r.id for r in db.query(AgentRun).filter_by(document_id=doc.id)
+                                if r.input_snapshot.get("initial_run_id") == run.id
+                                and (r.status in ("queued", "running") or (r.status == "completed" and r.apply_status != "applied"))]
             elif run.apply_status == "applied":
                 raise BlockError("结果已应用，若需撤回请从历史版本恢复")
+        for child_id in children:
+            self.cancel(document_id, child_id, actor)
         task = self.tasks.get(run_id)
         if task:
             task.cancel()
@@ -212,7 +301,7 @@ class AIService:
                 b = db.get(Block, run.block_id)
                 if b and b.version == run.base_version:
                     b.status = "error"
-            else:
+            elif run.type == "plan":
                 from app.models import Document
                 db.get(Document, run.document_id).plan_status = "error"
 

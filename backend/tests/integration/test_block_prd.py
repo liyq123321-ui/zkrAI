@@ -399,3 +399,114 @@ async def test_cancel_completion_race_prevents_candidate_application(service):
     ai.cancel(doc, run['id'], 'owner')
     with pytest.raises(BlockError): ai.apply(doc, run['id'], 'owner', b['version'], force=True)
     assert service.snapshot(doc, 'owner')['blocks'][0]['content'] == ''
+
+
+def initial_run(service, doc):
+    return next(r for r in service.snapshot(doc, 'owner')['runs'] if r['type'] == 'initial')
+
+
+@pytest.mark.asyncio
+async def test_initial_generation_is_sequential_dependency_ordered_and_durable(service):
+    snap = prepared(service)
+    doc, a, b, c = snap['document']['id'], *snap['blocks']
+    # The first directory entry depends on the last: generation must reorder them.
+    with service.write() as db:
+        db.get(Block, a['id']).dependencies = [c['id']]
+        db.get(Block, b['id']).dependencies = [a['id']]
+    provider = DelayedProvider(); ai = AIService(service, provider)
+    ai.start_initial(doc, 'owner')
+    parent = initial_run(service, doc); task = ai.tasks[parent['id']]
+    await provider.started.wait()
+    assert len(provider.contexts) == 1
+    assert provider.contexts[0]['block_id'] == c['id']
+    for _ in range(3):
+        reopened = service.open('s', 'owner')
+        ai.start_initial(reopened['document']['id'], 'owner')
+    assert len([r for r in service.snapshot(doc, 'owner')['runs'] if r['type'] == 'initial']) == 1
+    provider.release.set()
+    await task  # No browser applies results or schedules the following blocks.
+    assert [ctx['block_id'] for ctx in provider.contexts] == [c['id'], a['id'], b['id']]
+    assert provider.contexts[1]['upstream_summaries'] == [{'block_id': c['id'], 'summary': 'AI summary'}]
+    after = service.snapshot(doc, 'owner')
+    assert all(b['content'] == 'AI content' and b['version'] == 2 for b in after['blocks'])
+    assert initial_run(service, doc)['result'] == {'completed': 3, 'total': 3}
+    assert initial_run(service, doc)['status'] == 'completed'
+    # Reconstructing the service (or later clearing the document) cannot retrigger.
+    fresh = AIService(service, provider)
+    fresh.start_initial(doc, 'owner')
+    assert not fresh.tasks
+    assert len(provider.contexts) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('existing', ['body', 'cleared', 'previous_job', 'legacy', 'submitted'])
+async def test_initial_generation_never_starts_for_existing_work(service, existing):
+    snap = prepared(service); doc, b = snap['document']['id'], snap['blocks'][0]
+    provider = DelayedProvider(); ai = AIService(service, provider)
+    if existing in ('body', 'cleared'):
+        current = manual(service, doc, b, 'Human draft')['blocks'][0]
+        if existing == 'cleared': manual(service, doc, current, '')
+    elif existing == 'previous_job':
+        run = ai.enqueue(doc, 'owner', 'generate', 'old', b['id'])
+        await finish(ai, provider, run)
+    else:
+        from app.models import Document
+        with service.write() as db:
+            setattr(db.get(Document, doc), 'source_spec_version_id' if existing == 'legacy' else 'submitted_spec_id', 'existing-spec')
+    ai.start_initial(doc, 'owner')
+    assert not any(r['type'] == 'initial' for r in service.snapshot(doc, 'owner')['runs'])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stop', ['cancel_parent', 'cancel_child', 'provider_failure', 'edit_current', 'edit_future', 'context'])
+async def test_initial_generation_stops_without_overwriting_or_restarting(service, stop):
+    snap = prepared(service); doc, a, b = snap['document']['id'], *snap['blocks'][:2]
+    provider = DelayedProvider(); ai = AIService(service, provider)
+    ai.start_initial(doc, 'owner')
+    parent = initial_run(service, doc); task = ai.tasks[parent['id']]
+    await provider.started.wait()
+    with pytest.raises(BlockError, match='首版正在连续生成'):
+        ai.enqueue(doc, 'owner', 'generate', 'manual', b['id'])
+    with pytest.raises(BlockError):
+        service.import_outline(doc, 'owner', 'alibaba', '', snap['document']['revision'])
+    if stop.startswith('cancel'):
+        child = next(r for r in service.snapshot(doc, 'owner')['runs'] if r['type'] == 'generate')
+        ai.cancel(doc, parent['id'] if stop == 'cancel_parent' else child['id'], 'owner')
+    elif stop == 'provider_failure': provider.bad_id = True
+    elif stop == 'edit_current': manual(service, doc, a, 'Keep human input')
+    elif stop == 'edit_future': manual(service, doc, b, 'Keep human input')
+    else: service.context(doc, 'owner', snap['document']['revision'], 'New context', '')
+    provider.release.set()
+    await asyncio.gather(task, return_exceptions=True)
+    after = service.snapshot(doc, 'owner')
+    assert initial_run(service, doc)['status'] in ('failed', 'cancelled')
+    assert len(provider.contexts) == 1
+    if stop.startswith('edit'):
+        assert after['blocks'][0 if stop == 'edit_current' else 1]['content'] == 'Keep human input'
+    else:
+        assert not any(block['content'] for block in after['blocks'])
+    ai.start_initial(doc, 'owner')
+    assert len([r for r in service.snapshot(doc, 'owner')['runs'] if r['type'] == 'initial']) == 1
+    assert len(provider.contexts) == 1
+    await ai.close()
+
+
+def test_http_editor_entry_starts_first_draft_once_and_enforces_identity(service, test_settings):
+    from dataclasses import replace
+    settings = replace(test_settings, identity_mode='local', identity_actor_id='owner')
+    app = create_app(settings=settings, session_factory=service.factory, auto_bind_prd_review=False, block_provider=DelayedProvider())
+    with TestClient(app) as client:
+        one = client.post('/prd-documents', json={'session_id': 's', 'auto_generate': True})
+        assert one.status_code == 200
+        two = client.post('/prd-documents', json={'session_id': 's', 'auto_generate': True})
+        first = [r for r in one.json()['runs'] if r['type'] == 'initial']
+        second = [r for r in two.json()['runs'] if r['type'] == 'initial']
+        assert len(first) == len(second) == 1 and first[0]['id'] == second[0]['id']
+        with pytest.raises(BlockError) as denied:
+            app.state.block_ai.start_initial(one.json()['document']['id'], 'intruder')
+        assert denied.value.status == 403
+    # A restart leaves an explicit interruption instead of launching a second draft.
+    ai = AIService(service, DelayedProvider())
+    ai.recover()
+    ai.start_initial(one.json()['document']['id'], 'owner')
+    assert not ai.tasks

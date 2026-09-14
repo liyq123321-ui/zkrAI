@@ -32,3 +32,16 @@
 .prd-plan-modal .prd-map-dependencies{padding:12px 18px}
 
 @media(max-width:700px){.prd-page button.prd-map-thumbnail,.prd-map-thumbnail .prd-map{height:96px}.prd-plan-modal{width:calc(100vw - 20px)}.prd-plan-modal .prd-map{min-height:260px;max-height:70vh;padding:20px}}
+
+.prd-generation-status{margin-bottom:16px}
+.prd-generation-status>h3{display:flex;align-items:center;justify-content:space-between;margin:0 0 10px}
+.prd-runs{max-height:min(42vh,360px);overflow-y:scroll;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:#61758e #172235;padding-right:5px}
+.prd-runs::-webkit-scrollbar{width:7px}
+.prd-runs::-webkit-scrollbar-track{background:#172235;border-radius:8px}
+.prd-runs::-webkit-scrollbar-thumb{background:#61758e;border-radius:8px}
+.prd-runs:focus-visible{outline:2px solid var(--p-accent);outline-offset:2px}
+.prd-run-description{flex:1;min-width:0;overflow-wrap:anywhere}
+.prd-runs button{flex-shrink:0}
+.prd-runs button.prd-run-delete{display:grid;place-items:center;padding:7px;color:var(--p-muted);background:transparent}
+.prd-runs button.prd-run-delete:hover{color:#ffb9c5;border-color:#874353;background:#542531}
+.prd-runs-empty{color:var(--p-muted);padding:10px 0;font-size:12px}

@@ -11,7 +11,6 @@ export function BlockEditor({ block, draft, blocks, onEdit, onRange }: {
   return <>
     <div className="prd-editor-title"><input aria-label="Block 标题" value={draft.title} onChange={e => onEdit({ title: e.target.value })} />
       <span>v{block.version}</span><button onClick={() => setPreview(!preview)}>{preview ? '编辑' : '预览'}</button></div>
-    <label className="prd-field">本块写作要求<textarea rows={2} value={draft.instruction} onChange={e => onEdit({ instruction: e.target.value })} /></label>
     <details className="prd-dependencies"><summary>上游依赖 · {draft.dependencies.length} 项</summary>
       {blocks.filter(b => b.id !== block.id).map(b => <label key={b.id}><input type="checkbox" checked={draft.dependencies.includes(b.id)} onChange={e => onEdit({ dependencies: e.target.checked ? [...draft.dependencies, b.id] : draft.dependencies.filter(id => id !== b.id) })} />{b.title}</label>)}
     </details>

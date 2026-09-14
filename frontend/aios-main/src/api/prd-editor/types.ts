@@ -9,10 +9,11 @@ export interface Document {
   template: string; plan_status: string; revision: number; context_revision: number;
 }
 export interface AgentRun {
-  id: string; block_id: string | null; type: 'plan' | 'generate' | 'revise' | 'review';
+  id: string; block_id: string | null; type: 'plan' | 'generate' | 'revise' | 'review' | 'initial';
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; base_version: number;
   apply_status: 'pending' | 'applied' | 'conflict' | 'cancelled'; error: string | null;
-  result: { content?: string; summary?: string; review_notes?: string[] } | null;
+  request_id?: string;
+  result: { content?: string; summary?: string; review_notes?: string[]; completed?: number; total?: number } | null;
 }
 export interface Comment {
   id: string; text: string; resolved: boolean;
