@@ -45,3 +45,15 @@
 .prd-runs button.prd-run-delete{display:grid;place-items:center;padding:7px;color:var(--p-muted);background:transparent}
 .prd-runs button.prd-run-delete:hover{color:#ffb9c5;border-color:#874353;background:#542531}
 .prd-runs-empty{color:var(--p-muted);padding:10px 0;font-size:12px}
+
+.prd-editor-title>h2{flex:1}
+.prd-full-hint{font-size:12px;color:var(--p-muted);line-height:1.7}
+.prd-full-editor{flex:none;min-height:390px}
+.prd-full-editor pre,.prd-full-editor textarea{height:55vh;min-height:390px;resize:none}
+.prd-full-preview{max-height:55vh;min-height:390px;border:1px solid var(--p-border);border-radius:8px;background:#101a2a}
+.prd-full-report{border:1px solid var(--p-border);border-radius:8px;padding:16px;line-height:1.8}
+.prd-full-report p{white-space:pre-wrap;margin:10px 0}
+.prd-full-report article{border-top:1px solid var(--p-border);padding:12px 0}
+.prd-full-report article strong{color:#f3cb90}
+.prd-full-report article>div{display:flex;gap:6px;flex-wrap:wrap}
+.prd-full-report button{padding:5px 8px;font-size:11px}

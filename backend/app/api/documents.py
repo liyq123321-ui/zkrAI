@@ -36,6 +36,10 @@ class Submit(Input):
     expected_revision: int = Field(ge=1)
 
 
+class Review(Submit):
+    request_id: str = Field(min_length=1, max_length=100)
+
+
 class Context(Submit):
     background: str = Field(max_length=30000)
     global_rules: str = Field(max_length=12000)
@@ -104,6 +108,11 @@ def build_router(service, ai, actors):
     @router.post("/{document_id}/submit")
     def submit(document_id: str, body: Submit, request: Request):
         return service.submit(document_id, actors.resolve(request, body.actor_id), body.expected_revision)
+
+    @router.post("/{document_id}/review", status_code=202)
+    async def review(document_id: str, body: Review, request: Request):
+        run = ai.enqueue_document_review(document_id, actors.resolve(request, body.actor_id), body.request_id, body.expected_revision)
+        return {key: value for key, value in run.items() if key != "input_snapshot"}
 
     @router.get("/{document_id}/markdown", response_class=PlainTextResponse)
     def markdown(document_id: str, request: Request, actor_id: str | None = None):

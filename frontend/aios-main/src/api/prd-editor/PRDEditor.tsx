@@ -8,6 +8,7 @@ import type { AgentRun, Comment, Draft, Snapshot } from './types';
 import { BlockTree, BlockPlanMap } from './BlockTree';
 import { BlockEditor } from './BlockEditor';
 import { BlockToolbar } from './BlockToolbar';
+import { FullDocumentView, fullCommentTargets, fullSnapshotChanged } from './FullDocumentView';
 import { BlockCommentPanel } from './BlockCommentPanel';
 import { GenerationStatus } from './GenerationStatus';
 import { BlockHistory, BlockDiff } from './BlockHistory';
@@ -39,6 +40,7 @@ export function PRDEditor({ sessionId }: { sessionId: string }) {
   const [settings, setSettings] = useState<{ background: string; global_rules: string } | null>(null);
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [fullSnapshot, setFullSnapshot] = useState<Snapshot | null>(null);
 
   const updateDrafts = useCallback((next: Record<string, Draft>) => { draftRef.current = next; setDrafts(next); }, []);
   const ingest = useCallback((next: Snapshot) => {
@@ -139,6 +141,25 @@ export function PRDEditor({ sessionId }: { sessionId: string }) {
     updateDrafts({ ...draftRef.current, [selected]: { ...draftRef.current[selected], ...patch, dirty: true, error: undefined } });
   }
   function select(id: string) { setSelected(id); setStart(''); setEnd(''); setFeedback(''); setHistory(null); setDiffRun(null); }
+  async function browseFull() {
+    setBusy(true);
+    try {
+      for (const [id, draft] of Object.entries(draftRef.current)) if (draft.dirty) await save(id);
+      if (Object.values(draftRef.current).some(draft => draft.dirty)) throw new Error('请等待输入保存完成后再浏览全文。');
+      const current = await getDocument(dataRef.current!.document.id);
+      ingest(current); setFullSnapshot(current); setChecked(new Set()); setStart(''); setEnd(''); setHistory(null); setDiffRun(null);
+    } finally { setBusy(false); }
+  }
+  async function reviewFull() {
+    if (!fullSnapshot) return;
+    setBusy(true);
+    try {
+      const current = await getDocument(fullSnapshot.document.id);
+      if (fullSnapshotChanged(fullSnapshot, current)) { ingest(current); throw new Error('全文已变化，请先更新全文再审核。'); }
+      await mutate(current.document.id, '/review', { request_id: crypto.randomUUID(), expected_revision: current.document.revision });
+      await refresh();
+    } finally { setBusy(false); }
+  }
   async function run(kind: 'generate' | 'revise' | 'review', blockId = selected, commentId?: string) {
     await save(blockId);
     if (draftRef.current[blockId]?.dirty) throw new Error('保存期间又有输入，请保存完成后再运行 AI。');
@@ -150,6 +171,16 @@ export function PRDEditor({ sessionId }: { sessionId: string }) {
     await refresh();
   }
   async function addComment() {
+    if (fullSnapshot) {
+      if ((start && !end) || (!start && end)) throw new Error('请同时填写起始行和结束行。');
+      const current = await getDocument(fullSnapshot.document.id);
+      if (fullSnapshotChanged(fullSnapshot, current)) { ingest(current); throw new Error('全文已变化，请更新全文并重新选择批注范围。'); }
+      const targets = start && end ? fullCommentTargets(fullSnapshot.blocks, Number(start), Number(end))
+        : fullCommentTargets(fullSnapshot.blocks).filter(target => !checked.size || checked.has(target.block_id));
+      ingest(await mutate(current.document.id, '/comments', { text: feedback, targets }));
+      setFeedback(''); setStart(''); setEnd('');
+      return;
+    }
     const ids = checked.size ? [...checked] : [selected];
     for (const id of ids) await save(id);
     if (ids.some(id => draftRef.current[id]?.dirty)) throw new Error('保存期间又有输入，请保存后再添加批注。');
@@ -203,7 +234,10 @@ export function PRDEditor({ sessionId }: { sessionId: string }) {
   const block = data?.blocks.find(b => b.id === selected), draft = drafts[selected];
   const initialRun = data?.runs.find(r => r.type === 'initial');
   const initialActive = !!initialRun && ['queued', 'running'].includes(initialRun.status);
-  const active = initialActive || (data?.runs.some(r => r.block_id === selected && ['queued', 'running'].includes(r.status)) ?? false);
+  const wholeReviewActive = data?.runs.some(r => r.type === 'document_review' && ['queued', 'running'].includes(r.status)) ?? false;
+  const active = initialActive || wholeReviewActive || (data?.runs.some(r => r.block_id === selected && ['queued', 'running'].includes(r.status)) ?? false);
+  const anyActive = data?.runs.some(r => ['queued', 'running'].includes(r.status)) ?? false;
+  const wholeReport = data?.runs.filter(r => r.type === 'document_review' && r.status === 'completed').at(-1);
   const candidates = data?.runs.filter(r => r.block_id === selected && r.status === 'completed' && r.apply_status !== 'applied') ?? [];
   const viewBlocks = data?.blocks.map(b => ({ ...b, status: drafts[b.id]?.dirty ? 'editing' as const : b.status })) ?? [];
   return <main className="prd-page">
@@ -226,15 +260,18 @@ export function PRDEditor({ sessionId }: { sessionId: string }) {
         </button>
       </section>
       <div className="prd-columns"><aside className="prd-directory"><div className="prd-section-heading">文档目录<small>{checked.size ? `${checked.size} 已选` : '可多选批注'}</small></div><BlockTree blocks={viewBlocks} selected={selected} checked={checked} onSelect={select} onCheck={id => setChecked(old => { const next = new Set(old); next.has(id) ? next.delete(id) : next.add(id); return next; })} /></aside>
-        <section className="prd-main-editor">{block && draft && <>
+        <section className="prd-main-editor">{fullSnapshot ? <FullDocumentView snapshot={fullSnapshot} selected={selected}
+          changed={fullSnapshotChanged(fullSnapshot, data)} active={wholeReviewActive} loading={busy || anyActive} report={wholeReport}
+          onRange={(s, e) => { setStart(String(s)); setEnd(String(e)); setChecked(new Set()); }} onSelect={select}
+          onRefresh={() => void attempt(browseFull)} onBack={() => { setFullSnapshot(null); setChecked(new Set()); setStart(''); setEnd(''); }} onReview={() => void attempt(reviewFull)} /> : block && draft && <>
           <div className="prd-save-state"><span className={`prd-dot is-${draft.dirty ? 'editing' : block.status}`} />{saving.has(selected) ? '保存中…' : draft.error ? '保存失败，输入已保留' : draft.dirty ? '未保存' : '已保存'}<span>{statusNames[block.status]} · {block.fragment_version === block.version ? '结构已同步' : '提交前需审核本块'}</span></div>
           <BlockEditor key={selected} block={block} draft={draft} blocks={data.blocks} onEdit={edit} onRange={(s, e) => { setStart(String(s)); setEnd(String(e)); }} />
-          <BlockToolbar dirty={draft.dirty} saving={saving.has(selected)} active={active} hasContent={Boolean(draft.content)} onSave={() => void attempt(() => save(selected))} onRun={kind => void attempt(() => run(kind))} onHistory={() => void attempt(async () => setHistory({ blockId: selected, versions: await apiClient.request<Version[]>(documentPath(data.document.id) + `/blocks/${selected}/history`) }))} />
+          <BlockToolbar onBrowse={() => void attempt(browseFull)} dirty={draft.dirty} saving={saving.has(selected)} active={active} hasContent={Boolean(draft.content)} onSave={() => void attempt(() => save(selected))} onRun={kind => void attempt(() => run(kind))} onHistory={() => void attempt(async () => setHistory({ blockId: selected, versions: await apiClient.request<Version[]>(documentPath(data.document.id) + `/blocks/${selected}/history`) }))} />
           {draft.dirty && draft.version !== block.version && <div className="prd-conflict"><strong>保存版本已变化，人工输入已保留</strong><BlockDiff before={block.content} after={draft.content} /><button onClick={() => void attempt(() => save(selected, true))}>基于当前 v{block.version} 保存我的草稿</button></div>}
           {candidates.map(r => <div className="prd-conflict" key={r.id}><strong>{r.apply_status === 'conflict' || r.base_version !== block.version ? 'AI 结果基于旧版本生成' : draft.dirty ? 'AI 已完成，等待你保存当前输入' : 'AI 结果待应用'}</strong><p>基线 v{r.base_version} → 当前 v{block.version}</p><div><button onClick={() => setDiffRun(r)}>查看 Diff</button><button onClick={() => void attempt(async () => { await save(r.block_id!); if (draftRef.current[r.block_id!]?.dirty) throw new Error('请先保存当前输入'); await mutate(data.document.id, `/runs/${r.id}/retry`, { request_id: crypto.randomUUID() }); await refresh(); })}>基于当前版本重新生成</button><button disabled={draft.dirty} onClick={() => void attempt(async () => { await apply(r, true); setDiffRun(null); })}>仍然应用</button></div></div>)}
           {data.runs.filter(r => r.block_id === selected && r.result?.review_notes?.length).slice(-1).map(r => <div className="prd-review-notes" key={r.id}><strong>本块审核意见</strong><ul>{r.result!.review_notes!.map((note, i) => <li key={i}>{note}</li>)}</ul></div>)}
         </>}</section>
-        <aside className="prd-right"><GenerationStatus key={data.document.id} documentId={data.document.id} runs={data.runs} blocks={data.blocks} onCancel={r => void attempt(async () => { await mutate(data.document.id, `/runs/${r.id}/cancel`, {}); await refresh(); })} /><BlockCommentPanel comments={data.comments} blocks={data.blocks} current={selected} feedback={feedback} onFeedback={setFeedback} start={start} end={end} onRange={(s, e) => { setStart(s); setEnd(e); }} count={checked.size} onAdd={() => void attempt(addComment)} onRevise={c => void attempt(() => reviseComment(c))} onResolve={c => void attempt(async () => ingest(await mutate(data.document.id, `/comments/${c.id}`, { resolved: !c.resolved }, 'PATCH')))} /></aside></div>
+        <aside className="prd-right"><GenerationStatus key={data.document.id} documentId={data.document.id} runs={data.runs} blocks={data.blocks} onCancel={r => void attempt(async () => { await mutate(data.document.id, `/runs/${r.id}/cancel`, {}); await refresh(); })} /><BlockCommentPanel fullMode={!!fullSnapshot} comments={data.comments} blocks={data.blocks} current={selected} feedback={feedback} onFeedback={setFeedback} start={start} end={end} onRange={(s, e) => { setStart(s); setEnd(e); if (fullSnapshot) setChecked(new Set()); }} count={checked.size || (fullSnapshot ? fullSnapshot.blocks.length : 0)} onAdd={() => void attempt(addComment)} onRevise={c => void attempt(() => reviseComment(c))} onResolve={c => void attempt(async () => ingest(await mutate(data.document.id, `/comments/${c.id}`, { resolved: !c.resolved }, 'PATCH')))} /></aside></div>
     </>}
     {showPlan && data && <div className="prd-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShowPlan(false); }}><section className="prd-modal prd-plan-modal" role="dialog" aria-modal="true" aria-label="文档规划图"><header><div><h2>文档规划</h2><small>点击节点可跳转到对应 Block</small></div><button aria-label="关闭文档规划图" onClick={() => setShowPlan(false)}><X size={17} /></button></header><BlockPlanMap blocks={viewBlocks} selected={selected} onSelect={id => { select(id); setShowPlan(false); }} /></section></div>}
     {showImport && <div className="prd-modal-backdrop"><section className="prd-modal" role="dialog" aria-modal="true" aria-label="导入 PRD 大纲"><h2>模板与大纲</h2><p>内置模板来自提供的阿里、鹅厂附件；教程和示例业务不作为项目需求。有正文或批注时不会覆盖现有大纲。</p><select aria-label="选择模板" value={template} onChange={e => setTemplate(e.target.value)}><option value="alibaba">阿里 PRD 模板</option><option value="tencent">鹅厂 PRD 模板</option><option value="custom">自定义大纲</option></select><input aria-label="上传大纲文件" type="file" accept=".md,.txt,.pdf" onChange={e => { if (e.target.files?.[0]) void attempt(() => readFile(e.target.files![0])); }} />{template === 'custom' && <textarea aria-label="大纲内容" rows={14} value={outline} onChange={e => setOutline(e.target.value)} placeholder={'# 产品背景\n# 功能设计\n## 具体功能'} />}<footer><button onClick={() => setShowImport(false)}>关闭</button><button className="prd-primary" disabled={busy} onClick={() => void attempt(importOutline)}>导入并规划</button></footer></section></div>}

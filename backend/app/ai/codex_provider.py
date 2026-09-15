@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from app.agents.codex import CodexStructuredRunner
-from .provider import AIProvider, BlockPlan, BlockResult
+from .provider import AIProvider, BlockPlan, BlockResult, DocumentReview
 
 
 class CodexProvider(AIProvider):
@@ -22,6 +22,17 @@ class CodexProvider(AIProvider):
                 "Use unique keys and acyclic dependencies on necessary upstream summaries. "
                 "Cover downstream spec sections (boundaries, exclusions, core objects, flows, roles, "
                 "deliverables, requirements with acceptance) in appropriate block instructions."
+            )
+        elif operation == "document_review":
+            instructions += (
+                "Review the ENTIRE document across all supplied blocks as one coherent PRD. "
+                "Check consistency across modules, contradictions, missing requirements, scope, "
+                "terminology, flows, dependencies, feasibility, measurable acceptance criteria and "
+                "alignment with the confirmed background. Distinguish unresolved decisions from defects. "
+                "Return a concise Chinese summary and actionable issues with severity and suggestions. "
+                "Reference only supplied block_ids; use an empty list for document-wide issues. "
+                "Copy document_id and base_revision exactly. This is a read-only assessment: "
+                "do not return replacement content, rewrite blocks, approve, sign off or submit the PRD."
             )
         else:
             instructions += (
@@ -52,3 +63,6 @@ class CodexProvider(AIProvider):
 
     async def review_block(self, context):
         return await self._call("review", context, BlockResult)
+
+    async def review_document(self, context):
+        return await self._call("document_review", context, DocumentReview)

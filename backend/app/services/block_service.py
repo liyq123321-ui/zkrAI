@@ -176,10 +176,14 @@ class BlockService:
         with self.factory() as db:
             doc = self.document(db, document_id, actor)
             runs = db.query(AgentRun).filter_by(document_id=doc.id).order_by(AgentRun.created_at).all()
+            blocks = self.blocks(db, doc)
+            versions = {b.id: b.version for b in blocks}
             # Do not expose prompt snapshots through routine polling.
-            return {"document": record(doc), "blocks": [record(b) for b in self.blocks(db, doc)],
+            return {"document": record(doc), "blocks": [record(b) for b in blocks],
                     "comments": [record(c) for c in db.query(BlockComment).filter_by(document_id=doc.id).all()],
-                    "runs": [{k: v for k, v in record(r).items() if k != "input_snapshot"} for r in runs]}
+                    "runs": [{**{k: v for k, v in record(r).items() if k != "input_snapshot"},
+                              **({"stale": r.context_revision != doc.context_revision or r.dependency_versions != versions}
+                                 if r.type == "document_review" else {})} for r in runs]}
 
     def import_outline(self, document_id, actor, template, outline, expected_revision):
         with self.write() as db:

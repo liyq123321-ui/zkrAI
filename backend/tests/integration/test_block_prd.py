@@ -9,7 +9,7 @@ from app.models import Block, AgentRun
 from app.services.block_service import BlockService, BlockError
 from app.services.ai_service import AIService
 from app.services.prd_templates import parse_outline, validate_plan
-from app.ai.provider import BlockPlan, BlockResult, SpecFragment
+from app.ai.provider import BlockPlan, BlockResult, SpecFragment, DocumentReview, DocumentReviewIssue
 from tests.helpers.factories import make_valid_spec
 from main import create_app
 
@@ -57,6 +57,15 @@ class DelayedProvider:
     async def generate_block(self, context): return await self.answer(context)
     async def revise_block(self, context): return await self.answer(context)
     async def review_block(self, context): return await self.answer(context, True)
+    async def review_document(self, context):
+        self.contexts.append(context)
+        self.started.set()
+        await self.release.wait()
+        return DocumentReview(document_id=context['document_id'], base_revision=context['base_revision'],
+                              summary='全文存在跨模块不一致，需要明确验收标准。',
+                              issues=[DocumentReviewIssue(severity='warning',
+                                      block_ids=['unknown'] if self.bad_id else [b['id'] for b in context['blocks'][:2]],
+                                      description='前后两个模块要求不一致', suggestion='统一两个模块的验收标准')])
     async def plan_outline(self, context):
         self.started.set()
         await self.release.wait()
@@ -510,3 +519,90 @@ def test_http_editor_entry_starts_first_draft_once_and_enforces_identity(service
     ai.recover()
     ai.start_initial(one.json()['document']['id'], 'owner')
     assert not ai.tasks
+
+
+@pytest.mark.asyncio
+async def test_whole_review_reads_all_blocks_without_modifying_prd(service):
+    snap = prepared(service)
+    doc = snap['document']['id']
+    for b in snap['blocks']:
+        manual(service, doc, b, 'Original ' + b['title'])
+    before = service.snapshot(doc, 'owner')
+    provider = DelayedProvider(); ai = AIService(service, provider)
+    run = ai.enqueue_document_review(doc, 'owner', 'whole', before['document']['revision'])
+    assert ai.enqueue_document_review(doc, 'owner', 'whole', before['document']['revision'])['id'] == run['id']
+    with pytest.raises(BlockError): ai.enqueue_document_review(doc, 'owner', 'duplicate', before['document']['revision'])
+    with pytest.raises(BlockError): ai.enqueue(doc, 'owner', 'generate', 'other', before['blocks'][0]['id'])
+    await finish(ai, provider, run)
+    after = service.snapshot(doc, 'owner')
+    assert after['blocks'] == before['blocks']
+    assert after['document'] == before['document']
+    assert len(provider.contexts[0]['blocks']) == 3
+    assert [b['content'] for b in provider.contexts[0]['blocks']] == [b['content'] for b in before['blocks']]
+    report = after['runs'][-1]
+    assert report['status'] == 'completed' and report['stale'] is False
+    assert len(report['result']['issues'][0]['block_ids']) == 2
+    assert 'input_snapshot' not in report
+    with pytest.raises(BlockError, match='仅提供意见'): ai.apply(doc, run['id'], 'owner', 1, True)
+    with service.factory() as db:
+        assert db.query(SpecVersion).count() == 0
+    for b in before['blocks']:
+        assert len(service.versions(doc, b['id'], 'owner')) == 2
+    # Comments do not age a report; edits do, even after it has completed.
+    service.comment(doc, 'owner', 'Review follow-up', [{'block_id': before['blocks'][0]['id'], 'base_version': 2}])
+    assert service.snapshot(doc, 'owner')['runs'][-1]['stale'] is False
+    manual(service, doc, before['blocks'][0], 'Changed after review')
+    assert service.snapshot(doc, 'owner')['runs'][-1]['stale'] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['edit', 'context', 'cancel', 'bad_result'])
+async def test_whole_review_handles_changes_cancellation_and_invalid_result(service, change):
+    snap = prepared(service); doc = snap['document']['id']
+    snap = manual(service, doc, snap['blocks'][0], 'Current original')
+    provider = DelayedProvider(); ai = AIService(service, provider)
+    run = ai.enqueue_document_review(doc, 'owner', 'whole', snap['document']['revision'])
+    task = ai.tasks[run['id']]
+    await provider.started.wait()
+    if change == 'edit': manual(service, doc, snap['blocks'][0], 'Human new text')
+    elif change == 'context': service.context(doc, 'owner', snap['document']['revision'], 'Updated context', '')
+    elif change == 'cancel': ai.cancel(doc, run['id'], 'owner')
+    else: provider.bad_id = True
+    provider.release.set()
+    await asyncio.gather(task, return_exceptions=True)
+    after = service.snapshot(doc, 'owner'); report = after['runs'][-1]
+    if change in ('edit', 'context'):
+        assert report['status'] == 'completed' and report['apply_status'] == 'conflict' and report['stale']
+    elif change == 'cancel': assert report['status'] == 'cancelled' and report['result'] is None
+    else: assert report['status'] == 'failed' and '不存在的模块' in report['error']
+    assert after['blocks'][0]['content'] == ('Human new text' if change == 'edit' else 'Current original')
+    assert after['document']['plan_status'] == snap['document']['plan_status']
+
+
+@pytest.mark.asyncio
+async def test_whole_review_guards_empty_revision_capacity_and_permission(service):
+    snap = prepared(service); doc = snap['document']['id']
+    ai = AIService(service, DelayedProvider())
+    with pytest.raises(BlockError, match='正文'): ai.enqueue_document_review(doc, 'owner', 'empty', snap['document']['revision'])
+    snap = manual(service, doc, snap['blocks'][0], 'some content')
+    with pytest.raises(BlockError, match='已改变'): ai.enqueue_document_review(doc, 'owner', 'stale', 1)
+    with pytest.raises(BlockError) as error: ai.enqueue_document_review(doc, 'intruder', 'forbidden', snap['document']['revision'])
+    assert error.value.status == 403
+    with service.write() as db:
+        db.get(Block, snap['blocks'][0]['id']).content = 'x' * 300001
+    with pytest.raises(BlockError, match='未截断'): ai.enqueue_document_review(doc, 'owner', 'large', snap['document']['revision'])
+    assert not service.snapshot(doc, 'owner')['runs']
+
+
+def test_whole_review_http_contract(service, test_settings):
+    from dataclasses import replace
+    snap = prepared(service); doc = snap['document']['id']
+    snap = manual(service, doc, snap['blocks'][0], 'Ready for review')
+    app = create_app(settings=replace(test_settings, identity_mode='local', identity_actor_id='owner'),
+                     session_factory=service.factory, auto_bind_prd_review=False, block_provider=DelayedProvider())
+    with TestClient(app) as client:
+        assert client.post(f'/prd-documents/{doc}/review', json={'request_id': 'missing-revision'}).status_code == 422
+        response = client.post(f'/prd-documents/{doc}/review', json={'request_id': 'whole', 'expected_revision': snap['document']['revision']})
+        assert response.status_code == 202 and response.json()['type'] == 'document_review'
+        assert 'input_snapshot' not in response.json()
+        assert client.post(f'/prd-documents/{doc}/runs/{response.json()["id"]}/cancel', json={}).status_code == 200

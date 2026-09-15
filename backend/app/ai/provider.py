@@ -1,4 +1,4 @@
-"""Provider contracts deliberately contain one Block, never a whole PRD."""
+"""Block editing contracts and a separate read-only whole-document review."""
 from abc import ABC, abstractmethod
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -37,6 +37,22 @@ class BlockResult(BaseModel):
     review_notes: list[str] = Field(default_factory=list, max_length=50)
 
 
+class DocumentReviewIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    severity: Literal["blocker", "warning", "info"]
+    block_ids: list[str] = Field(max_length=100)
+    description: str = Field(min_length=1, max_length=4000)
+    suggestion: str = Field(min_length=1, max_length=4000)
+
+
+class DocumentReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_id: str
+    base_revision: int
+    summary: str = Field(min_length=1, max_length=6000)
+    issues: list[DocumentReviewIssue] = Field(max_length=100)
+
+
 class AIProvider(ABC):
     @abstractmethod
     async def plan_outline(self, context: dict) -> BlockPlan: ...
@@ -46,3 +62,6 @@ class AIProvider(ABC):
     async def revise_block(self, context: dict) -> BlockResult: ...
     @abstractmethod
     async def review_block(self, context: dict) -> BlockResult: ...
+
+    @abstractmethod
+    async def review_document(self, context: dict) -> DocumentReview: ...

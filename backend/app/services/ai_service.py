@@ -1,9 +1,10 @@
 """Durable, bounded single-process AI jobs. No database transaction spans AI await."""
 import asyncio
 import logging
+import json
 from app.models import Block, AgentRun
 from app.database.models import SpecVersion
-from app.ai.provider import BlockPlan, BlockResult
+from app.ai.provider import BlockPlan, BlockResult, DocumentReview
 from .block_service import BlockError, uid, record
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,40 @@ class AIService:
         self.blocks, self.provider = blocks, provider
         self.tasks = {}
         self.limit = asyncio.Semaphore(3)
+
+    def enqueue_document_review(self, document_id, actor, request_id, expected_revision):
+        with self.blocks.write() as db:
+            doc = self.blocks.document(db, document_id, actor)
+            existing = db.query(AgentRun).filter_by(document_id=doc.id, request_id=request_id).one_or_none()
+            if existing:
+                if existing.type != "document_review":
+                    raise BlockError("请求 ID 已用于另一项操作")
+                return record(existing)
+            if doc.revision != expected_revision:
+                raise BlockError("全文已改变，请刷新后重新审核")
+            if db.query(AgentRun).filter_by(document_id=doc.id).filter(AgentRun.status.in_(["queued", "running"])).count():
+                raise BlockError("请等待当前生成或审核任务完成后，再审核全文")
+            blocks = self.blocks.blocks(db, doc)
+            if not any(b.content.strip() for b in blocks):
+                raise BlockError("请先编写 PRD 正文再审核全文")
+            context = {"document_id": doc.id, "base_revision": doc.revision, "title": doc.title,
+                       "background": doc.background, "global_rules": doc.global_rules,
+                       "blocks": [{key: getattr(b, key) for key in
+                                   ("id", "title", "parent_id", "order", "version", "content", "dependencies")}
+                                  for b in blocks]}
+            if len(json.dumps(context, ensure_ascii=False)) > 300000:
+                raise BlockError("全文超过单次审核容量（30 万字符），请精简后重试；未截断正文", 422)
+            run = AgentRun(id=uid("run"), document_id=doc.id, type="document_review", status="queued",
+                           base_version=doc.revision, input_snapshot=context,
+                           dependency_versions={b.id: b.version for b in blocks},
+                           context_revision=doc.context_revision, request_id=request_id, actor_id=actor,
+                           apply_status="pending")
+            db.add(run)
+            db.flush()
+            result, run_id = record(run), run.id
+        self.tasks[run_id] = asyncio.create_task(self.execute(run_id))
+        self.tasks[run_id].add_done_callback(lambda task: self.tasks.pop(run_id, None))
+        return result
 
     def start_initial(self, document_id, actor):
         """Claim a first draft once, durably, even across tabs and page reloads."""
@@ -92,6 +127,8 @@ class AIService:
                     raise BlockError("请求 ID 已用于另一项操作")
                 return record(existing)
             active = db.query(AgentRun).filter_by(document_id=doc.id).filter(AgentRun.status.in_(["queued", "running"])).all()
+            if any(r.type == "document_review" for r in active):
+                raise BlockError("正在审核全文，请等待审核完成或取消后再运行 AI")
             if any(r.type == "initial" and r.id != initial_run_id for r in active):
                 raise BlockError("首版正在连续生成，请先停止自动生成再运行其他 AI 操作")
             if initial_run_id:
@@ -162,16 +199,26 @@ class AIService:
                     run.status = "running"
                     kind = run.type
                     context = {key: value for key, value in run.input_snapshot.items() if key != "initial_run_id"}
-                method = {"plan": self.provider.plan_outline, "generate": self.provider.generate_block,
-                          "revise": self.provider.revise_block, "review": self.provider.review_block}[kind]
+                method = getattr(self.provider, {"plan": "plan_outline", "generate": "generate_block",
+                          "revise": "revise_block", "review": "review_block", "document_review": "review_document"}[kind])
                 output = await method(context)
-                output = (BlockPlan if kind == "plan" else BlockResult).model_validate(output)
+                contract = DocumentReview if kind == "document_review" else BlockPlan if kind == "plan" else BlockResult
+                output = contract.model_validate(output)
                 with self.blocks.write() as db:
                     run = db.get(AgentRun, run_id)
                     if run.status != "running":
                         return
                     doc = self.blocks.document(db, run.document_id, run.actor_id)
-                    if kind != "plan":
+                    if kind == "document_review":
+                        if output.document_id != doc.id or output.base_revision != run.base_version:
+                            raise BlockError("AI 返回了错误的文档或审核基线")
+                        if any(set(issue.block_ids) - set(run.dependency_versions) for issue in output.issues):
+                            raise BlockError("审核意见引用了不存在的模块")
+                        # A report never writes blocks, versions, fragments or approval state.
+                        changed = (doc.context_revision != run.context_revision or
+                                   {b.id: b.version for b in self.blocks.blocks(db, doc)} != run.dependency_versions)
+                        run.apply_status = "conflict" if changed else "applied"
+                    elif kind != "plan":
                         if output.block_id != run.block_id or output.base_version != run.base_version:
                             raise BlockError("AI 返回了错误的 Block 或基线版本")
                         if kind == "review" and output.content != context["content"]:
@@ -213,6 +260,8 @@ class AIService:
             run = db.get(AgentRun, run_id)
             if not run or run.document_id != doc.id:
                 raise BlockError("作业不存在", 404)
+            if run.type == "document_review":
+                raise BlockError("全文审核仅提供意见，不能作为正文应用")
             if run.apply_status == "applied":
                 return {"applied": True}
             if run.status != "completed" or run.type in ("plan", "initial") or not run.result:

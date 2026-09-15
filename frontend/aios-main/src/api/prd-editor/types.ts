@@ -9,11 +9,13 @@ export interface Document {
   template: string; plan_status: string; revision: number; context_revision: number;
 }
 export interface AgentRun {
-  id: string; block_id: string | null; type: 'plan' | 'generate' | 'revise' | 'review' | 'initial';
+  id: string; block_id: string | null; type: 'plan' | 'generate' | 'revise' | 'review' | 'initial' | 'document_review';
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'; base_version: number;
   apply_status: 'pending' | 'applied' | 'conflict' | 'cancelled'; error: string | null;
   request_id?: string;
-  result: { content?: string; summary?: string; review_notes?: string[]; completed?: number; total?: number } | null;
+  stale?: boolean;
+  result: { content?: string; summary?: string; review_notes?: string[]; completed?: number; total?: number;
+    issues?: { severity: 'blocker' | 'warning' | 'info'; block_ids: string[]; description: string; suggestion: string }[] } | null;
 }
 export interface Comment {
   id: string; text: string; resolved: boolean;

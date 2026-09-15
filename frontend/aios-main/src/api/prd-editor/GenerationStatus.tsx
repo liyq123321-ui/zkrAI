@@ -15,9 +15,10 @@ function statusText(run: AgentRun) {
   if (run.status === 'running') return 'AI 正在处理';
   if (run.status === 'failed') return run.error || '生成失败';
   if (run.status === 'cancelled') return '已取消';
+  if (run.type === 'document_review') return run.stale || run.apply_status === 'conflict' ? '审核完成，正文已变化' : '审核完成';
   if (run.apply_status === 'conflict') return '生成成功，待处理版本冲突';
   if (run.apply_status === 'pending') return '生成成功，待应用';
-  return run.type === 'plan' ? '规划完成' : run.type === 'review' ? '审核完成' : '生成成功';
+  return run.type === 'plan' ? '规划完成' : ['review', 'document_review'].includes(run.type) ? '审核完成' : '生成成功';
 }
 
 export function GenerationStatus({ documentId, runs, blocks, onCancel }: {
@@ -41,7 +42,7 @@ export function GenerationStatus({ documentId, runs, blocks, onCancel }: {
     <div className="prd-runs" role="region" aria-label="生成消息列表" tabIndex={0}>
       {visible.length === 0 && <p className="prd-runs-empty">暂无生成消息</p>}
       {visible.map(run => {
-        const title = run.type === 'initial' ? '首版自动生成' : blocks.find(block => block.id === run.block_id)?.title ?? '结构规划';
+        const title = run.type === 'document_review' ? '全文审核' : run.type === 'initial' ? '首版自动生成' : blocks.find(block => block.id === run.block_id)?.title ?? '结构规划';
         const active = isActive(run);
         const dot = active ? 'generating' : run.status === 'failed' ? 'error' : run.status === 'completed' ? 'ready' : 'pending';
         return <div key={run.id} className="prd-run-message">

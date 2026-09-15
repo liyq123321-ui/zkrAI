@@ -149,3 +149,48 @@ it('does not auto-apply a candidate rejected by first-draft automation', async (
   expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/apply'))).toBe(false);
   expect((screen.getByRole('button', { name: '重新生成' }) as HTMLButtonElement).disabled).toBe(false);
 });
+
+it('replaces AI modify with full-document browsing and keeps the three-column tools', async () => {
+  await editor();
+  expect(screen.queryByRole('button', { name: 'AI 修改' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '浏览全文' }));
+  const full = await screen.findByRole('textbox', { name: 'PRD 全文' });
+  expect((full as HTMLTextAreaElement).value).toContain('A original');
+  expect((full as HTMLTextAreaElement).value).toContain('B original');
+  expect((full as HTMLTextAreaElement).readOnly).toBe(true);
+  expect(screen.getByRole('navigation', { name: 'Block 目录' })).toBeTruthy();
+  expect(screen.getByRole('region', { name: '生成队列' })).toBeTruthy();
+  expect(screen.getByRole('textbox', { name: '修改意见' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: '审核全文' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '返回分块编辑' }));
+  await screen.findByRole('textbox', { name: 'Block 正文' });
+});
+
+it('adds a whole-document comment to all blocks and requests one holistic review', async () => {
+  await editor();
+  fireEvent.click(screen.getByRole('button', { name: '浏览全文' }));
+  await screen.findByRole('textbox', { name: 'PRD 全文' });
+  fireEvent.change(screen.getByRole('textbox', { name: '修改意见' }), { target: { value: '请统一全文术语' } });
+  fireEvent.click(screen.getByRole('button', { name: '添加批注 · 2 个块' }));
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/comments'))).toBe(true));
+  const comment = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/comments'))!;
+  expect(JSON.parse(comment[1]!.body as string).targets).toEqual([{ block_id: 'A', base_version: 1 }, { block_id: 'B', base_version: 1 }]);
+  fireEvent.click(screen.getByRole('button', { name: '审核全文' }));
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/review'))).toBe(true));
+  const review = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/review'))!;
+  expect(JSON.parse(review[1]!.body as string)).toMatchObject({ expected_revision: 1 });
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/runs'))).toBe(false);
+});
+
+it('prevents stale full-text line comments when another writer changes a block', async () => {
+  await editor();
+  fireEvent.click(screen.getByRole('button', { name: '浏览全文' }));
+  await screen.findByRole('textbox', { name: 'PRD 全文' });
+  snapshot = structuredClone(snapshot); snapshot.blocks[0].content = 'Changed remotely'; snapshot.blocks[0].version++; snapshot.document.revision++;
+  Source.current.emit(snapshot);
+  await screen.findByText('正文或背景已更新，请更新全文后再批注或审核。');
+  fireEvent.change(screen.getByRole('textbox', { name: '修改意见' }), { target: { value: 'comment on old text' } });
+  fireEvent.click(screen.getByRole('button', { name: '添加批注 · 2 个块' }));
+  await screen.findByRole('alert');
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/comments'))).toBe(false);
+});
