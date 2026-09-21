@@ -37,6 +37,7 @@ from app.services.state_projection import (
     followup_spec_version_id,
     project_state,
 )
+from app.services.project_title import concise_project_title
 
 
 _INTAKE_CLAIM_LEASE_SECONDS = 30
@@ -408,6 +409,8 @@ class ProjectService:
         root_work_item_id = _new_id()
         artifact_id = _new_id()
         brief_body = request.brief.model_dump(mode="json")
+        project_title = concise_project_title(request.brief.final_objective)
+        brief_body["title"] = project_title
 
         db.add(Conversation(id=session_id, workflow="project_spec", agent="pm"))
         project = Project(
@@ -430,7 +433,7 @@ class ProjectService:
                 local_key="root",
                 kind="ROOT",
                 executable=False,
-                title=request.brief.final_objective,
+                title=project_title,
                 objective=request.brief.final_objective,
                 scope=request.brief.known_scope,
                 exclusions=request.brief.exclusions,

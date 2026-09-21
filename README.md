@@ -236,8 +236,11 @@ WebGUI 只展示安全阶段进度和审计摘要，不展示原始推理内容�
 ## 工程文档
 
 - 修改日志：[`CHANGELOG.md`](CHANGELOG.md)
+- 工程文档索引：[`docs/README.md`](docs/README.md)
+- 独立模块说明：[`Dashboard`](docs/dashboard.md) · [`工作空间`](docs/workspace.md) · [`Block PRD`](docs/block-prd.md)
 - 本机部署记录：[`docs/local-deployment.md`](docs/local-deployment.md)
-- 后端运行与 API 示例：[`backend/readme.md`](backend/readme.md)
-- 后端工程框架：[`backend/gitea-prd-review-engineering-guide.md`](backend/gitea-prd-review-engineering-guide.md)
-- 前端架构与 API：[`frontend/aios-main/CODEX_ARCHITECTURE_AND_API_SPEC.md`](frontend/aios-main/CODEX_ARCHITECTURE_AND_API_SPEC.md)
+- 后端运行与 API 示例：[`docs/backend/README.md`](docs/backend/README.md)
+- Agent 行为审计（Semantica + Neo4j）：[`docs/SEMANTICA_AUDIT.md`](docs/SEMANTICA_AUDIT.md)
+- 后端工程框架：[`docs/backend/gitea-prd-review-engineering-guide.md`](docs/backend/gitea-prd-review-engineering-guide.md)
+- 前端架构与 API：[`docs/architecture/frontend-codex-architecture-and-api.md`](docs/architecture/frontend-codex-architecture-and-api.md)
 - 第一阶段前后端契约：[`docs/frontend-backend-integration-contract.md`](docs/frontend-backend-integration-contract.md)

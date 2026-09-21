@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentSpecDto, AuditEventDto, SessionStateDto, SessionSummaryDto, SpecVersionDto, WorkItemDto } from './dto';
 import { normalizeNetworkError } from './errors';
 import { getSessionState, listAgentSpecs, listEvents, listSessions, listSpecs, listWorkItems } from './sessions';
+import { conciseProjectTitle } from './projectTitle';
 
 const ACTIVE_SESSION_KEY = 'firstflight.active-session-id';
 
@@ -20,7 +21,10 @@ export function projectSpec(project?: WorkspaceProject) {
 }
 
 export function projectTitle(project: WorkspaceProject) {
-  return project.resources.workItems.find((item) => item.kind === 'ROOT')?.title || project.state.session_id;
+  return conciseProjectTitle(
+    project.resources.workItems.find((item) => item.kind === 'ROOT')?.title,
+    project.state.session_id,
+  );
 }
 
 export function useWorkspaceProjects() {
@@ -102,7 +106,7 @@ export function useWorkspaceProjects() {
     try {
       const summaries = await listSessions(signal);
       if (signal?.aborted) return;
-      setCatalog(summaries);
+      setCatalog(summaries.map((item) => ({ ...item, title: conciseProjectTitle(item.title, item.session_id) })));
       const ids = new Set(summaries.map((item) => item.session_id));
       setProjects((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => ids.has(id))));
       setLoadErrors((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => ids.has(id))));

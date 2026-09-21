@@ -1,9 +1,10 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { Activity, AlertCircle, Bot, CheckCircle2, Clock3, Cpu, GitBranch, Layers3, Maximize2, Minimize2, UserRound, Zap } from 'lucide-react';
-import type { AgentRuntimeDto, AgentRuntimeEventDto, AgentSpecDto, LifecycleRouteDecisionDto, WorkItemDto } from './dto';
+import { Activity, AlertCircle, Bot, CheckCircle2, Clock3, Cpu, GitBranch, Layers3, Maximize2, Minimize2, Network, UserRound, Zap } from 'lucide-react';
+import type { AgentRuntimeDto, AgentRuntimeEventDto, AgentSpecDto, LifecycleRouteDecisionDto, SpecVersionDto, WorkItemDto } from './dto';
 import { agentOperationLabel } from './AgentRuntimePanel';
 import { ExpandedSdlcGraph } from './ExpandedSdlcGraph';
 import { MilestoneTaskMonitor } from './MilestoneTaskMonitor';
+import { ProjectMindMap } from './ProjectMindMap';
 import { WorkItemDialog } from './WorkItemDialog';
 import { workItemLane } from './workflowUi';
 
@@ -284,6 +285,7 @@ function phaseLabel(phase: TopLevelPhase): string {
 export function TopLevelGraph({
   projectTitle,
   agentSpecs,
+  specs = [],
   workItems,
   decision = null,
   runtimes = [],
@@ -293,6 +295,7 @@ export function TopLevelGraph({
 }: {
   projectTitle: string;
   agentSpecs: AgentSpecDto[];
+  specs?: SpecVersionDto[];
   workItems: WorkItemDto[];
   decision?: LifecycleRouteDecisionDto | null;
   runtimes?: AgentRuntimeDto[];
@@ -302,6 +305,7 @@ export function TopLevelGraph({
 }) {
   const [selectedPhaseKey, setSelectedPhaseKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [mindMapOpen, setMindMapOpen] = useState(false);
   const [graphMotion, setGraphMotion] = useState<'idle' | 'preparing-expand' | 'reveal-expanded' | 'hide-expanded' | 'restore-collapsed'>('idle');
   useEffect(() => {
     if (graphMotion === 'idle') return undefined;
@@ -457,6 +461,9 @@ export function TopLevelGraph({
         </div>
         <div className="ff-top-level-summary-actions">
           <div className="ff-top-level-version">RULESET v{plan.rulesVersion}<small>{plan.rulesHash.slice(0, 10)}</small></div>
+          <button type="button" className="ff-top-level-mindmap-button" onClick={() => setMindMapOpen(true)}>
+            <Network aria-hidden="true" />思维图谱
+          </button>
           <button
             type="button"
             className="ff-top-level-expand-button"
@@ -533,6 +540,8 @@ export function TopLevelGraph({
         />
       </WorkItemDialog>
     )}
+    {mindMapOpen && <ProjectMindMap projectTitle={projectTitle} specs={specs} phases={plan.phases} workItems={workItems} agentSpecs={agentSpecs}
+      onClose={() => setMindMapOpen(false)} onOpenWorkItem={onOpenWorkItem} />}
     </>
   );
 }

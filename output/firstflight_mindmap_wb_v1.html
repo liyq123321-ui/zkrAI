@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>firstFlight 人机混动软件开发系统 · 全流程思维导图 v5</title>
+<style>
+  :root{
+    --bg:#0d1117; --bg2:#161b22; --bg3:#1c2230; --line:#30363d;
+    --txt:#e6edf3; --muted:#8b949e; --accent:#58a6ff;
+    --flow:#3b82f6; --agent:#8b5cf6; --skill:#14b8a6; --guard:#f59e0b; --accept:#ef4444;
+    --hub:#eab308; --human:#f778ba; --cross:#22d3ee;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;overflow:hidden;}
+  #topbar{position:fixed;top:0;left:0;right:0;height:54px;z-index:30;
+    background:linear-gradient(180deg,#11161d,#0d1117);border-bottom:1px solid var(--line);
+    display:flex;align-items:center;gap:12px;padding:0 14px;flex-wrap:nowrap;overflow:hidden;}
+  #topbar h1{font-size:14.5px;margin:0;font-weight:600;letter-spacing:.2px;white-space:nowrap;}
+  #topbar h1 small{color:var(--muted);font-weight:400;font-size:11.5px;margin-left:8px;}
+  .btn{background:var(--bg3);border:1px solid var(--line);color:var(--txt);
+    padding:5px 10px;border-radius:7px;font-size:12px;cursor:pointer;transition:.15s;white-space:nowrap;}
+  .btn:hover{border-color:var(--accent);color:#fff;}
+  #search{background:#0b0f14;border:1px solid var(--line);color:var(--txt);border-radius:7px;
+    padding:5px 9px;font-size:12px;width:170px;outline:none;}
+  #search:focus{border-color:var(--accent);}
+  .spacer{flex:1;}
+  #chips{display:flex;gap:6px;align-items:center;flex-wrap:nowrap;}
+  .chip-f{background:var(--bg3);border:1px solid var(--line);color:var(--muted);border-radius:20px;
+    padding:4px 10px;font-size:11.5px;cursor:pointer;white-space:nowrap;transition:.15s;}
+  .chip-f:hover{color:#fff;}
+  .chip-f.on{background:#1f6feb33;border-color:var(--accent);color:#cfe4ff;}
+  #hint{position:fixed;bottom:10px;left:12px;z-index:30;font-size:11px;color:var(--muted);
+    background:rgba(13,17,23,.75);padding:4px 9px;border-radius:6px;border:1px solid var(--line);}
+  #legend{position:fixed;bottom:10px;right:12px;z-index:30;font-size:11px;color:var(--muted);
+    background:rgba(13,17,23,.75);padding:6px 10px;border-radius:8px;border:1px solid var(--line);
+    display:flex;gap:12px;flex-wrap:wrap;max-width:62vw;}
+  .lg{display:flex;align-items:center;gap:5px;}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
+  #viewport{position:fixed;top:54px;left:0;right:0;bottom:0;overflow:hidden;cursor:grab;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(88,166,255,.05), transparent 40%),
+      radial-gradient(circle at 80% 70%, rgba(139,92,246,.05), transparent 40%),
+      var(--bg);}
+  #viewport.grabbing{cursor:grabbing;}
+  #world{position:absolute;top:0;left:0;transform-origin:0 0;}
+  #edges{position:absolute;top:0;left:0;overflow:visible;pointer-events:none;}
+  .node{position:absolute;transform:translate(-0%,-50%);user-select:none;}
+  .node .card{position:relative;border-radius:10px;padding:8px 11px;background:var(--bg2);
+    border:1px solid var(--line);box-shadow:0 2px 10px rgba(0,0,0,.35);transition:.12s;cursor:pointer;}
+  .node .card:hover{border-color:var(--accent);box-shadow:0 4px 16px rgba(88,166,255,.25);}
+  .node.root .card{background:linear-gradient(135deg,#1f6feb22,#8b5cf622);border-color:var(--accent);min-width:250px;}
+  .node.root .ttl{font-size:15px;font-weight:700;}
+  .node.stage .card{border-left:5px solid var(--sc,#eab308);min-width:210px;background:var(--bg3);}
+  .node.stage .ttl{font-size:13.5px;font-weight:700;}
+  .node.stage .ph{font-size:10.5px;color:var(--muted);margin-top:2px;font-family:ui-monospace,monospace;}
+  .node.cat .card{display:flex;align-items:center;gap:7px;min-width:160px;border-left:4px solid var(--cc);}
+  .node.cat .ico{font-size:14px;}
+  .node.cat .ttl{font-size:12.5px;font-weight:600;}
+  .node.item .card{background:#10151c;border:1px solid #232a33;min-width:210px;}
+  .node.item .ttl{font-size:11.5px;line-height:1.4;}
+  .node.item.hubitem .card{border-color:#5c4a12;background:#1a1606;}
+  .node.item.humanitem .card{border-color:#4d2b3d;background:#1a0f16;}
+  .node.item.crossitem .card{border-color:#164e5a;background:#08161a;}
+  .node.hub .card{border:1px solid var(--hub);box-shadow:0 0 0 1px var(--hub) inset,0 2px 12px rgba(234,179,8,.18);min-width:230px;background:linear-gradient(135deg,#eab30814,#0000);}
+  .node.hub .ttl{font-size:13.5px;font-weight:700;color:#f5d45e;}
+  .node.human .card{border:1px solid var(--human);box-shadow:0 0 0 1px var(--human) inset,0 2px 12px rgba(247,120,186,.16);min-width:230px;background:linear-gradient(135deg,#f778ba14,#0000);}
+  .node.human .ttl{font-size:13.5px;font-weight:700;color:#ff9ecb;}
+  .node.cross .card{border:1px solid var(--cross);box-shadow:0 0 0 1px var(--cross) inset,0 2px 12px rgba(34,211,238,.16);min-width:230px;background:linear-gradient(135deg,#22d3ee14,#0000);}
+  .node.cross .ttl{font-size:13.5px;font-weight:700;color:#7ee7f5;}
+  .node.sdlc .card{border:1px solid var(--sdlc,#c9a3f7);box-shadow:0 0 0 1px var(--sdlc,#c9a3f7) inset,0 2px 12px rgba(163,113,247,.16);min-width:252px;background:linear-gradient(135deg,#a371f714,#0000);}
+  .node.sdlc .ttl{font-size:13px;font-weight:700;color:var(--sdlc,#c9a3f7);line-height:1.35;}
+  .node.sdlc .ph{font-size:10.5px;color:var(--muted);margin-top:2px;font-family:ui-monospace,monospace;}
+  .node.item.sdlcitem .card{border-color:#3a2f52;background:#120f1a;}
+  .node.skl .card{border:1px solid var(--skl,#14b8a6);box-shadow:0 0 0 1px var(--skl,#14b8a6) inset,0 2px 12px rgba(20,184,166,.16);min-width:246px;background:linear-gradient(135deg,#14b8a614,#0000);}
+  .node.skl .ttl{font-size:13px;font-weight:700;color:var(--skl,#5eead4);line-height:1.35;}
+  .node.item.sklitem .card{border-color:#1e4a48;background:#081514;}
+  .node.dual .card{border:1px solid var(--dual,#ff7b72);box-shadow:0 0 0 1px var(--dual,#ff7b72) inset,0 2px 12px rgba(255,123,114,.16);min-width:250px;background:linear-gradient(135deg,#ff7b7214,#0000);}
+  .node.dual .ttl{font-size:13px;font-weight:700;color:#ffa198;line-height:1.35;}
+  .node.item.duiitem .card{border-color:#5c2a28;background:#1a0e0e;}
+  .node.code .card{border:1px solid var(--code,#f0883e);box-shadow:0 0 0 1px var(--code,#f0883e) inset,0 2px 12px rgba(240,136,62,.16);min-width:250px;background:linear-gradient(135deg,#f0883e14,#0000);}
+  .node.code .ttl{font-size:13px;font-weight:700;color:#ffb27a;line-height:1.35;}
+  .node.item.codiitem .card{border-color:#5c3a1e;background:#1a1208;}
+  .node.ws .card{border:1px solid var(--ws,#3fb950);box-shadow:0 0 0 1px var(--ws,#3fb950) inset,0 2px 12px rgba(63,185,80,.16);min-width:250px;background:linear-gradient(135deg,#3fb95014,#0000);}
+  .node.ws .ttl{font-size:13px;font-weight:700;color:#7ee787;line-height:1.35;}
+  .node.item.wsiitem .card{border-color:#1e4a2a;background:#08150d;}
+  .badge{display:inline-block;font-size:9.5px;padding:1px 6px;border-radius:20px;margin-top:3px;margin-right:3px;font-weight:600;}
+  .badge.done{background:#1f6feb33;color:#79b8ff;border:1px solid #1f6feb66;}
+  .badge.partial{background:#f59e0b22;color:#f7c66b;border:1px solid #f59e0b66;}
+  .badge.rule{background:#eab30822;color:#f5d45e;border:1px solid #eab30855;}
+  .badge.plan{background:#f0883e22;color:#ffb27a;border:1px solid #f0883e66;}
+  .badge.cross{background:#22d3ee22;color:#7ee7f5;border:1px solid #22d3ee55;}
+  .badge.human{background:#f778ba22;color:#ff9ecb;border:1px solid #f778ba55;}
+  .node.dim{opacity:.18;filter:grayscale(.7);}
+  .toggle{position:absolute;right:-9px;top:50%;transform:translate(0,-50%);width:18px;height:18px;
+    border-radius:50%;background:var(--bg3);border:1px solid var(--line);color:var(--accent);
+    font-size:11px;line-height:16px;text-align:center;cursor:pointer;z-index:5;}
+  .node.collapsed .toggle{background:var(--accent);color:#06121f;}
+  #panel{position:fixed;top:54px;right:0;width:350px;max-width:44vw;height:calc(100% - 54px);
+    background:#0b0f14ee;border-left:1px solid var(--line);z-index:25;padding:18px 18px 40px;
+    overflow-y:auto;backdrop-filter:blur(4px);transform:translateX(100%);transition:.2s;}
+  #panel.open{transform:translateX(0);}
+  #panel h2{margin:0 0 4px;font-size:16px;}
+  #panel .ptype{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
+  #panel .pdesc{font-size:13px;line-height:1.65;color:#c9d1d9;white-space:pre-wrap;}
+  #panel .psrc{margin-top:14px;font-size:11.5px;color:#7ee787;border-left:3px solid #2ea043;padding:6px 10px;background:#2ea04312;border-radius:4px;white-space:pre-wrap;}
+  #panel .close{position:absolute;top:10px;right:12px;cursor:pointer;color:var(--muted);font-size:18px;}
+  #panel .pcat{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+  #panel .chip{font-size:10.5px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--muted);}
+  .sel .card{outline:2px solid var(--accent);outline-offset:1px;}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <h1>firstFlight 人机混动软件开发系统<small>全流程 v5 · 需求 → 澄清 → PRD(Univer/DOCX) → 双 Agent 评审 → 拆解 → SDLC 规划 → 低阶 Agent 编码交付 → 验收 ｜ 能力 = Skill 装配 ｜ 资产落项目空间</small></h1>
+  <input id="search" placeholder="搜索节点/来源…" />
+  <div id="chips">
+    <span class="chip-f on" data-f="all">全部</span>
+    <span class="chip-f" data-f="done">已实现</span>
+    <span class="chip-f" data-f="partial">部分实现</span>
+    <span class="chip-f" data-f="rule">目标</span>
+    <span class="chip-f" data-f="accept">仅验收</span>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn" id="btnExpand">逐层展开</button>
+  <button class="btn" id="btnCollapse">全部收起</button>
+  <button class="btn" id="btnFit">适配视图</button>
+  <button class="btn" id="btnMd">导出大纲</button>
+</div>
+
+<div id="viewport">
+  <div id="world">
+    <svg id="edges"></svg>
+    <div id="nodes"></div>
+  </div>
+</div>
+
+<div id="panel">
+  <span class="close" id="pClose">×</span>
+  <div class="ptype" id="pType"></div>
+  <h2 id="pTitle"></h2>
+  <div class="pcat" id="pCat"></div>
+  <div class="pdesc" id="pDesc"></div>
+  <div class="psrc" id="pSrc" style="display:none"></div>
+</div>
+
+<div id="hint">拖拽平移 · 滚轮缩放 · 点击节点看详情与工程出处 · 点节点右侧 + 逐层展开 · 「适配视图」看全貌 · 叶子卡片已按内容高度自动分离</div>
+<div id="legend">
+  <span class="lg"><span class="dot" style="background:var(--flow)"></span>业务流转</span>
+  <span class="lg"><span class="dot" style="background:var(--agent)"></span>Agent 工作</span>
+  <span class="lg"><span class="dot" style="background:var(--skill)"></span>Agent 技能</span>
+  <span class="lg"><span class="dot" style="background:var(--guard)"></span>保障完成</span>
+  <span class="lg"><span class="dot" style="background:var(--accept)"></span>保障验收</span>
+  <span class="lg"><span class="dot" style="background:var(--hub)"></span>验收体系</span>
+  <span class="lg"><span class="dot" style="background:var(--human)"></span>人机分工</span>
+  <span class="lg"><span class="dot" style="background:var(--cross)"></span>横切底座</span>
+  <span class="lg"><span class="dot" style="background:#c9a3f7"></span>SDLC 模型</span>
+  <span class="lg"><span class="dot" style="background:#14b8a6"></span>Skill 体系</span>
+  <span class="lg"><span class="dot" style="background:#ff7b72"></span>双 Agent 评审</span>
+  <span class="lg"><span class="dot" style="background:#f0883e"></span>编码交付</span>
+  <span class="lg"><span class="dot" style="background:#3fb950"></span>共享空间</span>
+</div>
+
+<script>
+/* =====================================================================
+   firstFlight 人机混动软件开发系统 · 全流程思维导图 v5
+   主结构：7 个流程阶段（每阶段 5 条支线）+ 8 个贯穿视角
+           （SDLC 三模型 / Skill 装配体系 / 双 Agent 对抗式评审 / 编码交付流水线 / 共享空间 /
+             人机分工 / 横切底座 / 验收体系）+ 未实现能力清单
+   支线维度：业务流转 / Agent 工作 / Agent 技能 / 保障完成 / 保障验收
+   实现度：done 已实现 · partial 部分实现 · rule 目标(规则驱动) · plan 目标(设计完成·待实现)
+   v5 改动：
+     ① PRD 载体统一为 Univer/DOCX——移除 Markdown 正文相关的生成与通路，正文只有一篇连续画布；
+        （依据 docs/block-prd-editor.md：正文始终以一篇连续的 Univer/DOCX 画布展示）
+     ② 新增 ⚔️ 双 Agent 对抗式评审（贯穿全项目）：异议 Agent 装配「功能等价但实现不同」的 skill、
+        可换模型后端，独立于作者方提出异议，异议必须逐条显式处置；可复用到 PRD / 拆解 / 编码 / 门禁等所有 review；
+     ③ 补齐 🔨 编码交付流水线：拆解后的 WorkItem 交由「绑定各自 skill 的低阶 Agent 编队」执行
+        （编码 → UT → 代码 review → 合并），含角色编队 / skill 绑定矩阵 / 状态机流转 / 审核 / 保障 / 验收；
+     ④ 新增 🗂️ 共享空间三级（公司总空间 / 项目空间 / 个人空间）：PRD / 原型 / 代码等资产全部在
+        项目空间产出与交付，项目成员皆可访问；个人草稿在个人空间，组织规范在公司总空间。
+   v4 要点：布局改为「按卡片真实高度排布」（解决长卡片压叠）；首屏 1:1 可读；新增 Skill 装配体系分支。
+   v3 要点：🏗️ SDLC 三套模型详解（阶段 / 门禁 / 缺陷回退 / 变更 / 选型路由 / 计划校验器），
+            逐条照抄 backend/rules/sdlc/*.yaml，不臆造。
+   事实来源：backend/rules/sdlc/*.yaml · backend/app/services/{sdlc_rules,lifecycle_decision,execution_service,
+            spec_review,decomposition_service}.py · backend/skills/ · frontend/aios-main/src/** ·
+            docs/{README,block-prd,sdlc/*}.md · 能力规划清单（用户截图）
+   ===================================================================== */
+const CAT = {
+  flow:  {label:"业务流转", icon:"🔄", color:"#3b82f6"},
+  agent: {label:"Agent 工作", icon:"🤖", color:"#8b5cf6"},
+  skill: {label:"Agent 技能", icon:"🧩", color:"#14b8a6"},
+  guard: {label:"保障完成", icon:"🛡️", color:"#f59e0b"},
+  accept:{label:"保障验收", icon:"✅", color:"#ef4444"},
+};
+const STAGE_COLORS = ["#1f6feb","#8957e5","#2da44e","#bf8700","#db61a2","#0969da","#a371f7"];
+
+const TREE = {
+  id:"root", type:"root", title:"firstFlight 人机混动软件开发系统",
+  desc:"核心目的：把用户提出的任意软件需求，通过人机混动全流程，转化为【可审计、可回放、可人工否决、可验收】的软件交付物。\n\n系统覆盖「需求输入 → 多轮澄清 → PRD 生成(Univer/DOCX) → PRD 编辑与评审(双 Agent 异议) → 任务拆解 → SDLC 生命周期规划 → 低阶 Agent 编码交付 → 验收交付」全链路；每一阶段都同时内置「完成保障（怎么保证做得成）」与「验收保障（怎么保证验得住）」，并配有贯穿全链路的 SDLC 三模型、Skill 装配体系、双 Agent 对抗式评审、共享空间、人机分工、横切能力底座与验收体系。\n\n当前实现度：需求侧 ①–⑤ 已实现（拆解产物 WorkItem + AgentSpec + 依赖图已落地）；⑥ 已实现「人工驱动执行看板」，而「低阶 Agent 自动编码交付」为设计完成待实现；⑦ 的 SDLC 规则引擎与生命周期计划校验器已实现，生产发布 / 签字 / 运维由人与外部系统承担。共享空间中个人空间与项目空间已实现，公司总空间为设计目标。\n\nv5 新增：⚔️ 双 Agent 对抗式评审（贯穿全项目）、🔨 编码交付流水线（Skill 绑定的低阶 Agent 编队）、🗂️ 共享空间三级；并把 PRD 载体统一为 Univer/DOCX（移除 Markdown 正文）。点顶部「目标」筛选可只看待实现项，点「仅验收」只看验收链路。",
+  src:"backend/rules/sdlc/*.yaml（5 份） / backend/app/services/{sdlc_rules,execution_service,spec_review,decomposition_service}.py / frontend/aios-main/src/** / docs/{README,block-prd,block-prd-editor,workspace,sdlc/*}.md",
+  children:[
+    /* ============ ① ============ */
+    s("s0","① 需求输入与捕获","INTAKE → NEED_CLARIFICATION","done","人机协同（人主导）",[
+      c("flow",[
+        it("用户填写 11 字段 ProjectBrief（motivation/final_objective/scope/exclusions/材料/交付物/时间/人力 + final_approver/PM/root_owner 授权字段）","schemas/workflow.py:23 ProjectBrief（11 字段，已核验）"),
+        it("上传原始需求材料 → 以 Artifact 持久化","project_service.create_session / Artifact(ORIGINAL_REQUIREMENT)"),
+        it("POST /sessions（request_id 幂等）创建 Session，可指定 agent_backend","api/sessions.py / schemas/workflow.py:20 AgentBackendName"),
+        it("事务内落 Project+ROOT WorkItem+PM Session 后，再调 Agent","先落库再调 Agent（崩溃安全）"),
+      ]),
+      c("agent",[
+        it("PM Agent 执行 analyze_brief 评估 Brief 完整性","agents/gateway.py analyze_brief"),
+        it("对账全量 clarification_history，回写 brief_updates","project_service（brief 原子回写）"),
+        it("判定 ready_for_spec，或进入澄清阶段","ClarificationAnalysis.ready_for_spec"),
+      ]),
+      c("skill",[
+        it("需求完整性判定（缺失 / 歧义识别）","pm_analyze 提示词"),
+        it("证据对账（Brief vs 历史澄清）","project_service"),
+        it("Brief 原子回写（与答复同事务，Authorization 字段不可被 Agent 改）","types.ProjectBriefUpdates 注释"),
+      ]),
+      c("guard",[
+        it("先落库后调 Agent：失败留可重试项目，不产半成品图","project_service 注释"),
+        it("IntakeAnalysisClaim 分布式租约（30s 租约 / 5s 心跳）","project_service"),
+        it("request_id UNIQUE 幂等创建","command_service 幂等"),
+      ]),
+      c("accept",[
+        it("原始需求 Artifact 全量留存，全程可溯源","artifacts 表"),
+        it("Brief 版本可审计，PM 改动留痕","ProjectBriefUpdates 审计"),
+        it("分析失败 = 可重试而非丢失，状态可恢复","租约 + 可重试设计"),
+      ]),
+    ]),
+    /* ============ ② ============ */
+    s("s1","② 多轮澄清（Grilling）","NEED_CLARIFICATION","done","人机协同",[
+      c("flow",[
+        it("message → 写 ClarificationResponse(PRIMARY)","project_service"),
+        it("全量 history 喂 PM 重新分析，回写 brief","project_service"),
+        it("ready? → SPECIFICATION : 新建下一轮 ClarificationRequest","状态机分支"),
+        it("可选 skip_clarification（按钮 / 15 个中文白名单词）","frontend workflowUi.ts:18（15 词，已核验）"),
+      ]),
+      c("agent",[
+        it("PM 多轮提问 / 吸收回答，收敛需求","pm_analyze 提示词"),
+        it("Skip A：无 Spec → SPECIFICATION + AGENT_DISCRETION","工作流 skip 情形 A"),
+        it("Skip B：已有 Spec → 顺带 APPROVED（须确认版本号）","工作流 skip 情形 B"),
+      ]),
+      c("skill",[
+        it("澄清策略（按 analysis_round 推进）","agent 提示词"),
+        it("风险识别与假设管理（risk_owner + accepted_consequence）","types.OpenQuestion"),
+        it("跳过意图识别（15 个中文白名单词）","workflowUi.ts:25-41"),
+      ]),
+      c("guard",[
+        it("Brief 与答复同一事务原子绑定","project_service"),
+        it("并发首次分析租约防重复分析","IntakeAnalysisClaim"),
+        it("状态投影只下发 legal_actions（前端只渲染不推导）","state_projection"),
+      ]),
+      c("accept",[
+        it("非阻塞 open_questions 必带 risk_owner + accepted_consequence","types.OpenQuestion"),
+        it("SKIP + AGENT_DISCRETION 时 PM 不得再提问，须列最保守假设","pm_generate_spec 提示词"),
+        it("澄清轮次 (boundary_key, round) 唯一且不可变","领域模型"),
+      ]),
+    ]),
+    /* ============ ③ ============ */
+    s("s2","③ PRD 生成（结构化规格）","SPECIFICATION","done","Agent 主导",[
+      c("flow",[
+        it("create_spec → prepare: generate_spec(PM)","命令引擎"),
+        it("run_rule_review（确定性规则审核，0 成本）","spec_review.py"),
+        it("review_spec（Reviewer Agent 语义对比 generation_source_snapshot）","spec_review.py"),
+        it("双 Agent 评审：作者方 Agent 与独立异议 Agent（不同 skill 组合 / 不同后端）各自评审，异议逐条落库","⚔️ 双 Agent 对抗式评审（详见该分支）"),
+        it("merge_review_outcome → materialize 写 SpecVersion（结构化 JSON + Univer/DOCX 正文）+ SpecReview","spec_service.py"),
+      ]),
+      c("agent",[
+        it("PM 生成 ProjectSpecPayload（20 字段：19 正文段 + er_diagrams）","types.py:153（已核验，原稿误写 22 段）"),
+        it("Reviewer 逐条对比生成快照，产出 findings(severity BLOCKER/MAJOR/MINOR/INFO)","types.ReviewFinding"),
+        it("异议 Agent（独立）：只拿产物与原始需求、不给作者推理过程（防被说服）；同功能不同 skill 装配，专责挑错与举反例","⚔️ 双 Agent 对抗式评审"),
+        it("作者方对每条异议显式处置：modified / clarified / not_accepted / needs_human_confirmation","既有 4 类 action 复用"),
+        it("语义审核 verdict：PASS / NEED_INFO / REJECT","ReviewVerdict"),
+      ]),
+      c("skill",[
+        it("规格化写作（FR/NFR-ID + 验收标准可追溯）","types.Requirement / AcceptanceCriterion"),
+        it("结构化规格落为 Univer/DOCX 正文：19 个正文段 ↔ 画布章节与 Block 一一对应，可 diff / 定位","spec_service.py + block-prd-editor.md（正文唯一载体 = Univer/DOCX）"),
+        it("评审对抗装配：生成方与异议方使用功能等价但实现不同的 skill 组合，天然形成多角度","⚔️ 双 Agent 对抗式评审"),
+        it("语义一致性判定（证据缺失 / 冲突 → NEED_INFO）","spec_review.py"),
+        it("以 skill 装配为主能力：create-prd 生成 → prd-critique 审查 → requirement-registry 结构化需求（减少 Agent 自主发挥）","见 🧩 Skill 装配体系"),
+      ]),
+      c("guard",[
+        it("两阶段命令：prepare 完成外部副作用+AgentCall 证据 → materialize 单事务落库","command_service.py"),
+        it("CAS state_version 乐观锁 + command_id/input_hash 幂等重放","command_service.py"),
+        it("多层越权守卫（9 项：state_version / 保护字段 / 新行白名单 / 禁设 APPROVED / 合法转移…）","command_service.py:910 _enforce_guard（已核验）"),
+      ]),
+      c("accept",[
+        it("三层验收：RULE(确定性) → AGENT(语义 + 双 Agent 异议) → HUMAN(Univer 画布内行级批注)","spec_review.py / block-prd-editor.md"),
+        it("异议闭环：每条异议必须被显式处置，未关闭 BLOCKER 不得进入拆解","⚔️ 双 Agent 对抗式评审"),
+        it("合并裁决：4 条阻断级联(NEED_INFO / NEEDS_HUMAN_DECISION / REJECT / blocks_progress) → 默认 HUMAN_REVIEW","spec_review.py:253（已核验，原稿误写 5 级）"),
+        it("不可变版本 + 双哈希（content_hash / spec_content_hash）","spec_service.py"),
+      ]),
+    ]),
+    /* ============ ④ 重写：双通路 ============ */
+    s("s3","④ PRD 编辑与评审（Univer/DOCX 唯一载体）","REVIEW → HUMAN_REVIEW","done","人机协同",[
+      c("flow",[
+        it("唯一载体：Univer/DOCX 连续画布 /prd-editor/{sessionId}——全篇一篇文档，不再有 md 正文，也不在单块/全文两态间切换","block-prd-editor.md §3 / prd-editor/PRDEditor.tsx"),
+        it("画布能力：左侧目录按 Block 导航（绿色虚线定位当前块）+ 生成 / 编辑 / 审核 / 历史 / 依赖 / 图片工具常驻画布上方","block-prd-editor.md §3 / prd-editor/*.tsx"),
+        it("首次进入按模板目录连续生成全部分块，每块完成即保存再继续；可停止、可刷新恢复、不重复启动","block-prd-editor.md §2"),
+        it("大纲：AI 规划大纲 / 导入 PDF·TXT 大纲 / 阿里·鹅厂模板（大纲只定义章节结构，正文始终是 DOCX）","documents.py /outline /plan /import"),
+        it("资产落项目空间：PRD 正文、图片资产、ER 图、导出件全部生成在项目空间，项目成员均可访问","🗂️ 共享空间（详见该分支）"),
+        it("提交评审 → 确定性汇总正文与结构 → 创建 HUMAN_REVIEW 的 SpecVersion；不自动批准 / 拆分 / 发布","block-prd-editor.md §8"),
+      ]),
+      c("agent",[
+        it("Block AI 作业 7 类：initial / plan / generate / revise / review / document_review / document_revision","ai_service.py（单进程，最多 3 并发，同块单作业）"),
+        it("全文审核：读整个 document revision + 所有 Block 版本，返回摘要/级别/相关模块（只读）","documents.py /review"),
+        it("自动解决：document_revision 按意见改块 → 重审，最多 3 轮「修订→复审」","documents.py /review/{id}/resolve（已核验）"),
+        it("双 Agent 复审：异议 Agent 独立装配（不同 skill 组合 / 不同模型后端）对审核结论再提异议，与作者方互不可见推理过程","⚔️ 双 Agent 对抗式评审"),
+        it("提交评审 / 进入下一阶段均由人触发，系统只做确定性汇总与门禁判定，不代批","block-prd-editor.md §8 §13"),
+      ]),
+      c("skill",[
+        it("分块写作 / 修订 / 候选生成；按完整句子流式写入 Univer 画布（Block 级临时正文，SSE 增量替换）","ai_service.py 流式快照 / block-prd-editor.md §11"),
+        it("全文跨模块一致性审核（遗漏 / 范围 / 验收标准）","document_review 合同"),
+        it("批注诚实处置：modified / clarified / not_accepted / needs_human_confirmation","PM rewrite 合同"),
+        it("图表与文档能力由 skill 提供：drawio-skill 出 ER / 流程图、univer 处理 DOCX 表格、html-prototype-skill 出原型","见 🧩 Skill 装配体系"),
+      ]),
+      c("guard",[
+        it("Block 版本保护：保存/恢复/应用均带 expected_version，冲突拒绝静默覆盖","block_service.py 不变量"),
+        it("候选先保存后应用：手动触发的 AI 结果不无条件覆盖，基线与未保存输入不符即拒绝","block-prd-editor.md §5"),
+        it("上游修改仅把下游标记为「待更新」，不自动重写人工内容；旧版本行批注不可静默套用到新正文","block-prd-editor.md §6"),
+        it("SSE 持久化快照 + 5s 轮询兜底；重启把未完成作业标记 PROCESS_INTERRUPTED","block-prd-editor.md §8"),
+        it("DOCX 往返纪律：导出件内嵌文档 / Block / 版本标识，回传时版本已变即拒绝覆盖；图片资产做安全校验","block-prd-editor.md §14-15 / docx_service.py"),
+      ]),
+      c("accept",[
+        it("两级审核门禁：分块审核 + 全文审核（blocker/warning）","block-prd-editor.md §7-10"),
+        it("提交评审确定性校验完整性 / 需求 ID / 验收引用；不自动批准、拆分或发布","block_service.py"),
+        it("零待处理项的未过期全文审核可作通行凭证（机械性逐块发现降级为审计事件）","block-prd-editor.md §13"),
+        it("进入下一阶段仅在全文审核无 blocker/warning 时启用，且不等于人工批准、不自动启动拆解","block-prd-editor.md §13"),
+        it("DOCX 往返：导出→Word 修改→导入回原 Block（版本已变则拒绝覆盖），全程不离 DOCX 载体","docx_service.py（已核验）"),
+        it("异议闭环：双 Agent 的每条异议要有处置结论，未闭环不得提交评审放行","⚔️ 双 Agent 对抗式评审"),
+      ]),
+    ]),
+    /* ============ ⑤ ============ */
+    s("s4","⑤ 任务拆解与 Agent Spec","REVIEW → AGENT_SPECS_READY","done","Agent 主导",[
+      c("flow",[
+        it("convert_to_work_item → decompose_spec(PM)","命令引擎"),
+        it("validate_breakdown（事务前结构化校验）","decomposition_service.py"),
+        it("review_breakdown(Reviewer) → 自动修复（repair_round 0→2，最多 2 轮）","agent_spec_details.py:149（range(3)，已核验）"),
+        it("materialize 原子写 WorkItem+Dependency+AgentSpec → AGENT_SPECS_READY","decomposition_service.py"),
+        it("交接：拆解产物落项目空间，每个 WorkItem 携带 AgentSpec（边界三段式 + required skills）交低阶 Agent 编队执行","🗂️ 共享空间 / 🔨 编码交付流水线"),
+        it("双 Agent 复核：异议 Agent 用不同 skill 组合复核拆解边界与验收标准（与 PRD 同一套对抗机制）","⚔️ 双 Agent 对抗式评审"),
+      ]),
+      c("agent",[
+        it("PM 拆 MILESTONE / TASK，每个 TASK 恰好一个 AgentSpec","pm_decompose 合同"),
+        it("Reviewer 复核边界三段式（fixed / configurable / extension_points）","types.AgentSpecProposal"),
+        it("自动修复轮次绑定源审核，防止无限重试","agent_spec_details.py:175"),
+      ]),
+      c("skill",[
+        it("WBS 工作分解 + 依赖图与环检测（Kahn 迭代式）","decomposition_service.py"),
+        it("边界三段式设计（固化 / 可配置 / 扩展点）","types.AgentSpecProposal"),
+        it("需求全覆盖 + SourceRef 引用校验","校验错误码族"),
+        it("拆解由 planning-and-task-breakdown + acceptance-criteria + traceability 三个 skill 装配完成，避免 Coder 收到不可测试任务","见 🧩 Skill 装配体系"),
+        it("为下游编码预置绑定：AgentSpec 固化「该谁做 / 用什么 skill / 边界到哪」，低阶 Agent 不做跨边界自主决策","🔨 编码交付流水线（skill 绑定矩阵）"),
+      ]),
+      c("guard",[
+        it("事务前结构校验（约 30 项错误码：依赖环 / 重复键 / 缺失验收 / 未知引用 / 里程碑无 Spec…）","decomposition_service.py（已核验，原稿写 24 类）"),
+        it("语义复核 + 最多 2 轮自动修复；auto_repair 配方按错误码分派","agent_spec_details.py / command_jobs.py AUTO_REPAIR_RECIPES"),
+        it("事务内 assert_decomposition_spec_snapshot 防偷换版本","decomposition_service.py"),
+      ]),
+      c("accept",[
+        it("每个 TASK 验收标准强制 + 需求全覆盖校验","decomposition_service.py"),
+        it("AgentSpec 与已批准 Spec 的语义矛盾检测","Reviewer 合同"),
+        it("LOCAL_KEY 唯一；context_refs 仅限 input_refs","领域模型"),
+      ]),
+    ]),
+    /* ============ ⑥ 部分实现 ============ */
+    s("s5","⑥ 任务执行与编码交付（WorkItem → 低阶 Agent 编队）","AGENT_SPECS_READY · EXECUTE · CODE_DELIVERY","partial","Agent 主导（人监督）",[
+      c("flow",[
+        it("已实现：三个执行动作 start_task / complete_task / fail_task，按依赖就绪推进","execution_service.py（P0–P2 已落地）"),
+        it("已实现：后端下发 available_actions + graph_depth，前端渲染按钮与真 DAG 连线/泳道","query_service.py / TaskDependencyGraph.tsx"),
+        it("目标：WorkItem 交给「绑定了各自 skill 的低阶 Agent 编队」执行——编码 → UT → 代码 review → 合并（全流程见 🔨 分支）","🔨 编码交付流水线"),
+        it("产物直接落项目空间代码区：源码 / UT / review 记录 / 覆盖率报告，均带 WorkItem ID 与需求 ID","🗂️ 共享空间"),
+      ]),
+      c("agent",[
+        it("已实现：执行阶段 Agent 不参与，系统只做依赖调度与状态记账","execution_service.py（agent_backed=False）"),
+        it("目标：Coder / Test / Review / Repair / Integrator 五个低阶 Agent 各绑定固定 skill，只在自己边界内动作","🔨 编码交付流水线"),
+        it("目标：Executor 经 AgentGateway 调用，每次执行落 AgentCall 证据（谁 / 用哪套 skill / 改了什么）","实施计划 §5.3"),
+      ]),
+      c("skill",[
+        it("依赖就绪计算（无依赖兜底 get(id,())，避免漏判就绪）","execution_graph.py ready_work_item_ids"),
+        it("拓扑深度计算（泳道/连线分组依据）","execution_graph.py graph_depths"),
+        it("目标：编码技能包——code-implementation / unit-test / code-review / build-and-fix / ci-pipeline / migration","🔨 编码交付流水线（skill 绑定矩阵）"),
+        it("技能随 AgentSpec 一起物化绑定，运行期不可篡改（沿用 Spec 不可变风格）","🔨 编码交付流水线"),
+      ]),
+      c("guard",[
+        it("执行状态 append-only：WorkItemRun 只追加，不改 WorkItem（与不可变风格一致）","execution_service.py / models.py:522"),
+        it("prepare 友好预检 + materialize 事务内权威复检（防两阶段状态漂移）","execution_service.py"),
+        it("uq_work_item_run_command 唯一约束（幂等第二道保险）+ CAS 并发保护","models.py"),
+        it("目标：沙箱工作区 + 最小权限（只读挂载 + 白名单工具）；改动超出 AgentSpec 边界即拒绝合并","🔨 编码交付流水线"),
+        it("目标：单任务 token / 时长 / 轮次预算熔断，超限转人工","🔨 编码交付流水线"),
+        it("前置：process-local 租约须外置为分布式锁；当前仅支持单进程部署","实施计划 §5.1-5.2"),
+      ]),
+      c("accept",[
+        it("依赖未完成的 TASK 不可启动（可读拒绝），ROOT/MILESTONE 不可执行","execution_service.py _assert_allowed"),
+        it("available_actions 由后端计算下发，前端不推导（守住「只渲染」纪律）","query_service.py"),
+        it("门禁任务(exit_gate_key)未完成则下游不可启动——已由生命周期计划校验强制（SDLC_GATE_DEPENDENCY）","sdlc_rules.validate_lifecycle（已实现）"),
+        it("目标：编码交付验收 = UT 覆盖率门槛 + 静态检查零高危 + 双 Agent review 无未关闭 BLOCKER + 验收标准逐条有测试证据","🔨 编码交付流水线"),
+        it("目标：追溯链完整——需求 ID → Spec → WorkItem → 代码提交 → UT → review → CI 记录，缺环即未完成","🔨 编码交付流水线 / traceability-skill"),
+      ]),
+    ]),
+    /* ============ ⑦ 重写：规则引擎已实现 + 交付运维为人工职责 ============ */
+    s("s6","⑦ SDLC 生命周期规划 · 验收交付 · 运维","lifecycle_plan → 阶段门禁 → UAT → 部署 → 运维","partial","人机协同（人签字）",[
+      c("flow",[
+        it("选型：10 问（q1–q10）→ 确定性选型 strict / overlapping / iterative，不唯一即阻断澄清（禁止默认模板）","selection.yaml / sdlc_rules.select_model（已实现）"),
+        it("规划：生成 LifecyclePlan——阶段→里程碑、任务→阶段绑定、exit_gate 门禁任务、gate_checks","domain/sdlc.py LifecyclePlan / sdlc_rules.planning_context"),
+        it("执行：阶段 exit_gate 未完成则本阶段下游任务不可启动（跨阶段依赖强制）","sdlc_rules.validate_lifecycle（已实现）"),
+        it("交付（人工）：全量测试 → UAT 业务方签字 → 部署交付 → 运维归档（持续）","SDLC 模型阶段 4–6 / docs/sdlc/README 边界"),
+        it("变更（人工）：正式变更控制（影响评估 + 评审，未过不得执行）","SDLC 变更处理规则"),
+        it("反馈回流（目标）：运维与用户反馈持续回流产品待办池","SDLC 模式三"),
+      ]),
+      c("agent",[
+        it("PM 依据规则生成生命周期计划：保留全部 SOP 阶段、四字以内阶段名、逐阶段排期与运维交接","planning_context / selection.yaml"),
+        it("Reviewer 复核计划；生命周期计划与源审核绑定，防无限重试","agent_spec_details / Reviewer 合同"),
+        it("生成《测试报告》《UAT 验收报告》《上线报告》等交付物（目标）","SDLC 交付物"),
+        it("收集用户反馈并结构化回流产品待办池（目标）","SDLC 模式三"),
+      ]),
+      c("skill",[
+        it("生命周期选型与计划编排（阶段/活动/交付物全覆盖，不得裁剪）","sdlc_rules.validate_lifecycle"),
+        it("交付物完整性核查、文档归档与结项评审","SDLC 运维阶段"),
+        it("UAT 验收设计、上线验证、灰度策略","SDLC"),
+      ]),
+      c("guard",[
+        it("规则版本锁：plan.rules_hash ≠ 当前 YAML 哈希 → SDLC_RULES_STALE，必须重新生成","sdlc_rules.py:211（已实现）"),
+        it("阶段不可裁剪：禁止合并 / 省略 / 发明阶段（SDLC_STAGE_SET）","sdlc_rules.py:271"),
+        it("计划字段非空：选型理由 / 各阶段排期 / 运维交接说明（SDLC_PLAN_INVALID）","sdlc_rules.py:208"),
+        it("发布门禁：阻断性缺陷未清不得发布","execution.yaml release_required"),
+        it("变更控制：影响评估 + 评审，更新基线后重评下游（人工职责）","SDLC 变更处理"),
+        it("门禁评审同样走双 Agent 对抗：异议 Agent 独立复核阶段准出证据，未闭环的阻断项不得过门禁","⚔️ 双 Agent 对抗式评审"),
+      ]),
+      c("accept",[
+        it("业务方 UAT 签字确认（一票否决）；签字 / 发布 / 生产执行由人与外部系统承担，系统不代签","docs/sdlc/README 边界 / forbid_fabricated_approvals"),
+        it("生命周期计划校验见 🏗️ 分支的「计划校验器」——20+ 个 SDLC_* 校验码","sdlc_rules.validate_lifecycle（已实现）"),
+        it("验收证据链完整可追溯（AgentCall + SpecReview + Audit）","query_service 审计"),
+        it("交付物归档到项目空间（结项后只读），关键资产可提升为公司总空间模板 / 规范","🗂️ 共享空间"),
+      ]),
+    ]),
+    /* ============ SDLC 三套模型详解（v3 新增，照抄 rules/sdlc/*.yaml） ============ */
+    { id:"sdlc-hub", type:"sdlc", impl:"done", title:"🏗️ SDLC 执行体系 · 三套模型详解（阶段 / 门禁 / 回退 / 变更）",
+      desc:"系统不把「项目怎么做」写死在代码里，而是把三套生命周期模型写成 5 份 YAML 规则，由 sdlc_rules.py 确定性加载、交叉校验、选型、生成门禁，并强制校验分解产出的生命周期计划。\n\n三套模型：\n① 纯线性瀑布（6 阶段 · 完全无并发 · 合规型）\n② 阶段重叠瀑布（5 阶段 · 仅相邻阶段重叠 · 企业型）\n③ 迭代增量（全局 1 + 迭代内 4 + 持续运维 · 创新型）\n\n选型走 10 问三路由，冲突或无匹配一律阻断澄清，禁止默认套模板。规则文件 version 1，加载时会校验阶段顺序与 execution.yaml 一致、阶段名不超过 4 个字、活动/交付物 ID 唯一；任一不符即 SDLC_RULES_INVALID。",
+      src:"backend/rules/sdlc/{selection,execution}.yaml + models/{strict,overlapping,iterative}*.yaml（5 份） · backend/app/services/sdlc_rules.py（已实现） · backend/app/domain/sdlc.py",
+      children:[
+        { id:"sdlc-select", type:"sdlc", impl:"done", title:"🧭 选型路由：10 问 → 3 路由 → 冲突即阻断澄清",
+          desc:"PM 先做生命周期评估（10 个问题逐条给 yes/no/unknown），系统据此确定性选出模型；只有两条路线会以「推荐 / 备选」形式呈现给用户，最终选择权在人。\n\n关键纪律：unknown 不当作 no——枚举 unknown 的全部组合，所有组合必须收敛到同一个模型，否则判定为歧义并阻断澄清；每个答案必须附「已批准 spec 的原文引用」，不允许凭印象打分。",
+          src:"backend/rules/sdlc/selection.yaml · sdlc_rules.select_model（:114）/ recommend_models（:130）",
+          children:[
+            si("路由一 strict_waterfall：q1–q4 至少 3 个 yes（强监管全套签字 / 需求完全明确变更率＜10% / 团队≤5人周期≤2月 / 要求严格阶段门禁）","selection.yaml routes[0] minimum_yes:3"),
+            si("路由二 overlapping_waterfall：q5–q7 至少 2 个 yes（变更率 10%~25% / 企业常规系统 / 末期一次性交付）；未达标则降级为 strict","selection.yaml routes[1] unless_qualified"),
+            si("路由三 iterative_incremental：q8–q10 至少 2 个 yes（需求不明确需持续调整 / 每 2~4 周交付增量 / 允许分批上线）","selection.yaml routes[2]"),
+            si("硬约束与冲突政策：q4=yes 强制 strict_waterfall；conflict_policy / no_match_policy 均为 block_for_clarification（禁止默认套模板）","selection.yaml:55-58"),
+            si("unknown 处理：对 unknown 全组合枚举，结果必须唯一收敛，否则 SDLC_NEEDS_CLARIFICATION（unresolved 提示要澄清哪几问）","sdlc_rules.py:120-127"),
+            si("证据纪律：非 unknown 的答案必须附 spec 原文引用，否则 SDLC_EVIDENCE_MISSING；系统只推荐（recommended / alternative + 匹配理由），不代替用户决策","sdlc_rules.py:237-240 / :150-172"),
+          ]},
+        { id:"sdlc-m1", type:"sdlc", impl:"done", mcolor:"#e879c0", title:"模型一 · 纯线性瀑布（强门禁·合规型）｜6 阶段 · 完全无并发",
+          desc:"适用：金融 / 政务 / 医疗等强监管项目，需求完全明确、变更率＜10%，要求完整审计追溯与书面签字。\n核心规则：上一阶段 100% 完成 + 正式评审签字，才允许进入下一阶段；禁止跨阶段并发；任何缺陷回退至源头阶段修复，禁止下游自行消化上游问题。",
+          src:"backend/rules/sdlc/models/strict_waterfall.yaml · execution.yaml models.strict_waterfall",
+          children:[
+            si("① 需求定审｜全量功能/非功能需求与验收标准，冻结需求基线｜《SRS》《需求追溯矩阵》《验收标准清单》｜准出：SRS 逐条签字 + 基线 100% 冻结｜产品经理+业务分析师｜15%~20%"),
+            si("② 设计签审｜架构 / 模块 / 数据库 / 接口方案，输出设计基线｜《概要设计》《详细设计》《数据库设计》《接口规范》｜准出：评审签字 + 需求 100% 可追溯｜架构师+技术负责人｜15%~20%"),
+            si("③ 编码实现｜按详细设计编码、走查、单元测试、构建脚本｜源代码 / 单元测试用例 / 构建脚本 / 评审记录｜准出：代码 100% 完成 + 覆盖率达标｜开发工程师｜30%~40%"),
+            si("④ 测试验收｜集成 / 系统 / 性能安全 / UAT，缺陷清零｜《测试用例集》《测试报告》《缺陷清单》《UAT 验收报告》｜准出：高危严重缺陷清零 + UAT 签字｜测试工程师+业务方｜15%~20%"),
+            si("⑤ 部署交付｜生产环境准备、版本包部署、数据初始化、培训、上线验证｜《部署方案》《上线报告》《用户操作手册》｜准出：上线验证全量通过 + 培训覆盖｜运维+项目经理｜3%~5%"),
+            si("⑥ 运维归档｜故障响应、bug 修复、文档同步、小版本补丁、结项归档｜《运维手册》《结项报告》《全量归档文档集》｜准出：稳定运行约定周期 + 结项评审通过｜运维+项目经理｜持续"),
+            si("门禁：一级正式评审制——每阶段必须召开正式评审会，相关角色全员签字、一票否决；未通过严禁启动下一阶段任何工作","strict_waterfall.yaml 阶段门禁规则"),
+            si("准出必检 5 项：all_work_complete / all_deliverables_present / all_roles_signed / no_veto / archive_record","execution.yaml:10 review.required"),
+            si("基线版本：通过则主版本 +1；未通过则修订后重新评审并记录修订次数；评审记录与签字统一归档，作为审计追溯依据","execution.yaml baseline"),
+            si("并发约束：完全无并发，阶段强制串行；仅可开展非产出性的背景调研","strict_waterfall.yaml 并行约束"),
+            si("缺陷回退 SW-D1~D5：设计期需求不清→回需求定审；编码期设计缺陷→回设计签审；测试期代码 Bug→阶段内回归；测试期需求偏差→回需求并同步回退设计/开发；生产严重缺陷→紧急修复+评估回滚+溯源重定基线"),
+            si("变更：正式变更控制委员会审批，评估范围/成本/工期；批准前禁止执行；批准后更新对应阶段基线并重评该阶段及全部下游","execution.yaml changes"),
+          ]},
+        { id:"sdlc-m2", type:"sdlc", impl:"done", mcolor:"#79b8ff", title:"模型二 · 阶段重叠瀑布（工程实操·企业型）｜5 阶段 · 仅相邻重叠",
+          desc:"适用：绝大多数企业级业务系统；需求大体稳定、细节可调，变更率 10%~25%；追求效率、减少等待空窗期，但不支持大范围跨阶段并行。\n核心规则：大阶段顺序不变；核心交付物评审通过后可启动下一阶段前置工作；主体工作必须等上游核心交付物确认；仅允许相邻阶段边缘重叠、模块级分批并行。",
+          src:"backend/rules/sdlc/models/overlapping_waterfall.yaml · execution.yaml models.overlapping_waterfall",
+          children:[
+            si("① 需求锁定｜优先锁定核心业务需求，次要需求后续补齐｜《核心需求基线》《次要需求补全计划》《验收标准(核心部分)》｜准出：核心需求 100% 评审冻结 + 次要需求有明确排期｜15%~20%"),
+            si("② 架构设计｜概要架构先行评审，按模块分批输出详细设计｜《概要架构设计文档》《分模块详细设计文档》｜准出：概要架构正式评审通过 + 模块设计可追溯｜15%~20%"),
+            si("③ 编码测试｜按模块分批编码，模块完成即启动单元/集成测试｜分批模块源代码 / 模块单元测试报告 / 模块集成测试报告｜准出：已提测模块测试通过 + 剩余模块有排期｜30%~40%"),
+            si("④ 集成验收｜全系统集成测试 + 系统测试 + 性能安全专项 + UAT｜《整体测试报告》《缺陷清零清单》《UAT 验收报告》｜准出：系统测试通过 + 高危清零 + UAT 签字｜15%~20%"),
+            si("⑤ 运维迭代｜生产部署与文档更新同步执行，持续运维与小版本优化｜《部署方案》《上线报告》《运维手册》《持续更新文档集》｜准出：上线验证全量通过 + 文档与实际同步｜持续"),
+            si("重叠 OW-P1：核心需求评审通过 → 架构设计可提前入场","execution.yaml overlap OW-P1（alternative_entry_gate: core_requirements_review）"),
+            si("重叠 OW-P2：模块详细设计评审通过 → 同模块可提前编码（限同模块）","execution.yaml overlap OW-P2（same_module: true）"),
+            si("三级门禁：一级正式评审会（核心需求 / 概要架构 / 整体验收，全员参与、一票否决）；二级专项评审（模块详细设计 / 模块测试，技术负责人决策）；三级确认制（次要补充材料，相关人确认即可）","overlapping_waterfall.yaml 阶段门禁规则"),
+            si("专项门禁链：核心需求评审 → 架构评审 → 模块详细设计评审（架构评审是模块设计评审的前置）；模块测试必须等本模块编码完成","execution.yaml special_gates / module_sequence"),
+            si("六条不可并行红线：核心需求未定不启详细设计｜未过详细设计不编码｜未编码模块不进系统级测试｜测试期不启大规模新模块设计｜部署期不新增功能｜维护期不做未评审重大变更","execution.yaml red_lines"),
+            si("缺陷回退 OW-D1~D6：核心需求/架构缺陷→回源头阶段并暂停关联下游；模块级设计/代码缺陷→模块内修复、他模块继续；测试期核心架构缺陷→回架构设计、暂停关联模块；生产紧急缺陷→即时修复+同步文档"),
+            si("变更四档：核心基线走正式评审；次要/模块级变更阶段内消化并备案；已进入测试的变更需影响评估；跨模块变更须技术负责人批准后执行","execution.yaml changes"),
+          ]},
+        { id:"sdlc-m3", type:"sdlc", impl:"done", mcolor:"#56d364", title:"模型三 · 迭代增量（敏捷验证·创新型）｜全局 1 + 迭代内 4 + 持续运维",
+          desc:"适用：需求不明确、需快速验证的创新/互联网项目；每 2~4 周产出可用增量；允许需求随反馈动态调整。\n结构：1 个全局启动阶段（仅执行 1 次）+ 迭代内 4 个循环阶段（每轮重复）+ 1 个贯穿全周期的运维阶段；支持跨迭代高度并行。",
+          src:"backend/rules/sdlc/models/iterative_incremental.yaml · execution.yaml models.iterative_incremental",
+          children:[
+            si("⓪ 待办构建（全局·仅 1 次）｜产品愿景拆解、初始需求收集、优先级排序、搭建待办池、确定迭代周期、资源配置｜《产品愿景说明》《产品待办清单(PBL)》《迭代规则说明》"),
+            si("迭代内 ① 迭代规划｜从待办池挑选本轮需求、拆解用户故事、定迭代验收标准、评估工作量、确认排期｜《迭代计划》《本轮用户故事清单》《迭代验收标准》｜占单轮 10%~15%"),
+            si("迭代内 ② 设计开发｜本轮增量设计、接口与库表调整、编码、单元自测、代码评审｜增量源代码 / 单元测试用例 / 可测试版本｜占单轮 40%~50%"),
+            si("迭代内 ③ 验证演示｜新功能测试 + 历史功能回归、缺陷修复、内部演示、验收确认｜《迭代测试报告》《缺陷清单》《演示版本》｜占单轮 20%~25%"),
+            si("迭代内 ④ 发布反馈｜增量打包、灰度部署、用户试用、反馈收集与录入待办池｜《发布记录》《用户反馈报告》《更新后的产品待办池》｜占单轮 5%~10%"),
+            si("⑤ 持续运维（贯穿全周期）｜线上监控、故障响应、紧急缺陷修复、文档持续迭代、待办池日常维护"),
+            si("迭代节奏：每轮 2~4 周；超出范围必须给出明确理由，否则 SDLC_CADENCE 校验不通过","execution.yaml iteration_weeks / sdlc_rules.py:262-266"),
+            si("重叠 II-P1：上一轮进入验证/演示阶段，下一轮即可启动规划；但本轮正式承诺须等上一轮验收通过；流水线最多追 2 轮","execution.yaml overlap II-P1 / sdlc_rules.py:380-381"),
+            si("四类门禁：迭代启动门禁（规划会共识）｜迭代验收门禁（演示评审，未达标功能移入下一轮）｜全局基线门禁（架构与核心技术变更需全局评审）｜发布门禁（阻断性缺陷未清不得发布）","iterative_incremental.yaml 阶段门禁规则"),
+            si("发布准出必检 3 项：增量已部署 + 收集到有效用户反馈 + 待办池已更新","execution.yaml release_required"),
+            si("缺陷回退 II-D1~D5：本轮需求/设计缺陷→本轮修复，时间不足退回待办池；紧急线上缺陷→即时补丁；非紧急→排入后续迭代；架构级缺陷→暂停本轮开发、整改后重过全局评审；历史回归缺陷→优先本轮修复，影响大则降级并安排专项迭代"),
+            si("变更：迭代进行中原则上不插入新需求，一律入待办池下一轮排序；紧急变更走快速审批并评估对当前迭代的影响","execution.yaml changes"),
+          ]},
+        { id:"sdlc-validate", type:"sdlc", impl:"done", title:"🔒 生命周期计划校验器（validate_lifecycle · 已实现）",
+          desc:"这是「实现」与「验收」之间的关键咬合点：Agent 拆解出的任务计划，必须通过这道确定性校验才能落地。它把 SDLC 规则从「文档建议」变成「硬约束」——不满足就报 SDLC_* 错误码，计划无法通过。\n\n校验对象：LifecyclePlan（阶段→里程碑映射、任务→阶段绑定、exit_gate 门禁任务、gate_checks）。",
+          src:"backend/app/services/sdlc_rules.py:validate_lifecycle（:198-399）· planning_context（:190）· gate_checks（:179）",
+          children:[
+            si("规则一致性：plan.rules_hash 必须等于当前 YAML 哈希，否则 SDLC_RULES_STALE——规则改了就必须重新生成计划","sdlc_rules.py:211"),
+            si("阶段完整性：必须保留 SOP 全部阶段，禁止合并 / 省略 / 发明（SDLC_STAGE_SET）；迭代模型轮次必须连续且从 1 开始（SDLC_ITERATIONS）","sdlc_rules.py:256-272"),
+            si("里程碑是容器：名称与目标必须与规则逐字一致（SDLC_STAGE_NAME / SDLC_STAGE_OBJECTIVE），且里程碑不得持有依赖（SDLC_MILESTONE_DEPENDENCY）","sdlc_rules.py:292-297"),
+            si("映射唯一：每个里程碑恰好映射 1 个生命周期阶段（SDLC_PHASE_MAPPING）；每个任务恰好 1 条阶段绑定（SDLC_TASK_MAPPING）","sdlc_rules.py:249-252"),
+            si("门禁任务：每阶段必须有一个 exit_gate 任务归属本阶段，且它必须依赖本阶段全部工作（SDLC_EXIT_GATE / SDLC_GATE_DEPENDENCY）","sdlc_rules.py:298-303"),
+            si("门禁内容：gate_checks 必须覆盖规则要求的准出项与 review 级别（SDLC_GATE_CHECKS），并且必须出现在任务的验收标准里（SDLC_GATE_ACCEPTANCE）","sdlc_rules.py:304-306 / :324-326"),
+            si("全覆盖：本阶段每个 activity / deliverable 都必须被任务认领（SDLC_COVERAGE）；交付物必须是 AgentSpec 的 required output（SDLC_OUTPUT）","sdlc_rules.py:307-323"),
+            si("专项门禁与模块序列：模块详细设计评审必须晚于架构评审、且等核心交付物（SDLC_SPECIAL_GATE）；模块测试必须等本模块编码（SDLC_MODULE_SEQUENCE）","sdlc_rules.py:327-357"),
+            si("跨阶段依赖：瀑布必须等上游 exit gate；重叠模型只允许相邻阶段且需 special gate 准入；迭代为有界流水线（最多追 2 轮）（SDLC_DEPENDENCIES）","sdlc_rules.py:362-399"),
+            si("选型一致性：答案证据必须可追溯到已批准 spec 原文（SDLC_EVIDENCE_MISSING）；plan.model 必须与用户确认语句或清单选型一致（SDLC_SELECTION_MISMATCH）","sdlc_rules.py:225-240"),
+          ]},
+      ]},
+    /* ============ Skill 装配体系（按用户截图的最终形态呈现） ============ */
+    { id:"skill-hub", type:"skl", impl:"partial", title:"🧩 Skill 装配体系 · Agent 的主能力（装配而非自由发挥）",
+      desc:"核心机制：Agent 不靠「自主发挥」完成任务，而是按阶段装配对应的 skill——能力差异来自 skill 组合，而不是提示词运气。\n\n好处：能力边界清晰、产出可预期、可审计、可验收、可替换（换 skill 即换能力）。PRD 生成的每一步（选题型 → 写作 → 审查 → 出图 → 出原型 → 结构化需求 → 拆解 → 追溯 → 一致性校验）都有对应 skill 兜住，Agent 只在 skill 覆盖不到的缝隙里做判断。\n\n落地方式：skill 放在 skills 目录随镜像分发，也可通过 skill-installer 从清单或 GitHub 安装到运行时；skill-creator 用于新增 skill。",
+      src:"backend/skills/（.system 系统包 + drawio-skill） · backend/rules/sdlc/selection.yaml · 能力规划清单（用户截图，按最终形态呈现）",
+      children:[
+        { id:"skl-orch", type:"skl", impl:"partial", title:"🧭 编排与选型（决定走哪条路）",
+          children:[
+            ki("10 题选型 → 模型：selection.yaml 10 题 + 阈值 + 冲突处理，确定性选出生命周期路线","selection.yaml"),
+            ki("drawing-skill：上层 orchestration，按图表类型分发到 Mermaid / Excalidraw / Graphviz（不重复造轮子）","规划清单"),
+          ]},
+        { id:"skl-prd", type:"skl", impl:"partial", title:"📝 PRD 生成与审查",
+          children:[
+            ki("pm-skills / create-prd：PRD 生成与修订——Problem、目标、用户、功能、假设、边界等；也可用于按 Block 重写","规划清单"),
+            ki("prd-critique：专门的 PRD 审查——遗漏项、定义、Scope、Requirements、Edge Cases、Acceptance Criteria、Tradeoff","规划清单"),
+            ki("requirement-registry-skill：自然语言 PRD 抽取为结构化需求池；强制校验矛盾项、FR-XX / FR-XX-1 编号缺失、无问题说明","规划清单"),
+            ki("prd-consistency-skill：Block 依赖重构、重复需求、定义漂移、范围冲突、状态冲突","规划清单"),
+          ]},
+        { id:"skl-diagram", type:"skl", impl:"partial", title:"📊 图表与可视化",
+          children:[
+            ki("drawio-skill：PRD 内 ER 图生成；生成流程图、sequence diagram、state diagram（可编辑 draw.io 文件）","backend/skills/drawio-skill"),
+            ki("mermaid-skill：diagrams-as-code 管道","规划清单"),
+            ki("graphviz-skill：DAG、依赖图、状态关系、复杂自动布局","规划清单"),
+            ki("drawio-架构校验-skill：结构化拆解架构路线 / 技术 / 方案 / 模块 / 依赖 / 里程碑影响范围","规划清单"),
+          ]},
+        { id:"skl-doc", type:"skl", impl:"partial", title:"📄 文档与原型",
+          children:[
+            ki("univer：DOCX 表格 / 文档能力","规划清单"),
+            ki("html-prototype-skill：根据 PRD / 用户场景生成可运行 HTML/CSS/JS 原型","规划清单"),
+            ki("document-asset-skill：PRD 中统一插入图片、截图、SVG、附件；负责 asset metadata、caption、alt text、block 绑定","规划清单"),
+            ki("prototype-review-skill：对 HTML 原型做 PRD 覆盖检查——漏页面、漏状态、漏交互、交互与 PRD 冲突","规划清单"),
+          ]},
+        { id:"skl-breakdown", type:"skl", impl:"partial", title:"🧱 拆解 · 验收 · 追溯",
+          children:[
+            ki("planning-and-task-breakdown：把 PRD 拆解为可实施、可验证的 WorkItem，包含 Acceptance Criteria、依赖、阶段","规划清单"),
+            ki("acceptance-criteria-skill：Spec 拆分之前运行，避免 Coder 收到不可测试任务","规划清单"),
+            ki("traceability-skill：建立 PRD → Block → ER → Spec → Acceptance → WorkItem → Test 全链映射","规划清单"),
+          ]},
+        { id:"skl-consistency", type:"skl", impl:"partial", title:"🔍 一致性校验（防跨层漂移）",
+          children:[
+            ki("arch-consistency-skill：计算 DDD 卡片模态到切片边界；不允许越过 PRD 人工设计细节；输出 Consistency Report","规划清单"),
+            ki("ui-layer-consistency-skill：检查 block.requires.ui 与 PRD 的映射","规划清单"),
+          ]},
+        { id:"skl-dual", type:"skl", impl:"plan", title:"⚔️ 评审对抗 skill 对（同功能 · 不同实现）",
+          children:[
+            ki("配对纪律：同一项能力至少要两个可互换实现；评审时交叉使用，且模型后端尽量不同","⚔️ 双 Agent 对抗式评审"),
+            ki("生成 ↔ 审查：create-prd ↔ prd-critique（不同来源、不同侧重点）","对抗配对"),
+            ki("拆解 ↔ 复核：planning-and-task-breakdown ↔ 独立复核器 + traceability","对抗配对"),
+            ki("编码 ↔ 代码审查：code-implementation-skill ↔ code-review-skill / review-agent（系统包）","对抗配对 + 🔨"),
+            ki("原型 ↔ 覆盖审查：html-prototype-skill ↔ prototype-review-skill","对抗配对"),
+            ki("架构 ↔ 一致性：架构设计 skill ↔ arch-consistency-skill","对抗配对"),
+            ki("目的：让异议方在与作者方不同的实现路径上重读同一份产物，从而暴露不同类别的盲区","机制价值"),
+          ]},
+        { id:"skl-code", type:"skl", impl:"plan", title:"⌨️ 编码交付 skill 包（低阶 Agent 专用）",
+          children:[
+            ki("code-implementation-skill：按 AgentSpec 边界产出源码（模块 / 接口 / 数据模型）","🔨 编码交付流水线"),
+            ki("unit-test-skill：为本次改动写单元 / 集成测试并跑覆盖率","🔨"),
+            ki("code-review-skill：结构化 review（findings / severity / 文件行号证据 / 建议）","🔨"),
+            ki("build-and-fix-skill：构建失败与静态检查问题的定点修复（有界轮次）","🔨"),
+            ki("ci-pipeline-skill / migration-skill：CI 接入、数据库迁移与回滚脚本","🔨"),
+            ki("repo-context-skill：按需检索项目空间代码上下文，避免越界重写","🗂️ 共享空间 + 🔨"),
+            ki("security-scan-skill / coverage-skill：安全扫描与覆盖率门槛判定","🔨"),
+          ]},
+        { id:"skl-system", type:"skl", impl:"partial", title:"🧰 系统能力包（网关可用）",
+          children:[
+            ki("imagegen（图像生成 / 编辑）· openai-docs（官方文档检索）· plugin-creator（插件与市场条目）","backend/skills/.system/"),
+            ki("review-agent（只读 · 缺陷优先的审查）· skill-creator（创建新 skill）· skill-installer（从清单或 GitHub 安装）","backend/skills/.system/"),
+          ]},
+      ]},
+    /* ============ 双 Agent 对抗式评审（v5 新增 · 全项目通用机制） ============ */
+    { id:"dual-hub", type:"dual", impl:"plan", title:"⚔️ 双 Agent 对抗式评审 · 全项目通用的审核机制",
+      desc:"核心思路：同一个 Agent 审自己的产物，会稳定复现同一类盲区——同样的 skill 组合、同样的模型后端、同样的上下文，等于用同一把尺子量自己。\n\n因此引入「作者方 + 独立异议方」的对抗结构：\n· 作者方 Agent 装配 skill 组合 S_A（例如 create-prd）负责产出；\n· 异议方 Agent 装配「功能等价但实现不同」的 skill 组合 S_B（例如 prd-critique + requirement-registry）负责挑错；\n· 两者尽量使用不同模型后端（codex / deepseek / glm / kimi），且输入只给产物与原始需求，不给对方的推理过程。\n\n结果：多角度、可对抗、可回放的评审，而不是一次性的自我复核。这套机制不是 PRD 专属，而是全项目通用——凡是产出「产物 + 验收标准」的地方都可以套用。",
+      src:"机制设计（本图 v5 新增）· 相关已实现基座：spec_review.py（Reviewer 语义审核）/ AgentCall 证据链 / 多 Agent 后端 codex·deepseek·glm·kimi",
+      children:[
+        { id:"dual-why", type:"dual", impl:"plan", title:"① 为什么不能单 Agent 自审",
+          children:[
+            dui("确认偏误：生成方与审核方若 skill 组合相同，会稳定漏掉同一类问题","对抗式评审动机"),
+            dui("同质化：同一后端 + 同一提示视角 = 同一把尺子，审不出系统性偏差","多后端 codex / deepseek / glm / kimi"),
+            dui("不可回放：只有一次自审时，出问题无法证明「当时到底审了什么」","AgentCall 证据要求"),
+          ]},
+        { id:"dual-roles", type:"dual", impl:"plan", title:"② 角色与独立性硬约束",
+          children:[
+            dui("Agent A｜作者方（生成者）：装配 skill 组 S_A，产出 PRD / 拆解 / 代码 / 报告等产物","作者方职责"),
+            dui("Agent B｜异议方（挑战者）：装配 skill 组 S_B，唯一 KPI 是「找出真问题」，不是礼貌放行","异议方职责"),
+            dui("约束一 · skill 不重合：S_A 与 S_B 不得使用同一套实现，至少一项能力来源不同","独立性约束"),
+            dui("约束二 · 后端尽量不同：A/B 优先跑在不同模型后端上，天然带来不同推理偏好","多 Agent 后端"),
+            dui("约束三 · 上下文隔离：B 只拿到产物 + 原始需求，拿不到 A 的推理过程（防被说服、防同化）","上下文隔离"),
+            dui("约束四 · 证据不可互改：A 不能修改 B 的报告，B 也不能直接改产物，只能提意见","证据不可篡改"),
+          ]},
+        { id:"dual-pair", type:"dual", impl:"plan", title:"③ skill 配对原则（同功能 · 不同实现）",
+          children:[
+            dui("前置条件：同一项能力必须有「至少两个可互换实现」，才能构成对抗","skill 配对原则"),
+            dui("PRD：create-prd（生成） ↔ prd-critique / prd-consistency（审查）","见 🧩 Skill 装配体系"),
+            dui("拆解：planning-and-task-breakdown（拆） ↔ 独立复核器 + traceability（核）","见 🧩 Skill 装配体系"),
+            dui("编码：code-implementation-skill（写） ↔ code-review-skill / review-agent（审）","见 🔨 编码交付流水线"),
+            dui("原型：html-prototype-skill（出） ↔ prototype-review-skill（查覆盖）","见 🧩 Skill 装配体系"),
+            dui("架构：架构设计 skill（设计） ↔ arch-consistency-skill（一致性）","见 🧩 Skill 装配体系"),
+            dui("来源差异即思路差异：自研 skill / 规划清单 skill / 系统包 skill 的高层视角天然不同","skill 来源多样"),
+          ]},
+        { id:"dual-protocol", type:"dual", impl:"plan", title:"④ 评审协议（异议方必须怎么说话）",
+          children:[
+            dui("每条异议五要素：问题描述 / 证据（引用产物原文位置）/ 严重级 / 建议 / 是否阻断","结构化 review 合同"),
+            dui("严重级沿用既有分级：BLOCKER / MAJOR / MINOR / INFO","types.ReviewFinding"),
+            dui("禁止「无异议直接 PASS」：必须显式声明覆盖了哪些评审维度，未覆盖的要说明原因","防形式化审查"),
+            dui("禁止空话式意见（例如「建议优化」）：必须可定位、可验证、可关闭","可关闭性要求"),
+            dui("无证据的异议自动降级为 INFO，不得凭印象拦路","证据纪律"),
+            dui("作者方对每条异议必须显式处置：modified / clarified / not_accepted / needs_human_confirmation","沿用既有 4 类 action"),
+            dui("静默忽略视为未闭环：未闭环的 BLOCKER 不得进入下一环节","门禁纪律"),
+          ]},
+        { id:"dual-merge", type:"dual", impl:"plan", title:"⑤ 裁决与合并（确定性优先，人工兜底）",
+          children:[
+            dui("先跑确定性规则层（RULE）：能机械判定的不消耗 Agent——沿用现有 run_rule_review 思路","spec_review.py"),
+            dui("再合并语义层：4 条阻断级联（NEED_INFO / NEEDS_HUMAN_DECISION / REJECT / blocks_progress）→ 默认 HUMAN_REVIEW","spec_review.py:253（已核验）"),
+            dui("A 不接受异议、或两个异议方结论冲突 → 强制人工仲裁，不允许机器自行拍板","仲裁升级规则"),
+            dui("合并结果落 SpecReview（不可变），异议与答复全程可回放","spec_review.py / 审计链"),
+          ]},
+        { id:"dual-sites", type:"dual", impl:"plan", title:"⑥ 复用点（全项目，不限于 PRD）",
+          children:[
+            dui("阶段 ③ PRD 生成后：生成方 vs 审查方，双 Agent 语义评审","本图阶段 ③"),
+            dui("阶段 ④ PRD 全文审核后：异议 Agent 对全文审核结论再审一轮","本图阶段 ④"),
+            dui("阶段 ⑤ 拆解后：复核边界三段式与验收标准的可测试性","本图阶段 ⑤"),
+            dui("阶段 ⑥ 代码提交后 / UT 后：Review Agent 与 Coder 不同 skill、不同后端","本图阶段 ⑥ + 🔨 编码交付流水线"),
+            dui("阶段 ⑦ 阶段门禁前：独立复核准出证据是否齐全、可追溯","本图阶段 ⑦"),
+            dui("通用性原则：任意「产物 + 验收标准」的场景都适用，机制与业务解耦","通用性"),
+          ]},
+        { id:"dual-guard", type:"dual", impl:"plan", title:"⑦ 保障机制",
+          children:[
+            dui("证据留痕：A / B 各自独立 AgentCall 记录，含所用 skill 组合与模型后端","AgentCall 证据链"),
+            dui("报告只读：B 的评审报告一旦产出不可被 A 修改；处置动作单独记录","证据不可篡改"),
+            dui("预算与超时：双 Agent 各自独立预算，超限转人工而非静默跳过","预算熔断"),
+            dui("无 B 结论不得放行：缺少异议方结论的评审视为未完成，门禁不通过","门禁纪律"),
+            dui("后端容错：A/B 任一后端不可用时降级为「换后端重试」，而不是取消对抗","容错设计"),
+          ]},
+        { id:"dual-accept", type:"dual", impl:"plan", title:"⑧ 验收指标（对抗评审本身怎么验）",
+          children:[
+            dui("异议闭环率 100%：每条异议都要有处置结论，未闭环不计通过","评审验收"),
+            dui("阻断项清零：BLOCKER 全部关闭才可放行","门禁验收"),
+            dui("独立性可证：能从证据里看出 A/B 用了不同 skill 与后端","证据可审计"),
+            dui("仲裁可追溯：人工仲裁的每一次决定都有记录与责任人","人机分工"),
+          ]},
+      ]},
+    /* ============ 编码交付流水线（v5 新增） ============ */
+    { id:"code-hub", type:"code", impl:"plan", title:"🔨 编码交付流水线 · WorkItem → 低阶 Agent 编队（Skill 绑定执行）",
+      desc:"承接 ⑤ 的拆解产物：WorkItem + AgentSpec（边界三段式 + required skills）已就绪，接下来交给「低阶 Agent 编队」执行与写代码。\n\n设计思路完全对齐 PRD 生成与 Spec 拆分的既有做法：\n· 能力来自装配——每个低阶 Agent 只带自己那几件 skill，不做跨边界的自主发挥；\n· 两阶段执行——prepare（调 Agent 产生产物 + AgentCall 证据）→ materialize（事务内落库并复检）；\n· 审核对抗——代码 review 由「与 Coder 不同 skill / 不同后端」的 Review Agent 承担（见 ⚔️ 分支）；\n· 全程留证——谁在哪个边界内改了什么，都可以回放。\n\n当前状态：项目已做到 Spec 拆分，本流水线为设计完成、待实现。",
+      src:"承接 execution_service.py（P0–P2 已实现的执行看板与 WorkItemRun 账本）· 任务执行引擎实施计划 §5（P3）· 本图 v5 设计",
+      children:[
+        { id:"code-role", type:"code", impl:"plan", title:"① 低阶 Agent 编队（每个 WorkItem 一支小队）",
+          children:[
+            codi("Coder Agent｜编码：严格按 AgentSpec 边界产出源码，不擅自重构无关模块","低阶 Agent · 接收 AgentSpec"),
+            codi("Test Agent｜写 UT：为本次改动生成单元 / 集成测试，跑覆盖率并留报告","低阶 Agent · 与 Coder 分离"),
+            codi("Review Agent｜代码审查（异议方）：装配与 Coder 不同的 skill / 后端，专责挑错","⚔️ 双 Agent 对抗式评审"),
+            codi("Repair Agent｜定点修复：按 review 结论改代码，轮次有界（沿用 repair_round 思路）","agent_spec_details.py 有界重试"),
+            codi("Integrator Agent｜集成：合并分支、解决冲突、触发 CI、生成变更说明","低阶 Agent · 收口角色"),
+            codi("「低阶」的含义：能力 = skill 装配 + AgentSpec 边界，不做边界外的自主决策与需求发明","设计纪律"),
+          ]},
+        { id:"code-bind", type:"code", impl:"plan", title:"② Skill 绑定矩阵（角色 → skill，随 AgentSpec 物化）",
+          children:[
+            codi("Coder ← code-implementation-skill + repo-context-skill + arch-consistency-skill","skill 绑定"),
+            codi("Test ← unit-test-skill + coverage-skill + acceptance-criteria-skill","skill 绑定"),
+            codi("Review ← code-review-skill + review-agent（系统包）+ security-scan-skill","skill 绑定 · 与 Coder 不重合"),
+            codi("Repair ← build-and-fix-skill + refactor-skill","skill 绑定"),
+            codi("Integrator ← ci-pipeline-skill + migration-skill + release-notes-skill","skill 绑定"),
+            codi("绑定关系随 AgentSpec 一起物化，运行期不可篡改（沿用 Spec 不可变 + 双哈希风格）","spec_service.py 不可变风格"),
+            codi("skill 明细集中在 🧩 Skill 装配体系的「编码交付 skill 包」组","见 🧩 Skill 装配体系"),
+          ]},
+        { id:"code-flow", type:"code", impl:"plan", title:"③ 流转状态机（每个 WorkItem 一条流水线）",
+          children:[
+            codi("TODO → CLAIMED（租约领取）→ IN_PROGRESS（编码）→ CODE_DONE → UT_PASS","状态机前半段"),
+            codi("UT_PASS → REVIEW_PASS（双 Agent review 通过）→ MERGED → VERIFIED","状态机后半段"),
+            codi("任一环节失败：→ BLOCKED（阻塞转人工）或 REWORK（有界重试，默认 3 轮内不收敛即转人工）","有界重试规则"),
+            codi("状态转移全部由后端下发 legal_actions，前端只渲染不推导（沿用既有纪律）","state_projection / query_service.py"),
+            codi("每次转移 append-only 写 WorkItemRun，不改历史（与现有执行账本同构）","execution_service.py / models.py:522"),
+            codi("每次转移都要落 AgentCall：谁 / 哪套 skill / 哪个后端 / 改了哪些文件","AgentCall 证据链"),
+          ]},
+        { id:"code-review", type:"code", impl:"plan", title:"④ 审核（双 Agent 对抗 + 门禁）",
+          children:[
+            codi("提交即触发代码 review，Review Agent 与 Coder 的 skill / 后端不同（对抗式）","⚔️ 双 Agent 对抗式评审"),
+            codi("结构化 review 合同：findings + severity + 证据（文件与行号）+ 建议 + 是否阻断","结构化一致性合同"),
+            codi("BLOCKER 未清不得合并；CI 门禁（静态检查 / 构建 / UT）全绿才可合并","合并门禁"),
+            codi("需求逐条勾稽：WorkItem 验收标准 ↔ UT 用例 ↔ 需求 ID 三方对齐，缺一即拒","traceability-skill"),
+            codi("人工复核点：架构级改动 / 跨模块接口 / 安全与权限相关提交必须人工过目","人机分工"),
+          ]},
+        { id:"code-guard", type:"code", impl:"plan", title:"⑤ 保障完成（把「AI 写的代码」变成可信产物）",
+          children:[
+            codi("沙箱隔离：每个 Agent 独立工作区，最小权限（只读挂载 + 白名单工具）","沙箱与权限"),
+            codi("越界即拒：改动超出 AgentSpec 的 fixed / configurable 边界 → 直接拒绝合并","边界三段式约束"),
+            codi("幂等：同一 WorkItem 同一阶段重复调用不重复落产物（命令 ID + 输入哈希）","命令引擎幂等"),
+            codi("租约：领取任务用分布式锁，超时自动回收（P3 前置：process-local 租约须外置）","实施计划 §5.1-5.2"),
+            codi("预算熔断：单任务 token / 时长 / 轮次上限，超限转人工","成本与安全"),
+            codi("两阶段执行：prepare 产生产物与证据 → materialize 事务内权威复检，防状态漂移","command_service 既有模式"),
+          ]},
+        { id:"code-artifact", type:"code", impl:"plan", title:"⑥ 产物与落库（全部进项目空间）",
+          children:[
+            codi("源码 / UT / 构建产物 / review 记录 / 覆盖率报告 → 生成在项目空间代码区","🗂️ 共享空间"),
+            codi("每份产物带 WorkItem ID + AgentSpec ID + 需求 ID，可正反双向追溯","traceability-skill"),
+            codi("个人空间只放未提交草稿；一旦合并即进项目空间，项目成员皆可访问","🗂️ 共享空间"),
+            codi("版本与回滚：每次合并生成可回退版本点，回退动作本身也留证","不可变与审计"),
+          ]},
+        { id:"code-accept", type:"code", impl:"plan", title:"⑦ 验收（编码阶段怎么验得住）",
+          children:[
+            codi("UT 覆盖率门槛达标 + 静态检查零高危","质量门禁"),
+            codi("双 Agent review 通过，无未关闭 BLOCKER","⚔️ 双 Agent 对抗式评审"),
+            codi("验收标准逐条有对应测试证据：无证据 = 未完成（禁止口头声称通过）","验收纪律"),
+            codi("追溯链完整：需求 ID → Spec → WorkItem → 代码提交 → UT → review → CI 记录","traceability-skill"),
+            codi("交付物归档到项目空间，供 ⑦ 阶段门禁引用；禁止伪造测试结果（红线）","forbid_fabricated_approvals"),
+          ]},
+        { id:"code-status", type:"code", impl:"plan", title:"⑧ 当前实现状态（诚实标注）",
+          children:[
+            codi("已实现：拆解产物（WorkItem + AgentSpec + 依赖图）、人工驱动执行看板（P0–P2）、WorkItemRun append-only 账本","execution_service.py"),
+            codi("待实现：本流水线的 Agent 自动编码 / UT / code review / 合并（P3 及其延伸）","任务执行引擎实施计划"),
+            codi("待实现前置：租约外置分布式锁、沙箱与仓库最小权限模型、CI 接入","实施计划 §5.1-5.2"),
+            codi("与 ⚔️ 双 Agent 评审共用同一套对抗与裁决机制，不另起一套","机制复用"),
+          ]},
+      ]},
+    /* ============ 共享空间（v5 新增） ============ */
+    { id:"ws-hub", type:"ws", impl:"partial", title:"🗂️ 共享空间 · 公司总空间 / 项目空间 / 个人空间",
+      desc:"整个项目基于一套共享空间运作，空间分三级：\n· 全公司总空间——组织级规范、模板、skill 仓库与公司知识库；\n· 项目空间——项目创建后自动建立，项目相关的一切（PRD、HTML 原型、规格、代码、验收证据）都放这里，所有参与项目的员工都有权访问；\n· 个人空间——个人草稿与实验，不直接作为交付物。\n\n核心价值：资产有唯一的「家」，权限有明确的边界，交付有统一的落点。个人草稿不会污染正式资产，项目成果不会散落在各人机器上，跨项目复用的经验也能沉淀到公司级。",
+      src:"docs/workspace.md（个人空间 + 项目共享空间已实现）· backend/app/services/workspace_portal.py · weknora.py · frontend/aios-main/src/api/WorkspacePortal.tsx",
+      children:[
+        { id:"ws-company", type:"ws", impl:"plan", title:"🏢 全公司总空间（组织级）",
+          children:[
+            wsi("组织级规范与基线：编码规范、安全红线、评审标准、合规要求（例如等保基线）","公司级策略"),
+            wsi("模板库：阿里 / 鹅厂等 PRD 模板、拆解模板、测试模板、上线检查单","documents.py 模板 + 公司沉淀"),
+            wsi("skill 仓库：公司级 skill 版本与分发（skill-installer 拉取到各项目运行时）","backend/skills/ 分发"),
+            wsi("公司知识库：跨项目可复用资产、历史项目经验、领域知识","weknora 知识库"),
+            wsi("定位：只读为主 + 受控发布——项目空间沉淀出成果，经评审后提升为公司级","提升机制"),
+            wsi("当前状态：为设计目标（已实现的是个人空间 + 项目共享空间两级）","docs/workspace.md"),
+          ]},
+        { id:"ws-project", type:"ws", impl:"partial", title:"📁 项目空间（创建即建 · 项目成员皆可访问）",
+          children:[
+            wsi("项目创建后自动建立空间；所有参与项目的员工按 ActorResolver 的角色获得访问权","workspace.md §1 §3"),
+            wsi("资产分区：PRD（Univer/DOCX）/ HTML 原型 / 规格与拆解（Spec · WorkItem · AgentSpec）/ 代码与 UT / 测试与验收证据 / 里程碑与交付物 / 图表与素材","资产分类"),
+            wsi("每份资产带来源、版本、责任人、关联需求 ID，可正反追溯","traceability-skill"),
+            wsi("可见性：项目内默认全员可读；敏感项按角色收敛（审批人 / 经理 / 负责人 / 成员）","权限模型"),
+            wsi("PRD、原型、代码都在这里生成与交付——不散落在个人机器上","交付落点"),
+          ]},
+        { id:"ws-personal", type:"ws", impl:"partial", title:"👤 个人空间（草稿与实验）",
+          children:[
+            wsi("内容：未提交草稿、AI 候选、个人笔记、临时实验、个人偏好配置","个人资产"),
+            wsi("纪律：不能直接作为项目交付物；提交后进入项目空间并生成正式版本","与项目空间的边界"),
+            wsi("隔离意义：避免草稿污染正式资产，也避免个人尝试影响项目基线","隔离设计"),
+          ]},
+        { id:"ws-lifecycle", type:"ws", impl:"plan", title:"🔄 资产流转与提升",
+          children:[
+            wsi("个人草稿 →（提交）→ 项目空间正式版 →（评审沉淀）→ 公司总空间模板 / 规范","三级流转"),
+            wsi("跨项目复用：公司级资产在项目空间只读引用，可派生但不可就地改动源头","复用纪律"),
+            wsi("项目结项：全量归档到项目空间（只读），关键资产提升为公司级","结项流程"),
+            wsi("与 SDLC 对齐：交付物归档是 ⑦ 阶段门禁的输入之一","SDLC 运维阶段"),
+          ]},
+        { id:"ws-impl", type:"ws", impl:"partial", title:"🧩 落地实现（已实现部分）",
+          children:[
+            wsi("页面：/workspace 三区（空间 / 知识 / 技能），可搜索、按需加载","workspace.md §1 §3"),
+            wsi("后端：本地资产聚合（Session / 项目 / PRD / 原型）+ 远端 WeKnora 知识库与技能","workspace_portal.py"),
+            wsi("同步编排：查找或创建项目租户 → 复制模型配置 → 查找或创建项目资料知识库 → 上传缺失资产 → 切回个人租户","workspace.md §6"),
+            wsi("接口：GET /workspace/overview、POST /workspace/sync、按需取知识文档与技能文件","workspace.md §4"),
+          ]},
+        { id:"ws-guard", type:"ws", impl:"partial", title:"🛡️ 保障与纪律",
+          children:[
+            wsi("身份统一由后端 ActorResolver 解析；前端 actor hint 不得当作生产认证","workspace.md §3"),
+            wsi("离线降级：远端不可用时本地项目空间仍可读（核心降级能力）；写失败必须明确报错","workspace.md §7"),
+            wsi("禁止伪造：不得伪造远端知识 / 技能或同步成功状态","workspace.md §7"),
+            wsi("同步纪律：租户切换必须恢复、重复上传需幂等判定、长同步超时要有明确失败语义","workspace.md §6 §10"),
+            wsi("访问审计：谁在何时读写了项目空间的哪份资产，可追溯","审计链"),
+          ]},
+        { id:"ws-accept", type:"ws", impl:"partial", title:"✅ 验收（空间本身怎么验）",
+          children:[
+            wsi("/workspace 可直接打开与刷新；空间 / 知识 / 技能三区可切换与搜索；文档与技能文件按需加载","workspace.md §10"),
+            wsi("关键产物（PRD / 原型 / 代码）在项目空间中可被项目成员读到，且版本正确","交付落点验收"),
+            wsi("WeKnora 离线时本地项目空间仍显示；同步失败明确报错且不误报成功","降级与错误语义"),
+            wsi("权限验收：非项目成员访问项目空间资产被拒绝；越权动作可读拒绝","权限模型验收"),
+          ]},
+      ]},
+    /* ============ 尚未实现的能力（Roadmap） ============ */
+    { id:"roadmap", type:"cross", impl:"rule", title:"🚧 尚未实现 / 有意不做的能力（Roadmap）",
+      desc:"把「缺口」也画出来，避免把目标当成已实现。这一支的每一项都经过源码核验或有明确设计出处。\n\n注意区分两类：一类是技术上待实现（Agent 编码交付、双 Agent 评审工程化、公司总空间等），另一类是设计上有意不做（生产签字、发布、运维由人与外部系统承担——系统不代签、不越权）。",
+      src:"docs/任务执行引擎实施计划.md · execution_service.py（agent_backed=False）· docs/sdlc/README.md 边界 · docs/workspace.md",
+      children:[
+        ci("Agent 自动编码交付（未实现）：拆解产物目前由人工看板推进，编码 / UT / review / 合并仍未自动化","execution_service.py agent_backed=False · 🔨 编码交付流水线"),
+        ci("编码流水线前置：process-local 租约需外置为分布式锁；沙箱与仓库最小权限模型、CI 接入待建","实施计划 §5.1-5.2"),
+        ci("双 Agent 对抗式评审的工程化：A/B 独立装配、上下文隔离、异议闭环校验目前只有设计","⚔️ 双 Agent 对抗式评审"),
+        ci("全公司总空间：当前已实现个人空间 + 项目共享空间，公司级层级与资产提升审批流待建","workspace.md · 🗂️ 共享空间"),
+        ci("生产发布 / UAT 签字 / 上线执行：由人与外部系统承担，系统只做规则与证据，不代签、不自动发布","docs/sdlc/README.md 边界 / forbid_fabricated_approvals"),
+        ci("用户反馈自动结构化并回流产品待办池（当前为规则描述）","execution.yaml / iterative_incremental.yaml"),
+        ci("部署与灰度发布自动化（当前由运维人工执行）","SDLC 运维阶段"),
+        ci("文档持续迭代与结项归档的自动化（当前人工维护）","SDLC 运维阶段"),
+      ]},
+    /* ============ 人机分工 ============ */
+    { id:"hub-human", type:"human", title:"👥 人机分工与协同（谁做什么）", tag:"cross",
+      desc:"人机混动的关键：明确哪些事必须由人拍板、哪些由 Agent 完成、哪些必须协同。人的授权字段（final_approver / PM / root_owner）从入口即固化，且 Agent 不可篡改。",
+      src:"schemas/workflow.py / command_service._enforce_guard / docs/block-prd-editor.md",
+      children:[
+        hi("👤 人主导：需求录入与授权（11 字段 Brief，含审批人/经理/负责人）","schemas/workflow.py:23"),
+        hi("👤 人主导：决定是否跳过澄清、在 diff 行加批注、审核批准 / 驳回、启动与完成任务"),
+        hi("👤 人主导：业务方 UAT 签字（一票否决）；只有 final_approver / PM / root_owner 可人工审核"),
+        hi("🤖 Agent 主导：完整性分析、PRD 生成、语义审核、任务拆解、自动修订、审核报告生成"),
+        hi("🤝 人机协同：澄清对话；Block 编辑（AI 候选 → 人显式应用，版本不符则拒绝）"),
+        hi("🤝 人机协同：全文审核 → 自动解决（最多 3 轮）→ 人确认；提交评审（人触发、系统确定性汇总）"),
+        hi("🔒 人的否决权：未决批注才能发布本轮审核；守卫禁止 Agent 把状态设为 APPROVED"),
+        hi("⚔️ 人在双 Agent 评审中的角色：仲裁作者方与异议方的分歧、决定接受或保留异议、保留需业务拍板项","⚔️ 双 Agent 对抗式评审"),
+        hi("🔨 人在编码交付中的角色：监督但不下场——只看门禁与证据（覆盖率 / review 结论 / 追溯链），必要时介入 BLOCKED","🔨 编码交付流水线"),
+        hi("🗂️ 人在共享空间中的角色：审批人 / 经理 / 负责人 / 项目成员——决定谁可读写项目空间、谁可把资产提升为公司级","🗂️ 共享空间 / ActorResolver"),
+      ]},
+    /* ============ 横切底座 ============ */
+    { id:"hub-cross", type:"cross", title:"🧱 横切能力底座（支撑全流程）", tag:"cross",
+      desc:"无论走到哪个阶段都依赖的工程能力。它们不是某一个阶段的一部分，而是整套系统能让「AI 产出」变得可审计、可回放、可否决的底座。",
+      src:"backend/app/services/* / frontend/aios-main/src/**",
+      children:[
+        ci("两阶段命令引擎：prepare（外部副作用 + AgentCall 证据）→ materialize（单事务落库）","command_service.py"),
+        ci("状态机驱动：后端下发 legal_actions / next_action，前端只渲染不推导","state_projection / workflow.py"),
+        ci("幂等 + CAS 乐观锁 + 租约 + 崩溃恢复（PROCESS_INTERRUPTED 可重试）","command_service / ai_service"),
+        ci("审计与证据：AgentCall 全量调用 / AuditEvent / SpecReview / ProcessedCommand（递归脱敏）","query_service 审计链"),
+        ci("多 Agent 后端：codex / deepseek / glm / kimi（可切换，模型选择器）","schemas/workflow.py:20 AgentBackendName（已核验）"),
+        ci("Agent 运行时监控：runtime events、token 统计、活动流、AgentRuntimePanel","agent_runtime_events.py / AgentRuntimePanel.tsx"),
+        ci("共享空间：/workspace 汇总个人空间 / 项目空间资产 + WeKnora 知识库与技能，可同步（离线可降级）","workspace.md / workspace_portal.py / weknora.py — 详见 🗂️ 共享空间"),
+        ci("文档产物：PDF/TXT 大纲导入、DOCX（Univer 画布）导出与回传、图片资产、draw.io ER 图、HTML 原型","docx_service / document_asset_service / drawio_diagrams / types.HtmlPrototypePayload"),
+        ci("可视化交互面：Dashboard / 工作空间 / Block 编辑器 / 顶层图 / 展开 SDLC 图 / 任务 DAG / 里程碑监控 / 审核看板","frontend/aios-main/src/api/*"),
+        ci("对抗式评审基座（待建）：双 Agent 独立调用与独立 skill 装配、上下文隔离、独立证据留痕可回放","⚔️ 双 Agent 对抗式评审"),
+        ci("编码交付基座（待建）：沙箱工作区 + 最小权限 + 仓库与 CI 接入 + 越界校验 + 预算熔断","🔨 编码交付流水线"),
+      ]},
+    /* ============ 验收体系 ============ */
+    { id:"accept-hub", type:"hub", title:"🎯 验收体系总览（贯穿全流程）", tag:"cross",
+      desc:"验收不是单点检查，而是贯穿每一阶段的分层体系：每层都产出证据，下游验收依赖上游已通过的证据，且全程禁止伪造。\n点击「仅验收」筛选可只保留所有阶段的验收支线 + 本节点。",
+      src:"spec_review.py / block-prd-editor.md / docs/sdlc/source.md / command_service.py",
+      children:[
+        hub("① PRD 三层验收：RULE(确定性) → AGENT(语义对比 snapshot + 双 Agent 异议) → HUMAN(Univer 画布内行级批注)","spec_review.py / block-prd-editor.md"),
+        hub("② Block 层验收：分块审核 + 全文审核（blocker/warning）+ 自动解决最多 3 轮 + 提交评审确定性校验","block-prd-editor.md §7-13"),
+        hub("③ SDLC 阶段门禁：一级正式评审(全员签字/一票否决) / 二级专项评审 / 三级确认制，准出写 exit_gate_key","docs/sdlc/source.md"),
+        hub("④ 任务执行 DAG 门禁：依赖未完成不可启动；门禁任务未完成则下游不可启动","execution_service / SDLC 规则"),
+        hub("⑤ 缺陷回退：回源头阶段整改，禁止下游阶段自行消化上游问题","docs/sdlc/source.md"),
+        hub("⑥ 变更控制：影响评估 + 评审，更新对应阶段基线后重评下游","docs/sdlc/source.md"),
+        hub("⑦ 验收证据链：AgentCall 全量调用 + SpecReview 落库 + AuditEvent 递归脱敏","query_service 审计"),
+        hub("⑧ 红线 forbid_fabricated_approvals：禁止伪造签字 / 测试结果 / 发布 / 用户反馈","docs/sdlc/README.md 边界"),
+        hub("⑨ SDLC 生命周期计划校验：阶段完整 / 里程碑映射 / exit_gate 门禁任务 / 门禁内容 / 活动与交付物全覆盖 / 依赖合法，20+ 个 SDLC_* 校验码","sdlc_rules.validate_lifecycle（已实现）"),
+        hub("⑩ 双 Agent 对抗式评审：作者方与独立异议方 skill 不同、后端可不同；异议必须逐条显式处置才算闭环","⚔️ 双 Agent 对抗式评审（贯穿全项目）"),
+        hub("⑪ 编码交付验收（目标）：UT 覆盖率门槛 + 静态检查零高危 + 双 Agent review 无未关闭 BLOCKER + 验收标准逐条有测试证据","🔨 编码交付流水线"),
+        hub("⑫ 共享空间权限验收：项目成员可读项目空间全部资产，非成员越权拒绝；资产读写可审计","🗂️ 共享空间"),
+      ]},
+  ]
+};
+
+/* ---- 构造器 ---- */
+function it(title, src){ return {type:"item", title, src:src||""}; }
+function c(catKey, items){ const m=CAT[catKey]; return {type:"cat", cat:catKey, title:m.label, icon:m.icon, color:m.color, children:items}; }
+function hub(title, src){ return {type:"item", title, src:src||"", hub:true}; }
+function hi(title, src){ return {type:"item", title, src:src||"", human:true}; }
+function ci(title, src){ return {type:"item", title, src:src||"", cross:true}; }
+function s(id,title,phase,impl,owner,children){ return {id,type:"stage",title,phase,impl,owner,children}; }
+function si(title, src){ return {type:"item", title, src:src||"", sdlc:true}; }
+function ki(title, src){ return {type:"item", title, src:src||"", skl:true}; }
+function dui(title, src){ return {type:"item", title, src:src||"", dui:true}; }
+function codi(title, src){ return {type:"item", title, src:src||"", codi:true}; }
+function wsi(title, src){ return {type:"item", title, src:src||"", wsi:true}; }
+
+/* ---- 展开为节点表 ---- */
+const nodeMap = {}; let root;
+(function flatten(n, parent, depth){
+  n.parent = parent; n.depth = depth;
+  if(n.type==="cat"||(n.type==="item"&&false)) n._collapsed = true; else n._collapsed = false;
+  if(n.children && n.children.length && n.type!=="cat") n._collapsed = true;
+  nodeMap[n.id] = n;
+  (n.children||[]).forEach((ch,i)=>{ if(!ch.id) ch.id = n.id+"-"+i; flatten(ch, n, depth+1); });
+  if(!parent) root = n;
+})(TREE, null, 0);
+/* 默认只显示主干：root 展开 → 7 个流程阶段 + 6 个贯穿视角（共 13 个节点）。
+   更深的层级靠点击节点逐层展开；卡片高度按真实内容实测，长文本不再互相压叠 */
+Object.values(nodeMap).forEach(n=>{ n._collapsed = n.depth>=1 && !!n.children && n.children.length>0; });
+
+/* ---- 布局 ---- */
+const X_UNIT = 268, V_GAP = 16, PAD = 60;
+/* 高度缓存：优先用真实 DOM 实测高度；未测量时按字符宽度估算换行行数兜底 */
+const MEASURED = {};
+const FONT = {root:15, stage:13.5, cat:12.5, item:11.5, hub:13.5, human:13.5, cross:13.5, sdlc:13, skl:13, dual:13, code:13, ws:13};
+function estLines(text, fs, maxW){
+  let lines=1, w=0;
+  for(const ch of text){
+    const c=ch.charCodeAt(0);
+    const cw=(c>0x2E7F?1:0.56)*fs;          // CJK 全宽，西文/数字约半宽
+    if(w+cw>maxW && w>0){ lines++; w=cw; } else w+=cw;
+  }
+  return lines;
+}
+function estHeight(n){
+  const fs=FONT[n.type]||12, w=(NODE_W[n.type]||200)-24, lh=fs*1.44;
+  if(n.type==="cat") return 32;
+  let h=16+estLines(n.title||"",fs,w)*lh;
+  if(n.type==="stage"){ h+=4+11.5*1.35; if(n.impl||n.owner) h+=4+16; }
+  if((n.type==="sdlc"||n.type==="skl"||n.type==="dual"||n.type==="code"||n.type==="ws")&&n.impl) h+=4+16;
+  if((n.type==="hub"||n.type==="human"||n.type==="cross")&&n.tag) h+=4+16;
+  return Math.max(h,30);
+}
+function heightOf(n){ return MEASURED[n.id] || estHeight(n); }
+/* 按叶子卡片的真实高度逐个下移，杜绝纵向压叠 */
+function layout(){
+  let cursor = PAD;
+  function assign(n, depth){
+    n.x = PAD + depth*X_UNIT;
+    const kids = visibleChildren(n);
+    if(!kids.length){ const h=heightOf(n); n.y = cursor + h/2; cursor += h + V_GAP; return n.y; }
+    let sum=0; kids.forEach(ch=> sum+=assign(ch, depth+1));
+    n.y = sum/kids.length; return n.y;
+  }
+  assign(root,0);
+}
+function visibleChildren(n){
+  if(!n.children) return [];
+  if(n._collapsed && !searchActive()) return [];
+  return n.children.filter(ch=> kept.has(ch.id));
+}
+function searchActive(){ return state.query.trim().length>0; }
+
+const world = document.getElementById("world");
+const nodesEl = document.getElementById("nodes");
+const svg = document.getElementById("edges");
+const NODE_W = {root:250, stage:214, cat:170, item:216, hub:234, human:234, cross:234, sdlc:252, skl:246, dual:250, code:250, ws:250};
+
+/* ---- 过滤/搜索 ---- */
+const state = { query:"", filter:"all", selected:null };
+let kept = new Set();
+
+function isAcceptNode(n){
+  if(n.type==="hub" && n.id==="accept-hub") return true;
+  if(n.parent && n.parent.id==="accept-hub") return true;
+  if(n.cat==="accept") return true;
+  if(n.parent && n.parent.cat==="accept") return true;
+  return false;
+}
+function ancestorStage(n){ let p=n.parent; while(p){ if(p.type==="stage") return p; p=p.parent; } return null; }
+/* 就近的显式实现度声明：自身或最近祖先上的 impl（SDLC 分支与 Roadmap 分支靠它参与筛选） */
+function declaredImpl(n){ let p=n; while(p){ if(p.impl) return p.impl; p=p.parent; } return null; }
+function implOk(n){
+  if(state.filter==="all") return true;
+  if(state.filter==="accept") return isAcceptNode(n) || n.type==="root";
+  if(n.type==="root") return true;
+  const d = declaredImpl(n);
+  /* 「目标」筛选同时覆盖 rule（规则已驱动）与 plan（设计完成·待实现） */
+  if(d) return state.filter==="rule" ? (d==="rule"||d==="plan") : d === state.filter;
+  const st = ancestorStage(n);
+  if(!st) return false;
+  return st.impl === state.filter;
+}
+function textOf(n){ return ((n.title||"")+" "+(n.desc||"")+" "+(n.src||"")+" "+(n.phase||"")).toLowerCase(); }
+function computeKept(){
+  const q = state.query.trim().toLowerCase();
+  const out = new Set();
+  function walk(n){
+    let childHit = false;
+    (n.children||[]).forEach(ch=>{ if(walk(ch)) childHit=true; });
+    const selfHit = !q || textOf(n).includes(q);
+    let keep = selfHit || (q && childHit);
+    if(keep && !implOk(n)) keep = false;
+    // 祖先通路：自身被过滤但仍有保留的后代时，保留为连接节点
+    if(!keep && childHit) keep = true;
+    if(keep) out.add(n.id);
+    return keep || childHit;
+  }
+  walk(root);
+  out.add(root.id);
+  return out;
+}
+
+/* ---- 渲染：先建 DOM（卡片定宽）→ 实测高度 → 布局定位 → 画边 ---- */
+function buildNodeEl(n){
+  const el=document.createElement("div");
+  let cls="node "+n.type;
+  if(n.type==="item"){ if(n.hub) cls+=" hubitem"; if(n.human) cls+=" humanitem"; if(n.cross) cls+=" crossitem"; if(n.sdlc) cls+=" sdlcitem"; if(n.skl) cls+=" sklitem"; if(n.dui) cls+=" duiitem"; if(n.codi) cls+=" codiitem"; if(n.wsi) cls+=" wsiitem"; }
+  if(n._collapsed) cls+=" collapsed";
+  if(state.selected===n.id) cls+=" sel";
+  if(state._dimmedSet && state._dimmedSet.has(n.id)) cls+=" dim";
+  el.className=cls;
+  if(n.type==="stage") el.style.setProperty("--sc", STAGE_COLORS[(+n.id.slice(1))%STAGE_COLORS.length]);
+  if(n.type==="cat") el.style.setProperty("--cc", n.color);
+  if(n.type==="sdlc") el.style.setProperty("--sdlc", n.mcolor || "#c9a3f7");
+  if(n.type==="skl") el.style.setProperty("--skl", n.mcolor || "#5eead4");
+  if(n.type==="dual") el.style.setProperty("--dual", n.mcolor || "#ff7b72");
+  if(n.type==="code") el.style.setProperty("--code", n.mcolor || "#f0883e");
+  if(n.type==="ws") el.style.setProperty("--ws", n.mcolor || "#3fb950");
+  const w = NODE_W[n.type]||190;
+  let inner=`<div class="card" style="width:${w}px">`;
+  if(n.type==="root") inner+=`<div class="ttl">${n.title}</div>`;
+  else if(n.type==="stage"){ inner+=`<div class="ttl">${n.title}</div><div class="ph">${n.phase||""}</div>`; if(n.impl) inner+=badge(n.impl); if(n.owner) inner+=`<span class="badge human">${n.owner}</span>`; }
+  else if(n.type==="hub"||n.type==="human"||n.type==="cross"){ inner+=`<div class="ttl">${n.title}</div>`; if(n.tag) inner+=badge("cross"); }
+  else if(n.type==="sdlc"){ inner+=`<div class="ttl">${n.title}</div>`; if(n.impl) inner+=badge(n.impl); }
+  else if(n.type==="skl"){ inner+=`<div class="ttl">${n.title}</div>`; if(n.impl) inner+=badge(n.impl); }
+  else if(n.type==="dual"||n.type==="code"||n.type==="ws"){ inner+=`<div class="ttl">${n.title}</div>`; if(n.impl) inner+=badge(n.impl); }
+  else if(n.type==="cat") inner+=`<span class="ico">${n.icon}</span><span class="ttl">${n.title}</span>`;
+  else inner+=`<div class="ttl">${n.title}</div>`;
+  inner+=`</div>`;
+  if(n.children&&n.children.length && !searchActive()) inner+=`<div class="toggle">${n._collapsed?"+":"–"}</div>`;
+  el.innerHTML=inner;
+  el.addEventListener("click",e=>{ if(e.target.classList.contains("toggle")) return; selectNode(n); });
+  const tg=el.querySelector(".toggle");
+  if(tg) tg.addEventListener("click",e=>{ e.stopPropagation(); toggle(n); });
+  return el;
+}
+function render(){
+  kept = computeKept();
+  const vis = [];
+  (function collect(n){ if(!kept.has(n.id)) return; vis.push(n); visibleChildren(n).forEach(collect); })(root);
+  /* 1) 先建成节点（尚未定位），用于测量真实高度 */
+  nodesEl.innerHTML=""; svg.innerHTML="";
+  const els={};
+  vis.forEach(n=>{ const el=buildNodeEl(n); els[n.id]=el; nodesEl.appendChild(el); });
+  vis.forEach(n=>{ const h=els[n.id].offsetHeight; if(h>0) MEASURED[n.id]=h; });
+  /* 2) 用真实高度布局，长卡片不会再互相压叠 */
+  layout();
+  /* 3) 定位 + 计算画布尺寸 */
+  let maxX=0, maxY=0;
+  vis.forEach(n=>{
+    const w=NODE_W[n.type]||190, h=heightOf(n);
+    els[n.id].style.left=n.x+"px"; els[n.id].style.top=n.y+"px";
+    maxX=Math.max(maxX, n.x+w); maxY=Math.max(maxY, n.y+h/2);
+  });
+  const W=maxX+PAD, H=maxY+PAD;
+  world.style.width=W+"px"; world.style.height=H+"px";
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  /* 4) 连线 */
+  vis.forEach(n=>{
+    (n._collapsed?[]:(n.children||[])).forEach(ch=>{
+      if(!kept.has(ch.id)) return;
+      const x1=n.x+(NODE_W[n.type]||190), y1=n.y, x2=ch.x, y2=ch.y, mx=(x1+x2)/2;
+      const p=document.createElementNS("http://www.w3.org/2000/svg","path");
+      p.setAttribute("d",`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`);
+      p.setAttribute("fill","none"); p.setAttribute("stroke", edgeColor(n,ch));
+      p.setAttribute("stroke-width","1.6"); p.setAttribute("opacity", n._dim?".08":".5");
+      svg.appendChild(p);
+    });
+  });
+}
+let selected=null;
+function edgeColor(p,ch){
+  if(ch.type==="cat") return ch.color;
+  if(ch.type==="hub"||ch.id==="accept-hub") return "#eab308";
+  if(ch.type==="human") return "#f778ba";
+  if(ch.type==="cross") return "#22d3ee";
+  if(ch.type==="sdlc") return ch.mcolor || "#c9a3f7";
+  if(ch.type==="skl") return "#14b8a6";
+  if(ch.type==="dual") return "#ff7b72";
+  if(ch.type==="code") return "#f0883e";
+  if(ch.type==="ws") return "#3fb950";
+  if(ch.type==="stage") return STAGE_COLORS[(+ch.id.slice(1))%STAGE_COLORS.length];
+  if(ch.hub) return "#eab308"; if(ch.human) return "#f778ba"; if(ch.cross) return "#22d3ee";
+  if(ch.sdlc) return "#7d5fbf";
+  if(ch.skl) return "#2dd4bf";
+  if(ch.dui) return "#ff7b72";
+  if(ch.codi) return "#f0883e";
+  if(ch.wsi) return "#3fb950";
+  return "#30363d";
+}
+function badge(t){
+  if(t==="done") return `<span class="badge done">已实现</span>`;
+  if(t==="partial") return `<span class="badge partial">部分实现</span>`;
+  if(t==="rule") return `<span class="badge rule">目标·规则驱动</span>`;
+  if(t==="plan") return `<span class="badge plan">目标·设计完成</span>`;
+  if(t==="cross") return `<span class="badge cross">贯穿全程</span>`;
+  return "";
+}
+function toggle(n){ if(!n.children||!n.children.length) return; n._collapsed=!n._collapsed; render(); }
+
+function selectNode(n){
+  state.selected=n.id; selected=n.id; render();
+  const p=document.getElementById("panel");
+  document.getElementById("pType").textContent = typeLabel(n);
+  document.getElementById("pTitle").textContent = n.title;
+  const cat=document.getElementById("pCat"); cat.innerHTML="";
+  if(n.type==="stage"){ if(n.impl) cat.innerHTML+=badge(n.impl); if(n.owner) cat.innerHTML+=`<span class="chip">${n.owner}</span>`; }
+  if(n.type==="cat"){ const m=CAT[n.cat]; cat.innerHTML+=`<span class="chip" style="border-color:${m.color};color:${m.color}">${m.icon} ${m.label}</span>`; }
+  if(n.type==="hub") cat.innerHTML+=`<span class="chip" style="border-color:#eab308;color:#eab308">验收体系</span>`;
+  if(n.type==="human") cat.innerHTML+=`<span class="chip" style="border-color:#f778ba;color:#f778ba">人机分工</span>`;
+  if(n.type==="cross") cat.innerHTML+=`<span class="chip" style="border-color:#22d3ee;color:#22d3ee">${n.id==="roadmap"?"未实现 / 设计边界":"横切底座"}</span>`;
+  if(n.type==="sdlc") cat.innerHTML+=`<span class="chip" style="border-color:${n.mcolor||"#c9a3f7"};color:${n.mcolor||"#c9a3f7"}">SDLC 模型</span>`;
+  if(n.type==="skl") cat.innerHTML+=`<span class="chip" style="border-color:#5eead4;color:#5eead4">Skill 装配</span>`;
+  if(n.type==="dual") cat.innerHTML+=`<span class="chip" style="border-color:#ff7b72;color:#ffa198">双 Agent 评审</span>`;
+  if(n.type==="code") cat.innerHTML+=`<span class="chip" style="border-color:#f0883e;color:#ffb27a">编码交付</span>`;
+  if(n.type==="ws") cat.innerHTML+=`<span class="chip" style="border-color:#3fb950;color:#7ee787">共享空间</span>`;
+  if(n.phase) cat.innerHTML+=`<span class="chip">${n.phase}</span>`;
+  document.getElementById("pDesc").textContent = n.desc || (n.src? "（见下方工程出处）":"");
+  const ps=document.getElementById("pSrc");
+  if(n.src){ ps.style.display="block"; ps.textContent="📚 工程出处："+n.src; } else ps.style.display="none";
+  p.classList.add("open");
+}
+function typeLabel(n){ return {root:"系统根",stage:"流程阶段",cat:"支线维度",item:"具体项",hub:"验收体系",human:"人机分工",cross:"横切底座",sdlc:"SDLC 模型",skl:"Skill 装配",dual:"双 Agent 评审",code:"编码交付",ws:"共享空间"}[n.type]||""; }
+
+/* ---- 平移/缩放 ---- */
+let tx=0,ty=0,zoom=1;
+const vp=document.getElementById("viewport");
+function apply(){ world.style.transform=`translate(${tx}px,${ty}px) scale(${zoom})`; }
+function fitView(){
+  const vis=[]; (function collect(n){ if(!kept.has(n.id))return; vis.push(n); visibleChildren(n).forEach(collect); })(root);
+  let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+  vis.forEach(n=>{ const w=NODE_W[n.type]||190, h=heightOf(n); minX=Math.min(minX,n.x); minY=Math.min(minY,n.y-h/2); maxX=Math.max(maxX,n.x+w); maxY=Math.max(maxY,n.y+h/2); });
+  const vw=vp.clientWidth, vh=vp.clientHeight;
+  let z=Math.min(vw/(maxX-minX+90), vh/(maxY-minY+90), 1.12); if(z<0.22) z=0.22;
+  zoom=z; tx=(vw-(maxX-minX)*zoom)/2-(minX-40)*zoom; ty=(vh-(maxY-minY)*zoom)/2-(minY-20)*zoom; apply();
+}
+/* 首屏聚焦主干：优先 1:1 显示（文字最清晰）；若整条主干放不下，等比缩到刚好装下（下限 0.7 保可读） */
+function focusTop(){
+  const vis=[]; (function collect(n){ if(!kept.has(n.id))return; vis.push(n); visibleChildren(n).forEach(collect); })(root);
+  if(!vis.length) return;
+  let minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;
+  vis.forEach(n=>{ const w=NODE_W[n.type]||190, h=heightOf(n);
+    minX=Math.min(minX,n.x); maxX=Math.max(maxX,n.x+w);
+    minY=Math.min(minY,n.y-h/2); maxY=Math.max(maxY,n.y+h/2); });
+  const vw=vp.clientWidth, vh=vp.clientHeight;
+  let z=Math.min(1,(vw-90)/(maxX-minX),(vh-36)/((maxY-minY)||1));
+  if(z<0.7) z=0.7;
+  zoom=z;
+  tx=(vw-(maxX-minX)*zoom)/2-minX*zoom;
+  ty = ((maxY-minY)*zoom+28<=vh) ? (vh-(maxY-minY)*zoom)/2-minY*zoom : 18;
+  apply();
+}
+let dragging=false,sx=0,sy=0,ox=0,oy=0;
+vp.addEventListener("mousedown",e=>{ if(e.target.closest(".node"))return; dragging=true; sx=e.clientX; sy=e.clientY; ox=tx; oy=ty; vp.classList.add("grabbing"); });
+window.addEventListener("mousemove",e=>{ if(!dragging)return; tx=ox+(e.clientX-sx); ty=oy+(e.clientY-sy); apply(); });
+window.addEventListener("mouseup",()=>{ dragging=false; vp.classList.remove("grabbing"); });
+vp.addEventListener("wheel",e=>{ e.preventDefault(); const f=e.deltaY<0?1.1:0.9; const nz=Math.max(0.2,Math.min(2.4,zoom*f));
+  const r=vp.getBoundingClientRect(), cx=e.clientX-r.left, cy=e.clientY-r.top;
+  tx=cx-(cx-tx)*(nz/zoom); ty=cy-(cy-ty)*(nz/zoom); zoom=nz; apply(); },{passive:false});
+
+/* ---- 控制 ---- */
+/* 节点当前是否真的可见（祖先链上没有折叠） */
+function isVisibleNode(n){
+  let p=n.parent;
+  while(p){ if(p._collapsed) return false; p=p.parent; }
+  return true;
+}
+document.getElementById("btnFit").onclick=fitView;
+/* 逐层展开：只展开「当前可见且处于折叠」的节点，连点可一层层推进 */
+document.getElementById("btnExpand").onclick=()=>{
+  kept = computeKept();
+  const targets = Object.values(nodeMap).filter(n=>n._collapsed && kept.has(n.id) && isVisibleNode(n) && n.children && n.children.length);
+  if(!targets.length) return;
+  targets.forEach(n=>{ n._collapsed=false; });
+  render(); focusTop();
+};
+/* 全部收起：回到主干视图 */
+document.getElementById("btnCollapse").onclick=()=>{
+  Object.values(nodeMap).forEach(n=>{ if(n.depth>=1 && n.children && n.children.length) n._collapsed=true; });
+  render(); focusTop();
+};
+document.getElementById("pClose").onclick=()=>document.getElementById("panel").classList.remove("open");
+document.getElementById("search").addEventListener("input",e=>{ state.query=e.target.value; render(); });
+document.querySelectorAll(".chip-f").forEach(ch=>ch.addEventListener("click",()=>{
+  document.querySelectorAll(".chip-f").forEach(x=>x.classList.remove("on")); ch.classList.add("on");
+  state.filter=ch.dataset.f;
+  /* 只展开「有匹配后代」的节点，避免筛选后整图炸开 */
+  kept = computeKept();
+  Object.values(nodeMap).forEach(n=>{ if((n.children||[]).some(c=>kept.has(c.id))) n._collapsed=false; });
+  render(); focusTop();
+}));
+document.getElementById("btnMd").onclick=()=>{
+  const lines=["# firstFlight 人机混动软件开发系统 · 全流程大纲",""];
+  (function walk(n,d){ if(n.type!=="root"){ lines.push("  ".repeat(d)+("- ")+n.title+(n.src?`  \`${n.src}\``:"")); } (n.children||[]).forEach(ch=>walk(ch, n.type==="root"?1:d+1)); })(root,0);
+  const blob=new Blob([lines.join("\n")],{type:"text/markdown;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="firstflight_outline.md"; a.click();
+};
+
+/* ---- 首次渲染：1:1 聚焦主干（可读性优先），并高亮验收体系 ---- */
+render(); focusTop(); selectNode(nodeMap["accept-hub"]);
+window.addEventListener("resize",()=>fitView());
+</script>
+</body>
+</html>

@@ -16,7 +16,7 @@ export function BlockEditor({ block, draft, blocks, onEdit, onRange }: {
     </details>
     {preview ? <article className="prd-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.content || '此 Block 尚未编写。'}</ReactMarkdown></article> :
       <div className="prd-code-editor"><pre aria-hidden="true">{draft.content.split('\n').map((_, i) => i + 1).join('\n')}</pre>
-        <textarea aria-label="Block 正文" spellCheck={false} value={draft.content} placeholder="在这里编写当前章节，或点击「生成当前块」。" wrap="off"
+        <textarea className="prd-block-content" aria-label="Block 正文" spellCheck={false} value={draft.content} placeholder="在这里编写当前章节，或点击「生成当前块」。" wrap="off"
           onScroll={e => { const gutter = e.currentTarget.previousElementSibling; if (gutter) gutter.scrollTop = e.currentTarget.scrollTop; }}
           onChange={e => onEdit({ content: e.target.value })} onSelect={e => {
             const el = e.currentTarget;

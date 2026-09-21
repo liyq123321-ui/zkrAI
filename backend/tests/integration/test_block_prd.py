@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 from app.database.database import create_engine_for_url, init_database, make_session_factory
-from app.database.models import Project, SpecVersion
+from app.database.models import Project, SpecVersion, SpecReview
 from app.models import Block, AgentRun
 from app.services.block_service import BlockService, BlockError
 from app.services.ai_service import AIService
@@ -150,6 +150,18 @@ def test_authorization_cross_document_and_comments(service):
     targets = [{'block_id': a['id'], 'base_version': a['version'], 'start_line': 2, 'end_line': 2}, {'block_id': b['id'], 'base_version': b['version']}]
     comments = service.comment(doc, 'owner', 'change', targets)['comments']
     assert comments[0]['targets'][0]['quote'] == 'two\n'
+    deletion_comments = service.comment(doc, 'owner', 'remove selection', [{
+        'block_id': a['id'], 'base_version': a['version'], 'start_line': 2, 'end_line': 2,
+        'selected_text': 'two', 'action': 'delete',
+    }])['comments']
+    deletion = next(comment for comment in deletion_comments if comment['text'] == 'remove selection')
+    assert deletion['targets'][0]['quote'] == 'two'
+    assert deletion['targets'][0]['action'] == 'delete'
+    with pytest.raises(BlockError):
+        service.comment(doc, 'owner', 'stale selection', [{
+            'block_id': a['id'], 'base_version': a['version'], 'start_line': 2, 'end_line': 2,
+            'selected_text': 'missing text', 'action': 'comment',
+        }])
     with pytest.raises(BlockError): service.comment(doc, 'owner', 'bad', [{'block_id': a['id'], 'base_version': a['version'], 'start_line': 2, 'end_line': 8}])
     with pytest.raises(BlockError): service.import_outline(doc, 'owner', 'tencent', '', service.snapshot(doc, 'owner')['document']['revision'])
 
@@ -166,7 +178,7 @@ async def test_single_block_whitelisted_context_candidate_apply(service):
     provider = DelayedProvider(); ai = AIService(service, provider)
     run = ai.enqueue(doc, 'owner', 'revise', 'r', b['id'], 'Improve target')
     assert ai.enqueue(doc, 'owner', 'revise', 'r', b['id'])['id'] == run['id']
-    with pytest.raises(BlockError): ai.enqueue(doc, 'owner', 'generate', 'other', b['id'])
+    assert ai.enqueue(doc, 'owner', 'generate', 'other', b['id'])['id'] == run['id']
     await finish(ai, provider, run)
     context = provider.contexts[0]
     assert 'Sibling secret' not in str(context) and 'Upstream body secret' not in str(context)
@@ -270,6 +282,9 @@ async def test_block_review_and_snapshot_matches_downstream(service):
     snap = service.snapshot(doc, 'owner')
     assert snap['blocks'][0]['version'] == b['version']
     submitted = service.submit(doc, 'owner', snap['document']['revision'])
+    # The submit result carries the project so the HTTP layer can start the
+    # HTML prototype without a second lookup (see test_prd_submit_prototype).
+    assert submitted['project_id'] == 'p'
     assert service.submit(doc, 'owner', snap['document']['revision']) == submitted
     with service.factory() as db:
         spec = db.get(SpecVersion, submitted['spec_version_id'])
@@ -279,6 +294,41 @@ async def test_block_review_and_snapshot_matches_downstream(service):
         assert spec.content['functional_requirements'] == make_valid_spec().model_dump()['functional_requirements']
         assert 'Human canonical content' in spec.markdown
         assert spec.content['source_refs'] == [f"block:{b['id']}:v{b['version']}"]
+
+
+def test_current_clean_whole_review_allows_submission_despite_fragment_rule_findings(service):
+    snap = prepared(service, '# Complete specification')
+    doc, block = snap['document']['id'], snap['blocks'][0]
+    snap = manual(service, doc, block, 'A complete document reviewed as a whole')
+    block = snap['blocks'][0]
+    payload = make_valid_spec().model_dump(mode='json')
+    payload['acceptance_criteria'] = payload['acceptance_criteria'][:1]
+    payload['permissions_and_responsibilities'] = ['Page user']
+    with service.write() as db:
+        stored = db.get(Block, block['id'])
+        stored.fragment = SpecFragment.model_validate(payload).model_dump(mode='json')
+        stored.fragment_version = stored.version
+        db.add(AgentRun(
+            id='clean-review', document_id=doc, block_id=None, type='document_review', status='completed',
+            base_version=snap['document']['revision'], input_snapshot={'document_id': doc},
+            dependency_versions={block['id']: block['version']},
+            context_revision=snap['document']['context_revision'], result={
+                'document_id': doc, 'base_revision': snap['document']['revision'],
+                'summary': 'No pending whole-document issues.', 'issues': [],
+            }, apply_status='applied', error=None, request_id='clean-review-request', actor_id='owner',
+        ))
+
+    result = service.submit(doc, 'owner', snap['document']['revision'])
+
+    with service.factory() as db:
+        spec = db.get(SpecVersion, result['spec_version_id'])
+        reviews = db.query(SpecReview).filter_by(spec_version_id=spec.id).all()
+        assert spec.status == 'HUMAN_REVIEW'
+        assert {(review.kind, review.verdict) for review in reviews} == {('RULE', 'PASS'), ('AGENT', 'PASS')}
+        assert all(not review.findings for review in reviews)
+        assert next(review for review in reviews if review.kind == 'RULE').comments.startswith(
+            'CURRENT_DOCUMENT_REVIEW_CLEARANCE:clean-review'
+        )
 
 
 def test_http_identity_validation_and_routes(service, test_settings):
@@ -531,7 +581,7 @@ async def test_whole_review_reads_all_blocks_without_modifying_prd(service):
     provider = DelayedProvider(); ai = AIService(service, provider)
     run = ai.enqueue_document_review(doc, 'owner', 'whole', before['document']['revision'])
     assert ai.enqueue_document_review(doc, 'owner', 'whole', before['document']['revision'])['id'] == run['id']
-    with pytest.raises(BlockError): ai.enqueue_document_review(doc, 'owner', 'duplicate', before['document']['revision'])
+    assert ai.enqueue_document_review(doc, 'owner', 'duplicate', before['document']['revision'])['id'] == run['id']
     with pytest.raises(BlockError): ai.enqueue(doc, 'owner', 'generate', 'other', before['blocks'][0]['id'])
     await finish(ai, provider, run)
     after = service.snapshot(doc, 'owner')
@@ -543,7 +593,7 @@ async def test_whole_review_reads_all_blocks_without_modifying_prd(service):
     assert report['status'] == 'completed' and report['stale'] is False
     assert len(report['result']['issues'][0]['block_ids']) == 2
     assert 'input_snapshot' not in report
-    with pytest.raises(BlockError, match='仅提供意见'): ai.apply(doc, run['id'], 'owner', 1, True)
+    with pytest.raises(BlockError, match='全文作业'): ai.apply(doc, run['id'], 'owner', 1, True)
     with service.factory() as db:
         assert db.query(SpecVersion).count() == 0
     for b in before['blocks']:

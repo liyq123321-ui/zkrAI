@@ -1,5 +1,18 @@
 INFO:     Loading environment from '.env'
-INFO:     Started server process [28812]
+INFO:     Started server process [13112]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8088 (Press CTRL+C to quit)
+Block job run_ce10c2b324ce4b5ba6fa63317568d2a2 failed
+Traceback (most recent call last):
+  File "C:\Users\zkr\Documents\ChatGPT\firstFlight Project\backend\app\services\ai_service.py", line 610, in execute
+    raise BlockError("AI 修改了指定行范围以外的内容，结果未应用")
+app.services.block_service.BlockError: AI 修改了指定行范围以外的内容，结果未应用
+C:\Users\zkr\AppData\Local\Programs\Python\Python312\python.exe: No module named uvicorn
+INFO:     Loading environment from '.env'
+INFO:     Started server process [57792]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8088 (Press CTRL+C to quit)
+Received notification from DBMS server: <GqlStatusObject gql_status='01N02', status_description='warn: feature deprecated without replacement. id is deprecated and will be removed without a replacement.', position=<SummaryInputPosition line=1, column=27, offset=26>, raw_classification='DEPRECATION', classification=<NotificationClassification.DEPRECATION: 'DEPRECATION'>, raw_severity='WARNING', severity=<NotificationSeverity.WARNING: 'WARNING'>, diagnostic_record={'_classification': 'DEPRECATION', '_severity': 'WARNING', '_position': {'offset': 26, 'line': 1, 'column': 27}, 'OPERATION': '', 'OPERATION_CODE': '0', 'CURRENT_SCHEMA': '/'}> for query: 'MATCH (n:Decision) RETURN id(n) as id, n, labels(n) as labels LIMIT 1'
+Received notification from DBMS server: <GqlStatusObject gql_status='01N50', status_description='warn: label does not exist. The label `Decision` does not exist. Verify that the spelling is correct.', position=<SummaryInputPosition line=1, column=10, offset=9>, raw_classification='UNRECOGNIZED', classification=<NotificationClassification.UNRECOGNIZED: 'UNRECOGNIZED'>, raw_severity='WARNING', severity=<NotificationSeverity.WARNING: 'WARNING'>, diagnostic_record={'_classification': 'UNRECOGNIZED', '_severity': 'WARNING', '_position': {'offset': 9, 'line': 1, 'column': 10}, 'OPERATION': '', 'OPERATION_CODE': '0', 'CURRENT_SCHEMA': '/'}> for query: 'MATCH (n:Decision) RETURN id(n) as id, n, labels(n) as labels LIMIT 1'

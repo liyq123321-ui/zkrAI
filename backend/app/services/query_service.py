@@ -31,6 +31,7 @@ from app.services.execution_graph import (
     startable_work_item_ids,
 )
 from app.services.state_projection import project_state
+from app.services.project_title import concise_project_title
 
 
 AGENT_OPERATION_SUMMARIES = {
@@ -200,8 +201,12 @@ class QueryService:
                 session_id=project.session_id,
                 project_id=project.id,
                 root_work_item_id=roots[project.id].id if project.id in roots else None,
-                title=(roots[project.id].title if project.id in roots else None)
-                or (project.brief or {}).get("final_objective") or project.session_id,
+                title=concise_project_title(
+                    (project.brief or {}).get("title")
+                    or (roots[project.id].title if project.id in roots else None)
+                    or (project.brief or {}).get("final_objective"),
+                    project.session_id,
+                ),
             ) for project in projects]
 
     def state(self, session_id: str) -> SessionState:
@@ -670,7 +675,7 @@ class QueryService:
             local_key=item.local_key,
             kind=item.kind,
             executable=item.executable,
-            title=item.title,
+            title=concise_project_title(item.title or item.objective, item.id) if item.kind == "ROOT" else item.title,
             description=item.description,
             summary=item.summary,
             spec=item.spec,

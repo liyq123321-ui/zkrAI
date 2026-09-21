@@ -1,11 +1,13 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertCircle,
   Bot,
   CheckCircle2,
   ChevronDown,
+  CircleUser,
   ClipboardList,
+  ExternalLink,
   FileText,
   FolderPlus,
   GitFork,
@@ -13,6 +15,7 @@ import {
   House,
   LayoutGrid,
   Loader2,
+  LogOut,
   Menu,
   Plus,
   RefreshCw,
@@ -21,6 +24,8 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Upload,
+  Users,
   Wrench,
   X,
 } from 'lucide-react';
@@ -35,6 +40,7 @@ import type {
   LifecycleModel,
   LifecycleRouteDecisionDto,
   ProjectBriefDto,
+  ImportedPrdSourceDto,
   SessionStateDto,
   WorkItemDto,
 } from './dto';
@@ -53,9 +59,15 @@ import { TaskDependencyGraph, type TaskDagProject } from './TaskDependencyGraph'
 import { TopLevelGraph } from './TopLevelGraph';
 import { LifecycleRouteChooser } from './LifecycleRouteChooser';
 import { WorkspaceDashboard } from './WorkspaceDashboard';
+import { openSharedWorkspace } from './openSharedWorkspace';
+import { AdminUsersPage } from '../auth/AdminUsersPage';
+import { SettingsPanel } from '../auth/SettingsPanel';
+import { clearSession } from '../auth/session';
 import { emptyResources, projectSpec, projectTitle, useWorkspaceProjects, type ResourceBundle } from './useWorkspaceProjects';
 import { auditTitle, displayLabel, displayTime, progressDescription } from './presentation';
 import { PrdReviewPanel } from './PrdReviewPanel';
+import { getLatestPrd } from './prd';
+import { appConfig } from './config';
 import {
   createSession,
   autoRepairCommandJob,
@@ -64,6 +76,7 @@ import {
   getAgentBackend,
   getCommandJob,
   getSessionState,
+  importPrdSource,
   isCommandJobAccepted,
   listAgentRuntime,
   listAgentRuntimeEvents,
@@ -85,6 +98,9 @@ import {
   type WorkItemLane,
 } from './workflowUi';
 import { defaultWorkItemFilters, filterWorkItems, type WorkItemFilterState } from './workItemFilters';
+import type { PRDEditorHandle, PrdAgentProgress } from './prd-editor/PRDEditor';
+
+const EmbeddedPRDEditor = lazy(() => import('./prd-editor/PRDEditor').then(module => ({ default: module.PRDEditor })));
 
 const actionLabels: Record<CommandAction, string> = {
   message: '提交澄清',
@@ -109,8 +125,9 @@ const workItemActionLabels: Partial<Record<CommandAction, string>> = {
   fail_task: '失败',
 };
 
-type WorkspaceTab = 'dashboard' | 'topLevel' | 'kanban' | 'flow' | 'audit';
+type WorkspaceTab = 'dashboard' | 'topLevel' | 'kanban' | 'flow' | 'audit' | 'prd';
 type ChatTool = 'newProject' | 'resumeSession' | 'restoreSpec' | null;
+type ProjectSourceMode = 'describe' | 'import';
 type ChatMessage = {
   id: string;
   role: 'user' | 'agent';
@@ -120,7 +137,9 @@ type ChatMessage = {
 };
 
 const NEW_CHAT_KEY = '__new__';
-const CURRENT_ACTOR_ID = import.meta.env.VITE_LOCAL_ACTOR_HINT?.trim() || 'owner-1';
+import { currentActorId } from '../auth/session';
+
+const CURRENT_ACTOR_ID = currentActorId() || 'owner-1';
 const DEFAULT_AGENT_BACKENDS: AgentBackendOptionDto[] = [
   {
     provider: 'codex',
@@ -170,6 +189,20 @@ const boardColumns: BoardColumn[] = [
 
 function lines(value: string): string[] {
   return value.split('\n').map((item) => item.trim()).filter(Boolean);
+}
+
+function fileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('无法读取所选 PRD 文件。'));
+    reader.onload = () => {
+      const encoded = String(reader.result ?? '');
+      const separator = encoded.indexOf(',');
+      if (separator < 0) reject(new Error('无法读取所选 PRD 文件。'));
+      else resolve(encoded.slice(separator + 1));
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function errorText(error: unknown): string {
@@ -246,6 +279,9 @@ function StatusBadge({ state }: { state: SessionStateDto }) {
   );
 }
 
+/** Transient banner used by the top-level toolbar (PRD / prototype entry points). */
+type PrototypeNotice = { tone: 'info' | 'warn' | 'error'; text: string };
+
 export function ApiWorkspace() {
   const [health, setHealth] = useState<'checking' | 'ok' | 'error'>('checking');
   const {
@@ -261,6 +297,9 @@ export function ApiWorkspace() {
   const [objective, setObjective] = useState('');
   const [scope, setScope] = useState('');
   const [deliverables, setDeliverables] = useState('');
+  const [projectSourceMode, setProjectSourceMode] = useState<ProjectSourceMode>('describe');
+  const [importedPrd, setImportedPrd] = useState<ImportedPrdSourceDto | null>(null);
+  const [importingPrd, setImportingPrd] = useState(false);
   const [ownerId, setOwnerId] = useState(CURRENT_ACTOR_ID);
   const [resumeSessionId, setResumeSessionId] = useState('');
   const [selectedWorkItemId, setSelectedWorkItemId] = useState<string | null>(null);
@@ -278,11 +317,14 @@ export function ApiWorkspace() {
   const [chatTool, setChatTool] = useState<ChatTool>(null);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
   const [agentBackends, setAgentBackends] = useState(DEFAULT_AGENT_BACKENDS);
   const [agentBackend, setAgentBackend] = useState<AgentBackendName>('codex');
   const [agentBackendMenuOpen, setAgentBackendMenuOpen] = useState(false);
   const [switchingAgentBackend, setSwitchingAgentBackend] = useState(false);
   const [chatMessages, setChatMessages] = useState<Record<string, ChatMessage[]>>({});
+  const [prdAgentProgress, setPrdAgentProgress] = useState<PrdAgentProgress | null>(null);
   const [agentRuntime, setAgentRuntime] = useState<AgentRuntimeDto[]>([]);
   const [topLevelRuntimeEvents, setTopLevelRuntimeEvents] = useState<AgentRuntimeEventDto[]>([]);
   const [lifecycleDecision, setLifecycleDecision] = useState<LifecycleRouteDecisionDto | null>(null);
@@ -291,12 +333,16 @@ export function ApiWorkspace() {
   const [flowFilters, setFlowFilters] = useState(defaultWorkItemFilters);
   const [auditFilters, setAuditFilters] = useState(defaultWorkItemFilters);
   const [clipboardResult, setClipboardResult] = useState<string | null>(null);
+  const [prototypeNotice, setPrototypeNotice] = useState<PrototypeNotice | null>(null);
+  const [prototypeBusy, setPrototypeBusy] = useState(false);
   const pendingCommandIds = useRef(new Map<string, string>());
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const decompositionLifecycles = useRef(new Set<AbortController>());
   const reconciledDecompositionJobs = useRef(new Set<string>());
   const reconcilingDecompositionJobs = useRef(new Set<string>());
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const prdEditorRef = useRef<PRDEditorHandle | null>(null);
+  const prdProgressClearTimerRef = useRef<number | null>(null);
 
   const decompositionJobKey = (sessionId: string) =>
     `firstflight.decomposition-job.${sessionId}`;
@@ -321,6 +367,24 @@ export function ApiWorkspace() {
       ...previous,
       [key]: [...(previous[key] ?? []), message],
     }));
+  }, []);
+
+  const handlePrdAgentProgress = useCallback((progress: PrdAgentProgress | null) => {
+    if (prdProgressClearTimerRef.current !== null) {
+      window.clearTimeout(prdProgressClearTimerRef.current);
+      prdProgressClearTimerRef.current = null;
+    }
+    if (!progress) {
+      setPrdAgentProgress(current => current && ['completed', 'failed', 'cancelled'].includes(current.status) ? current : null);
+      return;
+    }
+    setPrdAgentProgress(progress);
+    if (['completed', 'failed', 'cancelled'].includes(progress.status)) {
+      prdProgressClearTimerRef.current = window.setTimeout(() => {
+        setPrdAgentProgress(null);
+        prdProgressClearTimerRef.current = null;
+      }, 8_000);
+    }
   }, []);
 
   useEffect(() => {
@@ -348,6 +412,7 @@ export function ApiWorkspace() {
     decompositionLifecycles.current.clear();
     commandObservations.current.forEach((observation) => observation.close());
     commandObservations.current.clear();
+    if (prdProgressClearTimerRef.current !== null) window.clearTimeout(prdProgressClearTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -433,6 +498,7 @@ export function ApiWorkspace() {
   const selectedAgentBackend = agentBackends.find(
     (option) => option.provider === agentBackend,
   ) ?? DEFAULT_AGENT_BACKENDS[0];
+  const prdProgressActive = prdAgentProgress?.status === 'queued' || prdAgentProgress?.status === 'running';
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -445,10 +511,18 @@ export function ApiWorkspace() {
     activeRuntime?.current_summary,
     busy,
     chatTool,
+    prdAgentProgress?.detail,
+    prdAgentProgress?.stage,
     state?.phase,
     visibleChatMessages.length,
     workflowProgress,
   ]);
+
+  useEffect(() => {
+    if (activeTab !== 'prd') return undefined;
+    const frame = window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, chatOpen]);
 
   const projectList = useMemo(() => Object.values(projects), [projects]);
   const dashboardProjects = useMemo(() => projectList.filter((project) => {
@@ -471,6 +545,10 @@ export function ApiWorkspace() {
     project.resources.workItems.map((item) => [item.id, project] as const))), [projectList]);
   const currentProject = activeSessionId ? projects[activeSessionId] : undefined;
   const currentSpec = projectSpec(currentProject);
+  /** PRD/prototype endpoints are keyed by the project's root work item. */
+  const currentRootWorkItemId = currentProject?.resources.workItems.find((item) => item.kind === 'ROOT')?.id
+    ?? catalog.find((project) => project.session_id === activeSessionId)?.root_work_item_id
+    ?? null;
   useEffect(() => {
     if (!state) {
       setLifecycleDecision(null);
@@ -641,20 +719,26 @@ export function ApiWorkspace() {
   async function onCreate(event: FormEvent) {
     event.preventDefault();
     if (busy || projectsLoading) return;
+    if (projectSourceMode === 'import' && !importedPrd) {
+      setError('请先选择并成功导入一份现有 PRD。');
+      return;
+    }
     setBusy(true);
     setError(null);
+    const sourcePrd = projectSourceMode === 'import' ? importedPrd : null;
     const brief: ProjectBriefDto = {
       motivation,
       final_objective: objective,
       known_scope: lines(scope),
       exclusions: [],
-      reference_materials: [],
+      reference_materials: sourcePrd ? [`导入基线 PRD：${sourcePrd.filename}`] : [],
       expected_deliverables: lines(deliverables),
       time_constraints: '第一阶段未指定',
       staffing_constraints: '第一阶段未指定',
       final_approver: ownerId,
       project_manager_ids: [ownerId],
       root_owner_ids: [ownerId],
+      source_prd: sourcePrd,
     };
     setWorkflowProgress('正在读取项目简报并判断是否需要澄清…');
     try {
@@ -665,7 +749,7 @@ export function ApiWorkspace() {
         created.session_id,
         'user',
         objective.trim() || motivation.trim() || '创建新项目',
-        [motivation.trim(), ...lines(scope), ...lines(deliverables)].filter(Boolean).join(' · '),
+        [sourcePrd ? `基于 ${sourcePrd.filename} 修订` : '', motivation.trim(), ...lines(scope), ...lines(deliverables)].filter(Boolean).join(' · '),
       );
       updateSessionState(created);
       selectSession(created.session_id);
@@ -674,12 +758,32 @@ export function ApiWorkspace() {
       setObjective('');
       setScope('');
       setDeliverables('');
+      setProjectSourceMode('describe');
+      setImportedPrd(null);
       await refreshResources(created.session_id);
     } catch (reason) {
       setError(errorText(reason));
     } finally {
       setWorkflowProgress(null);
       setBusy(false);
+    }
+  }
+
+  async function onImportPrdFile(file: File) {
+    setImportingPrd(true);
+    setImportedPrd(null);
+    setError(null);
+    try {
+      const contentBase64 = await fileAsBase64(file);
+      const imported = await importPrdSource(file.name, contentBase64);
+      setImportedPrd(imported);
+      setMotivation((current) => current.trim() || '基于导入的现有 PRD，审查并修正不完整、不一致或不准确的内容');
+      setObjective((current) => current.trim() || `修订并完善 ${imported.title}`);
+      setDeliverables((current) => current.trim() || '经修订并可人工审核的 PRD');
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setImportingPrd(false);
     }
   }
 
@@ -933,7 +1037,8 @@ export function ApiWorkspace() {
     if (!state || busy) return;
     if (action === 'create_spec' || (action === 'revise' && resources.specs.some(spec =>
       spec.id === state.current_spec_version_id && spec.generation_source === 'BLOCK_EDITOR'))) {
-      window.location.assign(`/prd-editor/${encodeURIComponent(state.session_id)}`);
+      setSelectedWorkItemId(null);
+      setActiveTab('prd');
       return;
     }
     const sourceMessage = inputMessage ?? answer;
@@ -1159,17 +1264,17 @@ export function ApiWorkspace() {
     try {
       const decision = await selectLifecycleRoute(state.session_id, model);
       setLifecycleDecision(decision);
-      setActiveTab('topLevel');
       const refreshedState = await getSessionState(state.session_id);
       updateSessionState(refreshedState);
       appendChatMessage(
         state.session_id,
         'agent',
         `已确认顶层路线：${decision.options.find((option) => option.model === model)?.name ?? model}`,
-        '可以进入全屏 Block 编辑器编写 PRD；PRD 审核通过后再展开完整任务规划。',
+        '已在右侧工作区打开 PRD 编辑器；PRD 审核通过后再展开完整任务规划。',
       );
       setWorkflowProgress('路线已确认，正在打开 Block 编辑器…');
-      window.location.assign(`/prd-editor/${encodeURIComponent(state.session_id)}`);
+      setSelectedWorkItemId(null);
+      setActiveTab('prd');
     } catch (reason) {
       const normalized = normalizeNetworkError(reason);
       if (normalized.status === 409 && normalized.code === 'STALE_STATE') {
@@ -1187,7 +1292,7 @@ export function ApiWorkspace() {
 
   async function runGlobalInstruction(message: string) {
     const normalized = message.trim().replace(/[。！!？?，,]/g, '').toLowerCase();
-    const navigation: Array<{ phrases: string[]; tab: WorkspaceTab; reply: string }> = [
+    const navigation: Array<{ phrases: string[]; tab: Exclude<WorkspaceTab, 'prd'>; reply: string }> = [
       { phrases: ['打开dashboard', '打开仪表盘', '查看总览', '首页', '仪表盘'], tab: 'dashboard', reply: '已打开个人 Dashboard。' },
       { phrases: ['打开顶层图', '查看顶层图', '顶层图'], tab: 'topLevel', reply: '已打开当前任务的 SDLC 顶层图。' },
       { phrases: ['打开看板', '查看看板', '任务看板', '看板'], tab: 'kanban', reply: '已打开任务看板。' },
@@ -1196,8 +1301,14 @@ export function ApiWorkspace() {
     ];
     const destination = navigation.find((item) => item.phrases.includes(normalized));
     if (destination) {
-      setActiveTab(destination.tab);
+      navigateToTab(destination.tab);
       appendChatMessage(state?.session_id ?? null, 'agent', destination.reply);
+      return;
+    }
+    if (['打开prd', '编写prd', '打开prd编辑器', '编辑prd'].includes(normalized) && state) {
+      setSelectedWorkItemId(null);
+      setActiveTab('prd');
+      appendChatMessage(state.session_id, 'agent', '已在右侧工作区打开 PRD 编辑器。');
       return;
     }
     if (['刷新', '刷新状态', '刷新项目'].includes(normalized) && state) {
@@ -1328,6 +1439,72 @@ export function ApiWorkspace() {
     if (selectedProject) await refreshResources(selectedProject.state.session_id);
   }, [refreshResources, selectedProject?.state.session_id]);
 
+  function navigateToTab(tab: Exclude<WorkspaceTab, 'prd'>) {
+    if (activeTab !== 'prd') {
+      setActiveTab(tab);
+      return;
+    }
+    const close = () => setActiveTab(tab);
+    if (prdEditorRef.current) prdEditorRef.current.requestClose(close);
+    else close();
+  }
+
+  function openPrdEditor() {
+    if (!state) return;
+    setSelectedWorkItemId(null);
+    setActiveTab('prd');
+  }
+
+  /**
+   * Open the project's HTML prototype in a new browser tab.
+   *
+   * Reuses the existing PRD prototype contract: `GET /prd/{wi}` carries the
+   * bound prototype and its `content_url` is served by
+   * `GET /prd/{wi}/v/{version}/prototype`. Generation itself is kicked off by
+   * the backend once the PRD is frozen, so this only reports progress.
+   */
+  async function openPrototype() {
+    if (!currentRootWorkItemId) {
+      setPrototypeNotice({ tone: 'warn', text: '请先选择一个任务。' });
+      return;
+    }
+    if (!state?.current_spec_version_id) {
+      setPrototypeNotice({
+        tone: 'warn',
+        text: '当前任务的 PRD 尚未定型；请先在 PRD 页点击「进入下一阶段」，系统随后会自动生成 HTML 原型。',
+      });
+      return;
+    }
+    setPrototypeBusy(true);
+    setPrototypeNotice(null);
+    try {
+      const document_ = await getLatestPrd(currentRootWorkItemId);
+      const prototype = document_.prototype ?? null;
+      if (prototype?.status === 'ready' && prototype.content_url) {
+        window.open(`${appConfig.apiBaseUrl}${prototype.content_url}`, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      if (prototype?.status === 'failed') {
+        setPrototypeNotice({
+          tone: 'error',
+          text: `HTML 原型生成失败：${prototype.error_message || prototype.error_code || '未知原因'}`,
+        });
+        return;
+      }
+      setPrototypeNotice({ tone: 'info', text: 'HTML 原型还在生成中，请稍候再试。' });
+    } catch (reason) {
+      const error = normalizeNetworkError(reason);
+      setPrototypeNotice({
+        tone: 'error',
+        text: error.status === 404
+          ? '当前任务还没有可查看的 PRD 版本，无法打开 HTML 原型。请先在 PRD 页完成并提交 PRD。'
+          : `暂时无法读取 HTML 原型：${error.message}`,
+      });
+    } finally {
+      setPrototypeBusy(false);
+    }
+  }
+
   function switchConversation(sessionId: string | null) {
     const wasObservingDecomposition = commandObservations.current.size > 0;
     decompositionLifecycles.current.forEach((controller) => controller.abort());
@@ -1346,19 +1523,30 @@ export function ApiWorkspace() {
     setChatTool(null);
     setChatMenuOpen(false);
     setAgentBackendMenuOpen(false);
+    setPrdAgentProgress(null);
+    setPrototypeNotice(null);
     setError(null);
   }
 
-  function startNewTask() {
-    switchConversation(null);
-    setChatTool(null);
-    setChatOpen(true);
+  function requestConversationSwitch(sessionId: string | null) {
+    if (sessionId === activeSessionId) return;
+    const switchNow = () => {
+      switchConversation(sessionId);
+      if (activeTab === 'prd') setActiveTab('dashboard');
+    };
+    if (activeTab === 'prd' && prdEditorRef.current) prdEditorRef.current.requestClose(switchNow);
+    else switchNow();
   }
 
-  function openSharedWorkspace() {
-    const configured = import.meta.env.VITE_WORKSPACE_URL?.trim();
-    const url = configured || new URL('/workspace', window.location.origin).toString();
-    window.open(url, '_blank', 'noopener,noreferrer');
+  function startNewTask() {
+    const start = () => {
+      switchConversation(null);
+      setChatTool(null);
+      setChatOpen(true);
+      if (activeTab === 'prd') setActiveTab('dashboard');
+    };
+    if (activeTab === 'prd' && prdEditorRef.current) prdEditorRef.current.requestClose(start);
+    else start();
   }
 
   return (
@@ -1380,7 +1568,7 @@ export function ApiWorkspace() {
         <div className="ff-activity-divider" />
         <button
           className={'ff-activity-button ' + (activeTab === 'dashboard' ? 'is-active' : '')}
-          onClick={() => setActiveTab('dashboard')}
+          onClick={() => navigateToTab('dashboard')}
           title="Dashboard 总览"
           aria-label="打开 Dashboard 总览"
           aria-pressed={activeTab === 'dashboard'}
@@ -1389,7 +1577,7 @@ export function ApiWorkspace() {
         </button>
         <button
           className={'ff-activity-button ' + (activeTab === 'topLevel' ? 'is-active' : '')}
-          onClick={() => setActiveTab('topLevel')}
+          onClick={() => navigateToTab('topLevel')}
           title="顶层图"
           aria-label="打开顶层图"
           aria-pressed={activeTab === 'topLevel'}
@@ -1398,7 +1586,7 @@ export function ApiWorkspace() {
         </button>
         <button
           className={'ff-activity-button ' + (activeTab === 'kanban' ? 'is-active' : '')}
-          onClick={() => setActiveTab('kanban')}
+          onClick={() => navigateToTab('kanban')}
           title="敏捷任务看板"
           aria-label="打开敏捷任务看板"
           aria-pressed={activeTab === 'kanban'}
@@ -1408,7 +1596,7 @@ export function ApiWorkspace() {
         </button>
         <button
           className={'ff-activity-button ' + (activeTab === 'flow' ? 'is-active' : '')}
-          onClick={() => setActiveTab('flow')}
+          onClick={() => navigateToTab('flow')}
           title="任务流转图"
           aria-label="打开任务流转图"
           aria-pressed={activeTab === 'flow'}
@@ -1417,18 +1605,33 @@ export function ApiWorkspace() {
         </button>
         <button
           className={'ff-activity-button ' + (activeTab === 'audit' ? 'is-active' : '')}
-          onClick={() => setActiveTab('audit')}
+          onClick={() => navigateToTab('audit')}
           title="审计记录"
           aria-label="打开审计记录"
           aria-pressed={activeTab === 'audit'}
         >
           <ClipboardList aria-hidden="true" />
         </button>
+        {state && <button
+          className={'ff-activity-button ' + (activeTab === 'prd' ? 'is-active' : '')}
+          onClick={openPrdEditor}
+          title="编写 PRD"
+          aria-label="编写 PRD"
+          aria-pressed={activeTab === 'prd'}
+        >
+          <FileText aria-hidden="true" />
+        </button>}
         <div className="ff-activity-spacer" />
         <button className="ff-activity-button" title="系统运行状态" aria-label="系统运行状态">
           <Activity aria-hidden="true" />
         </button>
-        <button className="ff-activity-button" title="设置" aria-label="设置">
+        <button
+          className={'ff-activity-button ' + (showSettings ? 'is-active' : '')}
+          title="设置"
+          aria-label="设置"
+          aria-expanded={showSettings}
+          onClick={() => setShowSettings((v) => !v)}
+        >
           <Settings aria-hidden="true" />
         </button>
       </nav>
@@ -1456,7 +1659,7 @@ export function ApiWorkspace() {
                 aria-label="当前对话项目"
                 value={activeSessionId ?? ''}
                 disabled={busy && !observingDecomposition}
-                onChange={(event) => switchConversation(event.target.value || null)}
+                onChange={(event) => requestConversationSwitch(event.target.value || null)}
               >
                 <option value="">新任务</option>
                 {catalog.map((project) => (
@@ -1552,6 +1755,30 @@ export function ApiWorkspace() {
               </div>
             )}
 
+            {prdAgentProgress && (
+              <div className="ff-message ff-message-agent ff-thinking-message ff-prd-agent-progress" aria-live="polite">
+                <span className={`ff-avatar ${prdProgressActive ? 'ff-avatar-thinking' : ''}`}>
+                  {prdProgressActive ? <Loader2 className="ff-spin" aria-hidden="true" /> : prdAgentProgress.status === 'failed' ? '!' : <CheckCircle2 aria-hidden="true" />}
+                </span>
+                <div className="ff-message-content">
+                  <p className="ff-message-meta">PRD 编写 Agent · {prdProgressActive ? '工作播报' : '阶段结果'}</p>
+                  <div className={`ff-message-bubble ff-thinking-bubble${prdAgentProgress.status === 'failed' ? ' is-error' : ''}`}>
+                    <strong>{prdAgentProgress.title} · {prdAgentProgress.stage}</strong>
+                    <p>{prdAgentProgress.currentBlockTitle
+                      ? `${prdProgressActive ? '我正在处理' : '刚刚处理了'}「${prdAgentProgress.currentBlockTitle}」。${prdAgentProgress.detail}`
+                      : prdAgentProgress.detail}</p>
+                    {prdProgressActive && prdAgentProgress.activityText && <div className="ff-prd-token-stream" role="status" aria-label={`实时处理流：${prdAgentProgress.activityText}`}>
+                      <span key={prdAgentProgress.activityText} aria-hidden="true">{prdAgentProgress.activityText}<i>　·　</i>{prdAgentProgress.activityText}</span>
+                    </div>}
+                    {typeof prdAgentProgress.completed === 'number' && typeof prdAgentProgress.total === 'number' && prdAgentProgress.total > 0 && <>
+                      <div className="ff-prd-progress-track" aria-label={`PRD 进度 ${prdAgentProgress.completed}/${prdAgentProgress.total}`}><i style={{ width: `${Math.max(4, Math.min(100, prdAgentProgress.completed / prdAgentProgress.total * 100))}%` }} /></div>
+                      <div className="ff-runtime-meta"><span>当前进度 {prdAgentProgress.completed}/{prdAgentProgress.total}</span>{prdAgentProgress.currentBlockTitle && <span>{prdAgentProgress.currentBlockTitle}</span>}</div>
+                    </>}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {(busy || lifecycleLoading || observingDecomposition || activeRuntime?.status === 'running') && (
               <div className="ff-message ff-message-agent ff-thinking-message" aria-live="polite">
                 <span className="ff-avatar ff-avatar-thinking"><Loader2 className="ff-spin" aria-hidden="true" /></span>
@@ -1617,12 +1844,38 @@ export function ApiWorkspace() {
             {chatTool === 'newProject' && (
               <form onSubmit={onCreate} className="ff-form-card ff-chat-tool-card">
                 <div className="ff-tool-card-header"><strong>生成新项目</strong><button type="button" onClick={() => setChatTool(null)} aria-label="关闭新项目表单"><X aria-hidden="true" /></button></div>
-                <Field label="为什么要做" value={motivation} onChange={setMotivation} multiline />
-                <Field label="最终目标" value={objective} onChange={setObjective} multiline />
+                <div className="ff-project-source-options" role="group" aria-label="新项目创建方式">
+                  <button type="button" aria-pressed={projectSourceMode === 'describe'} onClick={() => setProjectSourceMode('describe')}>描述新需求</button>
+                  <button type="button" aria-pressed={projectSourceMode === 'import'} onClick={() => setProjectSourceMode('import')}><Upload aria-hidden="true" />导入现有 PRD</button>
+                </div>
+                {projectSourceMode === 'import' && (
+                  <div className="ff-prd-import-panel">
+                    <p>原 PRD 会作为修订基线保留，Agent 将基于原文澄清、纠错并生成可继续编辑的新版本。</p>
+                    <label className="ff-field">
+                      <span>选择 PRD 文件（DOCX、Markdown、TXT 或文字型 PDF）</span>
+                      <input
+                        className="ff-field-control"
+                        type="file"
+                        accept=".docx,.md,.txt,.pdf"
+                        aria-label="选择现有 PRD 文件"
+                        disabled={importingPrd}
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          event.target.value = '';
+                          if (file) void onImportPrdFile(file);
+                        }}
+                      />
+                    </label>
+                    {importingPrd && <span className="ff-prd-import-status"><Loader2 className="ff-spin" aria-hidden="true" />正在解析 PRD…</span>}
+                    {importedPrd && <span className="ff-prd-import-status is-ready"><CheckCircle2 aria-hidden="true" />已导入 {importedPrd.filename} · {importedPrd.content.length} 字</span>}
+                  </div>
+                )}
+                <Field label={projectSourceMode === 'import' ? '希望如何修订' : '为什么要做'} value={motivation} onChange={setMotivation} multiline />
+                <Field label={projectSourceMode === 'import' ? '修订后的最终目标' : '最终目标'} value={objective} onChange={setObjective} multiline />
                 <Field label="已知范围（每行一项）" value={scope} onChange={setScope} multiline />
                 <Field label="预期交付物（每行一项）" value={deliverables} onChange={setDeliverables} multiline />
                 <Field label="负责人标识" value={ownerId} onChange={setOwnerId} />
-                <button disabled={busy || projectsLoading || health !== 'ok'} className="ff-primary-button ff-full-button">
+                <button disabled={busy || projectsLoading || health !== 'ok' || importingPrd || (projectSourceMode === 'import' && !importedPrd)} className="ff-primary-button ff-full-button">
                   {busy && <Loader2 className="ff-spin" aria-hidden="true" />} 创建并分析
                 </button>
               </form>
@@ -1741,7 +1994,7 @@ export function ApiWorkspace() {
             </form>
             {state && (
               <div className="ff-composer-actions ff-suggested-actions">
-                <a className="ff-secondary-button" href={`/prd-editor/${encodeURIComponent(state.session_id)}`}>编写 PRD</a>
+                <button type="button" className="ff-secondary-button" onClick={openPrdEditor}>编写 PRD</button>
                 {sidebarActions.filter((action) => action !== 'message' && !(
                   action === 'create_spec'
                   && state.phase === 'SPECIFICATION'
@@ -1760,29 +2013,29 @@ export function ApiWorkspace() {
         </aside>
       )}
 
-      <main className="ff-workspace">
-        <header className="ff-top-tabs">
+      <main className={`ff-workspace${activeTab === 'prd' ? ' is-prd-open' : ''}`}>
+        {activeTab !== 'prd' && <header className="ff-top-tabs">
           <div className="ff-tabs">
-            <button className={activeTab === 'dashboard' ? 'is-active' : ''} onClick={() => setActiveTab('dashboard')}>
+            <button className={activeTab === 'dashboard' ? 'is-active' : ''} onClick={() => navigateToTab('dashboard')}>
               <House aria-hidden="true" />
               Dashboard
               <span>{dashboardProjects.length}</span>
             </button>
-            <button className={activeTab === 'topLevel' ? 'is-active' : ''} onClick={() => setActiveTab('topLevel')}>
+            <button className={activeTab === 'topLevel' ? 'is-active' : ''} onClick={() => navigateToTab('topLevel')}>
               <GitFork aria-hidden="true" />
               顶层图
               <span>{lifecycleDecision?.selected_model ? 'SDLC' : '—'}</span>
             </button>
-            <button className={activeTab === 'kanban' ? 'is-active' : ''} onClick={() => setActiveTab('kanban')}>
+            <button className={activeTab === 'kanban' ? 'is-active' : ''} onClick={() => navigateToTab('kanban')}>
               <LayoutGrid aria-hidden="true" />
               Kanban Board (敏捷看板)
               <span>{allResources.workItems.length}</span>
             </button>
-            <button className={activeTab === 'flow' ? 'is-active' : ''} onClick={() => setActiveTab('flow')}>
+            <button className={activeTab === 'flow' ? 'is-active' : ''} onClick={() => navigateToTab('flow')}>
               <GitFork aria-hidden="true" />
               DAG Flow Map (任务流转图)
             </button>
-            <button className={activeTab === 'audit' ? 'is-active' : ''} onClick={() => setActiveTab('audit')}>
+            <button className={activeTab === 'audit' ? 'is-active' : ''} onClick={() => navigateToTab('audit')}>
               <ClipboardList aria-hidden="true" />
               Audit Trail (审计记录)
               <span>{allResources.events.length}</span>
@@ -1794,7 +2047,19 @@ export function ApiWorkspace() {
               {health === 'ok' ? 'Backend Online' : health === 'error' ? 'Backend Offline' : 'Checking API'}
             </span>
           </div>
-        </header>
+        </header>}
+
+        {activeTab === 'prd' && state && <section className="ff-prd-workspace" aria-label="PRD 编写工作区">
+          <Suspense fallback={<div className="prd-loading">正在加载 Univer 编辑器…</div>}>
+            <EmbeddedPRDEditor
+              ref={prdEditorRef}
+              sessionId={state.session_id}
+              embedded
+              onClose={() => setActiveTab('topLevel')}
+              onAgentProgress={handlePrdAgentProgress}
+            />
+          </Suspense>
+        </section>}
 
         <section className={activeTab === 'dashboard' ? 'ff-tab-pane is-active' : 'ff-tab-pane'} aria-hidden={activeTab !== 'dashboard'}>
           <WorkspaceDashboard
@@ -1835,15 +2100,44 @@ export function ApiWorkspace() {
                 ))}
               </select>
             </label>
+            <button
+              type="button"
+              className="ff-secondary-button"
+              onClick={openPrdEditor}
+              disabled={!state}
+              title="查看当前任务的 PRD（等同点击「编写 PRD」）"
+            >
+              <FileText aria-hidden="true" />查看 PRD
+            </button>
+            <button
+              type="button"
+              className="ff-secondary-button"
+              onClick={() => void openPrototype()}
+              disabled={!currentProject || prototypeBusy}
+              title="在新标签页打开当前项目的 HTML 原型"
+            >
+              {prototypeBusy
+                ? <Loader2 className="ff-spin" aria-hidden="true" />
+                : <ExternalLink aria-hidden="true" />}查看原型
+            </button>
             <button onClick={() => void refreshAllProjects()} disabled={busy || projectsLoading} className="ff-secondary-button">
               <RefreshCw className={projectsLoading ? 'ff-spin' : ''} aria-hidden="true" />刷新
             </button>
           </div>
+          {prototypeNotice && (
+            <div className={`ff-top-level-notice is-${prototypeNotice.tone}`} role="status" aria-live="polite">
+              <span>{prototypeNotice.text}</span>
+              <button type="button" aria-label="关闭提示" onClick={() => setPrototypeNotice(null)}>
+                <X aria-hidden="true" />
+              </button>
+            </div>
+          )}
           <div className="ff-top-level-canvas">
             {currentProject ? (
               <TopLevelGraph
                 projectTitle={projectTitle(currentProject)}
                 agentSpecs={currentProject.resources.agentSpecs}
+                specs={currentProject.resources.specs}
                 workItems={currentProject.resources.workItems}
                 decision={lifecycleDecision}
                 runtimes={agentRuntime}
@@ -2046,10 +2340,10 @@ export function ApiWorkspace() {
           </div>
         </section>
 
-        <footer className="ff-status-bar">
+        {activeTab !== 'prd' && <footer className="ff-status-bar">
           <div><span className="ff-small-dot" /> AI STUDIO ENGINE <span>UTF-8</span><span>Backend Contract</span></div>
           <div><span className={health === 'ok' ? 'ff-small-dot' : 'ff-small-dot is-error'} /> AGENT NETWORK {health === 'ok' ? 'ONLINE' : 'OFFLINE'} <span>{allResources.agentSpecs.length} SPECS</span></div>
-        </footer>
+        </footer>}
       </main>
 
       {selectedWorkItem && (
@@ -2108,6 +2402,22 @@ export function ApiWorkspace() {
           )}
         </WorkItemDialog>
       )}
+
+      {showSettings ? (
+        <SettingsPanel
+          onClose={() => setShowSettings(false)}
+          onLogout={() => {
+            clearSession();
+            window.location.reload();
+          }}
+          onOpenAdmin={() => {
+            setShowSettings(false);
+            setShowAdminModal(true);
+          }}
+        />
+      ) : null}
+
+      {showAdminModal ? <AdminUsersPage onClose={() => setShowAdminModal(false)} /> : null}
     </div>
   );
 }

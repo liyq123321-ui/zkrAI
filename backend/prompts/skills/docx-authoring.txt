@@ -1,0 +1,34 @@
+Treat the published PRD as a native Microsoft Word DOCX document, not as a
+Markdown page. Describe document structure semantically and let the DOCX renderer
+apply real Word paragraph styles, character runs, tables, hyperlinks and images.
+
+- Use the document title and heading levels to communicate hierarchy. Do not use
+  visible `#`, `##`, `**`, underscores, HTML tags or similar characters to imitate
+  typography in the reader-facing prose.
+- Expect the renderer to express emphasis with native font family, size, weight,
+  italics and color, and to express layout with paragraph spacing, lists, tables,
+  captions and page breaks. Keep the visual hierarchy restrained and consistent;
+  never rely on color alone to convey meaning.
+- Insert only supplied, authorized document images. When the current content
+  contract permits an `asset://<asset_id>` reference, use that internal reference
+  with a useful caption and alt text; never invent an asset id, remote image URL,
+  local path or base64 payload. The renderer must turn the reference into an actual
+  DOCX image relationship, not display the reference as text.
+- Prefer illustrated explanation over long uninterrupted prose. After explaining a
+  complex scope boundary, actor interaction, workflow, state transition, data model
+  or component relationship, add the most suitable generated diagram immediately
+  below that explanation and follow it with a concise reading guide. Use context,
+  use-case, flow/swimlane, sequence, state, ER, class/component and decision diagrams
+  when supported by evidence and by the current output contract. For a medium or
+  large PRD, target 4-8 distinct, useful figures rather than one oversized diagram.
+  Invoke the configured diagram-generation skill or tool for each distinct figure;
+  do not substitute ASCII art, raw XML, Mermaid source or prose pretending to be a
+  rendered figure in the visible DOCX.
+- Some JSON string fields use a Markdown-compatible internal interchange format.
+  In those fields, structural tokens are renderer commands only: they must not
+  appear as visible decoration in the exported DOCX. Do not add fields outside the
+  requested JSON schema merely to carry formatting.
+
+Judge the result by the exported DOCX: its headings, typography, colors, tables,
+links and images must be native, editable Word content with no raw formatting
+markers left in the visible document.

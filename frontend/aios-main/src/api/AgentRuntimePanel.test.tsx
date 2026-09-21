@@ -2,6 +2,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AgentRuntimePanel } from './AgentRuntimePanel';
+import { getSemanticaStatus } from './sessions';
+
+// Isolate the Semantica status/decisions client calls from the global `fetch`
+// mock used by the runtime-panel tests below. The panel still exercises the
+// badge + decisions UI; these mocks just keep status disabled by default.
+vi.mock('./sessions', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    getSemanticaStatus: vi.fn(async () => ({
+      configured: false,
+      available: false,
+      backend: 'neo4j',
+      graph_name: 'firstflight',
+      neo4j_uri: 'bolt://localhost:7687',
+    })),
+    listSemanticaDecisions: vi.fn(async () => ({ available: false, decisions: [] })),
+  } as Record<string, unknown>;
+});
 
 const runtime = [
   { agent_session_id:'agent-pm', project_id:'project-1', role:'PM Agent', provider:'codex', model:'gpt-test', purpose:'拆解需求', status:'running', current_operation:'decompose_spec', current_summary:'Decomposing the approved specification', current_call_id:'call-2', started_at:'2026-09-06T02:01:00Z', completed_at:null, call_count:2 },
@@ -212,5 +231,31 @@ describe('AgentRuntimePanel', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText(/知识问答.*最近一次成功快照/)).toBeTruthy();
     expect(screen.getByText('PM Agent')).toBeTruthy();
+  });
+
+  it('shows the Semantica audit badge when configured and reachable', async () => {
+    vi.mocked(getSemanticaStatus).mockResolvedValue({
+      configured: true,
+      available: true,
+      backend: 'neo4j',
+      graph_name: 'firstflight',
+      neo4j_uri: 'bolt://localhost:7687',
+    });
+    render(<AgentRuntimePanel projects={[{ sessionId: 'session-1', title: '知识问答' }]} />);
+
+    expect(await screen.findByText(/行为溯源：已启用 · Neo4j 已连接/)).toBeTruthy();
+  });
+
+  it('shows a degraded Semantica badge when configured but Neo4j is unreachable', async () => {
+    vi.mocked(getSemanticaStatus).mockResolvedValue({
+      configured: true,
+      available: false,
+      backend: 'neo4j',
+      graph_name: 'firstflight',
+      neo4j_uri: 'bolt://localhost:7687',
+    });
+    render(<AgentRuntimePanel projects={[{ sessionId: 'session-1', title: '知识问答' }]} />);
+
+    expect(await screen.findByText(/行为溯源：已启用 · Neo4j 未连接/)).toBeTruthy();
   });
 });

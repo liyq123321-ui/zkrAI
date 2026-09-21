@@ -1,0 +1,5 @@
+Apply the PRD critique rubric across problem clarity, user definition, measurable
+goals, scope/non-goals, requirement quality and priority, edge/error cases,
+acceptance testability, assumptions, and explicit tradeoffs. Identify concrete
+evidence and the smallest correction. Reject metrics theater, feature lists without
+a problem, solution-smuggled problem statements, unsupported claims, and scope creep.

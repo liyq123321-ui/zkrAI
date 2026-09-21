@@ -37,12 +37,20 @@ class BlockResult(BaseModel):
     review_notes: list[str] = Field(default_factory=list, max_length=50)
 
 
+class DocumentReviewEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    block_id: str
+    quote: str = Field(min_length=1, max_length=2000)
+
+
 class DocumentReviewIssue(BaseModel):
     model_config = ConfigDict(extra="forbid")
     severity: Literal["blocker", "warning", "info"]
     block_ids: list[str] = Field(max_length=100)
     description: str = Field(min_length=1, max_length=4000)
     suggestion: str = Field(min_length=1, max_length=4000)
+    alternative_suggestion: str | None = Field(default=None, min_length=1, max_length=4000)
+    evidence: list[DocumentReviewEvidence] = Field(default_factory=list, max_length=20)
 
 
 class DocumentReview(BaseModel):
@@ -51,6 +59,43 @@ class DocumentReview(BaseModel):
     base_revision: int
     summary: str = Field(min_length=1, max_length=6000)
     issues: list[DocumentReviewIssue] = Field(max_length=100)
+
+
+class DocumentRevisionBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    block_id: str
+    base_version: int
+    content: str = Field(max_length=100000)
+    summary: str = Field(max_length=2000)
+    spec_fragment: SpecFragment
+
+
+class DocumentRevisionAction(BaseModel):
+    """A bounded, review-backed change that a later Skill pass may execute."""
+
+    model_config = ConfigDict(extra="forbid")
+    block_id: str
+    base_version: int
+    issue_numbers: list[int] = Field(min_length=1, max_length=100)
+    instruction: str = Field(min_length=1, max_length=2000)
+    preserve: list[str] = Field(default_factory=list, max_length=20)
+    requirement_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class DocumentRevisionPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_id: str
+    base_revision: int
+    summary: str = Field(min_length=1, max_length=3000)
+    actions: list[DocumentRevisionAction] = Field(max_length=100)
+
+
+class DocumentRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_id: str
+    base_revision: int
+    summary: str = Field(min_length=1, max_length=6000)
+    blocks: list[DocumentRevisionBlock] = Field(max_length=100)
 
 
 class AIProvider(ABC):
@@ -65,3 +110,6 @@ class AIProvider(ABC):
 
     @abstractmethod
     async def review_document(self, context: dict) -> DocumentReview: ...
+
+    @abstractmethod
+    async def revise_document(self, context: dict) -> DocumentRevision: ...

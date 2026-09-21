@@ -54,6 +54,14 @@ export interface ProjectBriefDto {
   final_approver: string;
   project_manager_ids: string[];
   root_owner_ids: string[];
+  source_prd?: ImportedPrdSourceDto | null;
+}
+
+export interface ImportedPrdSourceDto {
+  filename: string;
+  media_type: string;
+  title: string;
+  content: string;
 }
 
 export interface SpecReviewDto {
@@ -201,6 +209,34 @@ export interface AgentRuntimeEventDto {
   detail: string | null;
   payload: Record<string, unknown>;
   created_at: string;
+}
+
+export interface SemanticaStatusDto {
+  configured: boolean;
+  available: boolean;
+  backend: string;
+  graph_name: string;
+  neo4j_uri: string;
+}
+
+export interface SemanticaDecisionDto {
+  decision_id?: string;
+  category?: string;
+  scenario?: string;
+  reasoning?: string;
+  outcome?: string;
+  confidence?: number;
+  decision_maker?: string;
+  agent_session_id?: string;
+  agent_call_id?: string;
+  project_id?: string;
+  ts?: number;
+}
+
+export interface SemanticaDecisionsDto {
+  available: boolean;
+  reason?: string;
+  decisions: SemanticaDecisionDto[];
 }
 
 export interface CommandResultDto {

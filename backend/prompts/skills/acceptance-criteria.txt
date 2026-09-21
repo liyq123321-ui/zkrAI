@@ -1,0 +1,6 @@
+Apply the acceptance-criteria method to each feature slice. Write independently
+testable, observable criteria covering the happy path, material edge cases, user-
+visible error/recovery behavior, and relevant performance, accessibility, security,
+reliability, or audit constraints. Prefer explicit Given/When/Then semantics even
+when the structured output stores each scenario as a single criterion string. Do
+not encode implementation choices unless the approved requirement fixes them.

@@ -38,8 +38,41 @@ from app.domain.types import (
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 NODE_PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts" / "nodes"
+SKILL_PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts" / "skills"
 BUNDLED_SKILL_ROOT = Path(__file__).resolve().parents[2] / "skills"
 PRD_DRAWIO_NODES = frozenset({"pm_generate_spec", "pm_rewrite_prd"})
+NODE_SKILL_PROFILES: dict[str, tuple[str, ...]] = {
+    "pm_analyze": ("prd-critique", "requirement-registry", "prd-consistency"),
+    "pm_generate_spec": (
+        "prd-authoring",
+        "docx-authoring",
+        "visual-explanation",
+        "acceptance-criteria",
+        "requirement-registry",
+        "prd-consistency",
+        "traceability",
+    ),
+    "reviewer_spec": (
+        "prd-critique",
+        "requirement-registry",
+        "prd-consistency",
+        "traceability",
+    ),
+    "pm_rewrite_prd": (
+        "prd-authoring",
+        "docx-authoring",
+        "visual-explanation",
+        "acceptance-criteria",
+        "prd-critique",
+        "requirement-registry",
+        "prd-consistency",
+        "traceability",
+    ),
+    "pm_decompose": ("task-breakdown", "acceptance-criteria", "traceability"),
+    "pm_revise_breakdown": ("task-breakdown", "acceptance-criteria", "traceability"),
+    "reviewer_breakdown": ("task-breakdown", "acceptance-criteria", "traceability"),
+    "pm_plan_task": ("task-breakdown", "acceptance-criteria", "traceability"),
+}
 logger = logging.getLogger(__name__)
 _CODEX_PROGRESS_HEARTBEAT_SECONDS = 30.0
 _BUNDLED_SKILL_TEXT_FILENAMES = frozenset({"LICENSE", "NOTICE"})
@@ -47,6 +80,15 @@ _BUNDLED_SKILL_TEXT_SUFFIXES = frozenset({
     ".cfg", ".css", ".html", ".ini", ".js", ".json", ".md", ".py",
     ".sh", ".svg", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml",
     ".yml",
+})
+_TRUSTED_BUNDLED_SKILLS = frozenset({
+    "create-prd",
+    "deliver-acceptance-criteria",
+    "drawio-skill",
+    "prd-consistency-skill",
+    "prd-critique",
+    "requirement-registry-skill",
+    "traceability-skill",
 })
 
 
@@ -95,7 +137,7 @@ def install_bundled_skills(runtime_home: Path, names: tuple[str, ...]) -> None:
 
     destination = runtime_home / "skills"
     for name in names:
-        if name != "drawio-skill":
+        if name not in _TRUSTED_BUNDLED_SKILLS:
             raise AgentExecutionError(f"bundled skill is not allowed: {name}")
         source = BUNDLED_SKILL_ROOT / name
         manifest_path = BUNDLED_SKILL_ROOT / f"{name}-source.json"
@@ -125,6 +167,19 @@ def build_node_prompt(
         f"{payload}\n"
         "</non_control_input>\n"
     )
+
+
+def append_skill_profiles(objective: str, node_name: str) -> str:
+    """Attach only the compact skill guidance relevant to this workflow node."""
+
+    profiles = NODE_SKILL_PROFILES.get(node_name, ())
+    if not profiles:
+        return objective
+    sections = [
+        f"## Skill profile: {name}\n{(SKILL_PROMPT_DIR / f'{name}.txt').read_text(encoding='utf-8').strip()}"
+        for name in profiles
+    ]
+    return objective.rstrip() + "\n\n# Applied skill profiles\n" + "\n\n".join(sections)
 
 
 def build_strict_output_schema(output_type: type[BaseModel]) -> dict[str, object]:
@@ -631,6 +686,7 @@ class CodexAgentGateway:
         objective = (NODE_PROMPT_DIR / f"{prompt_name}.txt").read_text(
             encoding="utf-8"
         )
+        objective = append_skill_profiles(objective, node_name)
         base_decomposition = (
             node_name in {"pm_decompose", "pm_revise_breakdown"}
             and payload.get("decomposition_stage") == "base"

@@ -1,5 +1,6 @@
 """SQLAlchemy persistence models for legacy chat and project-spec workflows."""
 
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Index, Integer, JSON, String, Text, UniqueConstraint, text
@@ -542,3 +543,17 @@ class WorkItemRun(Base):
     agent_call_id = Column(String, nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class User(Base):
+    """Registered account used for login and permission checks."""
+
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    username = Column(String, nullable=False, unique=True, index=True)
+    password_hash = Column(String, nullable=False)
+    role = Column(String, nullable=False, default="owner")
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)

@@ -2,13 +2,38 @@ import asyncio
 import base64
 import io
 import json
-from fastapi import APIRouter, Request
+import logging
+from urllib.parse import quote
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse, PlainTextResponse
+from fastapi.responses import Response, StreamingResponse, PlainTextResponse
 from pydantic import Field
 from .blocks import Input
 from app.services.prd_templates import TEMPLATES
 from app.services.block_service import BlockError
+from app.services.document_asset_service import DOCX_MIME_TYPE
+
+
+logger = logging.getLogger(__name__)
+
+
+async def _generate_prd_prototype(prototypes, project_id: str) -> None:
+    """Start HTML prototype generation for a freshly frozen PRD.
+
+    Reuses :class:`PrdPrototypeService` exactly as the Spec command path does.
+    The prototype is a derived review aid, so a failure here must never make an
+    already-committed PRD submission look failed.
+    """
+
+    try:
+        if not prototypes.automatic_generation_allowed(project_id):
+            return
+        await prototypes.ensure_for_project(project_id)
+    except Exception:
+        logger.exception(
+            "Could not generate PRD HTML prototype after submission",
+            extra={"project_id": project_id},
+        )
 
 
 class Open(Input):
@@ -45,7 +70,20 @@ class Context(Submit):
     global_rules: str = Field(max_length=12000)
 
 
-def build_router(service, ai, actors):
+class AssetUpload(Input):
+    block_id: str | None = Field(default=None, max_length=100)
+    filename: str = Field(min_length=1, max_length=255)
+    mime_type: str | None = Field(default=None, max_length=100)
+    content_base64: str = Field(max_length=16_800_000)
+
+
+class DocxImport(Input):
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(max_length=33_600_000)
+    expected_revision: int = Field(ge=1)
+
+
+def build_router(service, ai, actors, assets=None, docx=None, prototypes=None):
     router = APIRouter(prefix="/prd-documents", tags=["prd-documents"])
 
     @router.get("/templates")
@@ -106,12 +144,23 @@ def build_router(service, ai, actors):
         return service.context(document_id, actors.resolve(request, body.actor_id), body.expected_revision, body.background, body.global_rules)
 
     @router.post("/{document_id}/submit")
-    def submit(document_id: str, body: Submit, request: Request):
-        return service.submit(document_id, actors.resolve(request, body.actor_id), body.expected_revision)
+    def submit(document_id: str, body: Submit, request: Request, background_tasks: BackgroundTasks):
+        result = service.submit(document_id, actors.resolve(request, body.actor_id), body.expected_revision)
+        project_id = result.get("project_id") if isinstance(result, dict) else None
+        if prototypes is not None and project_id:
+            # Freezing the PRD is the trigger for its HTML prototype.
+            background_tasks.add_task(_generate_prd_prototype, prototypes, project_id)
+        return result
 
     @router.post("/{document_id}/review", status_code=202)
     async def review(document_id: str, body: Review, request: Request):
         run = ai.enqueue_document_review(document_id, actors.resolve(request, body.actor_id), body.request_id, body.expected_revision)
+        return {key: value for key, value in run.items() if key != "input_snapshot"}
+
+    @router.post("/{document_id}/review/{review_run_id}/resolve", status_code=202)
+    async def resolve_review(document_id: str, review_run_id: str, body: Review, request: Request):
+        run = ai.enqueue_document_revision(document_id, actors.resolve(request, body.actor_id), review_run_id,
+                                           body.request_id, body.expected_revision)
         return {key: value for key, value in run.items() if key != "input_snapshot"}
 
     @router.get("/{document_id}/markdown", response_class=PlainTextResponse)
@@ -119,6 +168,60 @@ def build_router(service, ai, actors):
         with service.factory() as db:
             doc = service.document(db, document_id, actors.resolve(request, actor_id))
             return service.markdown(service.blocks(db, doc))
+
+    if assets is not None:
+        @router.post("/{document_id}/assets", status_code=201)
+        def upload_asset(document_id: str, body: AssetUpload, request: Request):
+            try:
+                raw = base64.b64decode(body.content_base64, validate=True)
+            except Exception as error:
+                raise BlockError("图片编码无效", 422) from error
+            return assets.upload(
+                document_id,
+                body.block_id,
+                actors.resolve(request, body.actor_id),
+                body.filename,
+                body.mime_type,
+                raw,
+            )
+
+        @router.get("/{document_id}/assets/{asset_id}")
+        def asset(document_id: str, asset_id: str, request: Request, actor_id: str | None = None):
+            stored, raw = assets.read(document_id, asset_id, actors.resolve(request, actor_id))
+            return Response(
+                raw,
+                media_type=stored.mime_type,
+                headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(stored.file_name)}"},
+            )
+
+    if docx is not None:
+        @router.post("/{document_id}/export/docx")
+        def export_docx(document_id: str, body: Input, request: Request):
+            file_name, raw, revision = docx.export(
+                document_id, actors.resolve(request, body.actor_id)
+            )
+            return Response(
+                raw,
+                media_type=DOCX_MIME_TYPE,
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{quote(file_name)}",
+                    "X-FirstFlight-Document-Revision": str(revision),
+                },
+            )
+
+        @router.post("/{document_id}/import/docx")
+        def import_docx(document_id: str, body: DocxImport, request: Request):
+            if not body.filename.lower().endswith(".docx"):
+                raise BlockError("请选择 DOCX 文件", 422)
+            try:
+                raw = base64.b64decode(body.content_base64, validate=True)
+            except Exception as error:
+                raise BlockError("DOCX 编码无效", 422) from error
+            actor = actors.resolve(request, body.actor_id)
+            result = docx.import_document(
+                document_id, actor, body.expected_revision, body.filename, raw
+            )
+            return {**service.snapshot(document_id, actor), "docx_import": result}
 
     @router.get("/{document_id}/events")
     async def events(document_id: str, request: Request, actor_id: str | None = None):
@@ -133,7 +236,10 @@ def build_router(service, ai, actors):
                     last = payload
                 else:
                     yield ": heartbeat\n\n"
-                await asyncio.sleep(1)
+                # Sentence-level Block previews are short-lived. A responsive poll
+                # interval lets the client render each converted sentence without
+                # weakening the final version/apply checks.
+                await asyncio.sleep(0.1)
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     return router

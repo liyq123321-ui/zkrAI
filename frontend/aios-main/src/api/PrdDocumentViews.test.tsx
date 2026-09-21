@@ -27,6 +27,7 @@ it('replaces only a matching body anchor and never mounts a diagram in Diff', ()
     <PrdDocumentViews
       content={`# PRD\n\n${link}`}
       diagrams={[diagram]}
+      showDiff
       version={2}
       patch={`@@ -1,1 +1,3 @@\n # PRD\n+\n+${link}\n`}
       commentable={null}
@@ -128,9 +129,10 @@ it('explains a skipped prototype and lets the user start it manually', () => {
     />,
   );
 
-  fireEvent.click(screen.getByRole('button', { name: 'HTML 原型' }));
+  expect(screen.queryByRole('button', { name: 'Diff' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '并排查看' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '基于最新版 PRD 生成 HTML 原型' }));
   expect(screen.getByText(/存在待处理审核项/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: '手动生成 HTML 原型' }));
   expect(generate).toHaveBeenCalledOnce();
 });
 

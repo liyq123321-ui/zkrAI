@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { AgentRuntimeDto, AgentRuntimeEventDto } from './dto';
+import type {
+  AgentRuntimeDto,
+  AgentRuntimeEventDto,
+  SemanticaDecisionDto,
+  SemanticaStatusDto,
+} from './dto';
 import { displayTime } from './presentation';
-import { listAgentRuntime, listAgentRuntimeEvents } from './sessions';
+import { listAgentRuntime, listAgentRuntimeEvents, getSemanticaStatus, listSemanticaDecisions } from './sessions';
 import { AgentCallGraph } from './AgentCallGraph';
 import type { RuntimeGraphProject } from './agentRuntimeGraph';
 import { WorkItemDialog } from './WorkItemDialog';
@@ -120,6 +125,47 @@ function AgentTimeline({
   );
 }
 
+type DecisionState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'disabled' }
+  | { kind: 'unreachable' }
+  | { kind: 'loaded'; decisions: SemanticaDecisionDto[] };
+
+function SemanticaDecisions({ state }: { state: DecisionState }) {
+  if (state.kind === 'idle' || state.kind === 'loading') {
+    return <p className="ff-semantica-hint">正在读取 Semantica 决策溯源…</p>;
+  }
+  if (state.kind === 'disabled') {
+    return <p className="ff-semantica-hint">Semantica 行为审计未启用，暂无可追溯的决策记录。</p>;
+  }
+  if (state.kind === 'unreachable') {
+    return <p className="ff-semantica-hint">无法连接 Neo4j 图谱数据库，决策溯源暂不可用。</p>;
+  }
+  if (state.kind === 'loaded' && state.decisions.length === 0) {
+    return <p className="ff-semantica-hint">该 Agent 会话暂无 Semantica 决策记录。</p>;
+  }
+  return (
+    <ol className="ff-semantica-decisions">
+      {state.decisions.map((decision, index) => (
+        <li key={decision.decision_id ?? index}>
+          <div className="ff-semantica-decision-meta">
+            <span>{decision.scenario ? agentOperationLabel(decision.scenario) : 'LLM 决策'}</span>
+            {typeof decision.confidence === 'number' && (
+              <span>置信度 {decision.confidence.toFixed(2)}</span>
+            )}
+            {decision.decision_maker && <code>{decision.decision_maker}</code>}
+          </div>
+          {decision.reasoning && <p className="ff-semantica-reasoning">{decision.reasoning}</p>}
+          {decision.outcome && (
+            <p className="ff-semantica-outcome">结果契约：{decision.outcome}</p>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export function AgentRuntimePanel({ projects }: { projects: RuntimeGraphProject[] }) {
   const [snapshots, setSnapshots] = useState<Record<string, AgentRuntimeDto[]>>({});
   const [failedIds, setFailedIds] = useState<string[]>([]);
@@ -128,6 +174,27 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeGraphProject[
   const [eventSnapshots, setEventSnapshots] = useState<Record<string, AgentRuntimeEventDto[]>>({});
   const [eventLoading, setEventLoading] = useState(false);
   const [eventFailed, setEventFailed] = useState(false);
+
+  const [semanticaStatus, setSemanticaStatus] = useState<SemanticaStatusDto | null>(null);
+  const [decisionState, setDecisionState] = useState<DecisionState>({ kind: 'idle' });
+
+  // Derived from snapshots, but stable across the 2s polling refresh: the
+  // project id for a given agent never changes, so keying the decisions effect
+  // on this value (not the whole snapshots map) avoids a refetch flicker.
+  const selectedProjectId = selected === null
+    ? undefined
+    : snapshots[selected.sessionId]?.find(
+        (agent) => agent.agent_session_id === selected.agentSessionId,
+      )?.project_id;
+
+  useEffect(() => {
+    let disposed = false;
+    const controller = new AbortController();
+    getSemanticaStatus(controller.signal)
+      .then((status) => { if (!disposed) setSemanticaStatus(status); })
+      .catch(() => { if (!disposed) setSemanticaStatus(null); });
+    return () => { disposed = true; controller.abort(); };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -139,7 +206,7 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeGraphProject[
         const controller = new AbortController();
         controllers.add(controller);
         try {
-          return { project, agents:await listAgentRuntime(project.sessionId, controller.signal) };
+          return { project, agents: await listAgentRuntime(project.sessionId, controller.signal) };
         } finally {
           controllers.delete(controller);
         }
@@ -188,7 +255,7 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeGraphProject[
           controller.signal,
         );
         if (disposed) return;
-        setEventSnapshots((previous) => ({ ...previous, [key]:events }));
+        setEventSnapshots((previous) => ({ ...previous, [key]: events }));
         setEventFailed(false);
       } catch {
         if (!disposed && !controller.signal.aborted) setEventFailed(true);
@@ -210,9 +277,52 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeGraphProject[
     };
   }, [selected]);
 
+  // Semantica decision provenance for the currently selected agent session.
+  useEffect(() => {
+    if (selected === null) {
+      setDecisionState({ kind: 'idle' });
+      return undefined;
+    }
+    if (!semanticaStatus?.configured) {
+      setDecisionState({ kind: 'disabled' });
+      return undefined;
+    }
+    if (!selectedProjectId) {
+      // Agent snapshot may not have loaded yet; stay in loading until it does.
+      setDecisionState({ kind: 'loading' });
+      return undefined;
+    }
+    let disposed = false;
+    let controller: AbortController | undefined;
+    const load = async () => {
+      controller = new AbortController();
+      setDecisionState({ kind: 'loading' });
+      try {
+        const result = await listSemanticaDecisions(
+          selectedProjectId,
+          selected.agentSessionId,
+          controller.signal,
+        );
+        if (disposed) return;
+        if (!result.available) {
+          setDecisionState({ kind: 'unreachable' });
+          return;
+        }
+        setDecisionState({ kind: 'loaded', decisions: result.decisions });
+      } catch {
+        if (!disposed && !controller.signal.aborted) setDecisionState({ kind: 'unreachable' });
+      }
+    };
+    void load();
+    return () => {
+      disposed = true;
+      controller?.abort();
+    };
+  }, [selected?.sessionId, selected?.agentSessionId, selectedProjectId, semanticaStatus]);
+
   const visibleProjects = projects.map((project) => ({
     project,
-    agents:snapshots[project.sessionId],
+    agents: snapshots[project.sessionId],
   }));
   const agents = visibleProjects.flatMap(({ agents }) => agents ?? []);
   const startedCount = agents.length;
@@ -224,11 +334,32 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeGraphProject[
     Object.prototype.hasOwnProperty.call(snapshots, sessionId);
   const hasUnknownProject = projects.some((project) => !hasSnapshot(project.sessionId));
 
+  const selectedProject = selected
+    ? projects.find((candidate) => candidate.sessionId === selected.sessionId)
+    : undefined;
+  const selectedAgent = selected
+    ? snapshots[selected.sessionId]?.find(
+        (candidate) => candidate.agent_session_id === selected.agentSessionId,
+      )
+    : undefined;
+
+  const statusBadge = (() => {
+    if (!semanticaStatus) return null;
+    if (!semanticaStatus.configured) {
+      return <span className="ff-audit-badge ff-audit-badge-off">行为溯源：未启用</span>;
+    }
+    if (!semanticaStatus.available) {
+      return <span className="ff-audit-badge ff-audit-badge-warn">行为溯源：已启用 · Neo4j 未连接</span>;
+    }
+    return <span className="ff-audit-badge ff-audit-badge-on">行为溯源：已启用 · Neo4j 已连接</span>;
+  })();
+
   return (
     <section className="ff-agent-runtime" aria-label="Agent 实时运行状态">
       <header className="ff-agent-runtime-header">
         <h2>Agent 实时运行状态</h2>
         <p>{loading ? '正在加载运行状态' : '每 2 秒刷新一次 · 点击 Agent 查看执行记录'}</p>
+        {statusBadge}
       </header>
       <dl className="ff-agent-runtime-metrics">
         <div>
@@ -258,7 +389,7 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeGraphProject[
       <div className="ff-agent-runtime-projects">
         {!loading && !hasUnknownProject && startedCount === 0 && <p>暂无已启动 Agent</p>}
         {visibleProjects.map(({ project, agents }) => {
-          const selectedAgent = agents?.find((agent) => (
+          const selectedAgentForProject = agents?.find((agent) => (
             selected?.sessionId === project.sessionId
             && selected.agentSessionId === agent.agent_session_id
           ));
@@ -267,44 +398,43 @@ export function AgentRuntimePanel({ projects }: { projects: RuntimeGraphProject[
               <AgentCallGraph
                 project={project}
                 agents={agents ?? []}
-                selectedAgentSessionId={selectedAgent?.agent_session_id ?? null}
+                selectedAgentSessionId={selectedAgentForProject?.agent_session_id ?? null}
                 onSelectAgent={(agent) => setSelected({
-                  sessionId:project.sessionId,
-                  agentSessionId:agent.agent_session_id,
+                  sessionId: project.sessionId,
+                  agentSessionId: agent.agent_session_id,
                 })}
               />
             </div>
           );
         })}
       </div>
-      {selected && (() => {
-        const project = projects.find((candidate) => candidate.sessionId === selected.sessionId);
-        const agent = snapshots[selected.sessionId]?.find((candidate) => (
-          candidate.agent_session_id === selected.agentSessionId
-        ));
-        if (!project || !agent) return null;
-        const key = selectionKey(selected.sessionId, selected.agentSessionId);
-        return (
-          <WorkItemDialog
-            title={`Agent 运行记录 · ${agent.role}`}
-            contentKey={key}
-            onClose={() => setSelected(null)}
-          >
-            <div className="ff-agent-runtime-modal">
-              <div className="ff-agent-runtime-modal-context">
-                <strong>{project.title}</strong>
-                <span>{operationLabels[agent.current_operation] ?? agent.current_operation}</span>
-              </div>
-              <AgentTimeline
-                agent={agent}
-                events={eventSnapshots[key] ?? []}
-                loading={eventLoading}
-                failed={eventFailed}
-              />
+      {selected && selectedProject && selectedAgent && (
+        <WorkItemDialog
+          title={`Agent 运行记录 · ${selectedAgent.role}`}
+          contentKey={selectionKey(selected.sessionId, selected.agentSessionId)}
+          onClose={() => setSelected(null)}
+        >
+          <div className="ff-agent-runtime-modal">
+            <div className="ff-agent-runtime-modal-context">
+              <strong>{selectedProject.title}</strong>
+              <span>{operationLabels[selectedAgent.current_operation] ?? selectedAgent.current_operation}</span>
             </div>
-          </WorkItemDialog>
-        );
-      })()}
+            <AgentTimeline
+              agent={selectedAgent}
+              events={eventSnapshots[selectionKey(selected.sessionId, selected.agentSessionId)] ?? []}
+              loading={eventLoading}
+              failed={eventFailed}
+            />
+            <div className="ff-semantica-section">
+              <h3>Semantica 决策溯源</h3>
+              <p className="ff-semantica-sub">
+                来自 Neo4j PROV 属性图的 LLM 决策记录（推理、结果契约、置信度）。
+              </p>
+              <SemanticaDecisions state={decisionState} />
+            </div>
+          </div>
+        </WorkItemDialog>
+      )}
     </section>
   );
 }

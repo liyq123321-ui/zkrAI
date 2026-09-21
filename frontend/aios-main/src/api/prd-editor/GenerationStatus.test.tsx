@@ -48,3 +48,20 @@ it('keeps running jobs visible and cancellable but never deletable', () => {
   fireEvent.click(screen.getByRole('button', { name: '取消模块1' }));
   expect(onCancel).toHaveBeenCalledWith(active);
 });
+
+it('lists the current and completed blocks for an automatic document revision', () => {
+  const onSelectBlock = vi.fn();
+  const revision = {
+    ...run(9, 'running'), block_id: null, type: 'document_revision' as const,
+    result: {
+      progress_stage: 'streaming' as const, progress_unit: 'block' as const,
+      current_block_id: 'b2', active_block_ids: ['b1', 'b2', 'b3'], completed_block_ids: ['b1'],
+      completed: 1, total: 3, stream_blocks: { b1: '完成', b2: '进行中' },
+    },
+  };
+  render(<GenerationStatus documentId="d" runs={[revision]} blocks={blocks} onCancel={vi.fn()} onSelectBlock={onSelectBlock} />);
+  expect(screen.getByText('正在修订').parentElement?.textContent).toContain('模块2');
+  expect(screen.getByText('已经修改 · 1').parentElement?.textContent).toContain('模块1');
+  fireEvent.click(screen.getByRole('button', { name: '模块2' }));
+  expect(onSelectBlock).toHaveBeenCalledWith('b2');
+});

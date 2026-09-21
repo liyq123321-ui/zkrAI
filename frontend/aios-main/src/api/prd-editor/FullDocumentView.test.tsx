@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { fullDocument, fullCommentTargets, FullDocumentView } from './FullDocumentView';
 import type { Block, Snapshot, AgentRun } from './types';
 const blocks = [
@@ -28,10 +28,13 @@ it('maps selections across headings and modules back to original block lines and
 it('renders holistic findings and an explicit warning for an outdated report', () => {
   const snapshot = { blocks, document: { revision: 9 } } as Snapshot;
   const report = { type: 'document_review', base_version: 8, stale: true, result: { summary: '整体术语不一致', issues: [{ severity: 'warning', block_ids: ['a', 'b'], description: '章节之间存在矛盾', suggestion: '统一范围' }] } } as AgentRun;
-  render(<FullDocumentView snapshot={snapshot} selected="a" changed={false} active={false} loading={false} report={report} onRange={vi.fn()} onSelect={vi.fn()} onRefresh={vi.fn()} onBack={vi.fn()} onReview={vi.fn()} />);
+  const onOpenIssue = vi.fn();
+  render(<FullDocumentView snapshot={snapshot} selected="a" changed={false} active={false} loading={false} report={report} onRange={vi.fn()} onSelect={vi.fn()} onOpenIssue={onOpenIssue} onRefresh={vi.fn()} onBack={vi.fn()} onReview={vi.fn()} />);
   expect(screen.getByText('整体术语不一致')).toBeTruthy();
   expect(screen.getByText('章节之间存在矛盾')).toBeTruthy();
   expect(screen.getByText(/以下意见基于旧版本/)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Parent' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Child' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /章节之间存在矛盾/ }));
+  expect(onOpenIssue).toHaveBeenCalledWith(report.result!.issues![0]);
 });

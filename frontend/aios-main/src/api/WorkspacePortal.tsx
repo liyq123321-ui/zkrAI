@@ -35,7 +35,9 @@ import {
 } from './workspacePortalApi';
 
 type PortalTab = 'spaces' | 'knowledge' | 'skills';
-const CURRENT_ACTOR_ID = import.meta.env.VITE_LOCAL_ACTOR_HINT?.trim() || 'owner-1';
+import { currentActorId } from '../auth/session';
+
+const CURRENT_ACTOR_ID = currentActorId() || 'owner-1';
 
 const tabCopy: Record<PortalTab, { label: string; subtitle: string }> = {
   spaces: { label: '工作空间', subtitle: '个人空间与项目共享空间' },

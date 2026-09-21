@@ -36,6 +36,11 @@ class Settings:
     identity_mode: str = "legacy"
     identity_actor_id: str | None = None
     identity_actor_header: str = "X-FirstFlight-Actor"
+    auth_jwt_secret: str = ""
+    auth_token_ttl_seconds: int = 43200
+    # RBAC: 租户管理员 is not a business role by default; set to true to allow
+    # a tenant administrator to also carry project duties.
+    rbac_allow_tenant_admin_business: bool = False
     cors_allowed_origins: tuple[str, ...] = ()
     magic_mcp_enabled: bool = False
     magic_mcp_url: str = "https://21st.dev/api/mcp"
@@ -48,6 +53,25 @@ class Settings:
     weknora_admin_password: str | None = None
     weknora_personal_tenant_id: int | None = None
     weknora_timeout_seconds: float = 30
+    prd_asset_root: Path | None = None
+    # --- Semantica agent-behavior audit layer (W3C PROV-O provenance graph) ---
+    # Default ON: every agent runtime event + LLM decision is mirrored into the
+    # Neo4j PROV graph. Degrades gracefully (circuit-breaker) when Neo4j is
+    # unreachable, so it never blocks the main workflow.
+    semantica_enabled: bool = True
+    semantica_backend: str = "neo4j"  # neo4j | oxigraph | memory
+    semantica_neo4j_uri: str = "bolt://localhost:7687"
+    semantica_neo4j_user: str = "neo4j"
+    semantica_neo4j_password: str | None = None
+    semantica_neo4j_database: str = "neo4j"
+    semantica_graph_name: str = "firstflight"
+    semantica_server_enabled: bool = False
+    semantica_server_host: str = "127.0.0.1"
+    # NOTE: the bundled `semantica-server` (FastAPI) binds 8000 by default;
+    # our tools/run_semantica_server.py honours this port via uvicorn.
+    semantica_server_port: int = 8000
+    semantica_allow_anonymous: bool = False
+    semantica_api_key: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -126,6 +150,14 @@ class Settings:
                 "FIRSTFLIGHT_TRUSTED_ACTOR_HEADER",
                 os.getenv("FIRSTFLIGHT_ACTOR_HEADER", "X-FirstFlight-Actor"),
             ).strip(),
+            auth_jwt_secret=os.getenv("FIRSTFLIGHT_AUTH_SECRET") or "",
+            auth_token_ttl_seconds=int(
+                os.getenv("FIRSTFLIGHT_AUTH_TOKEN_TTL_SECONDS", "43200")
+            ),
+            rbac_allow_tenant_admin_business=os.getenv(
+                "RBAC_ALLOW_TENANT_ADMIN_BUSINESS", "false"
+            ).strip().lower()
+            in {"1", "true", "yes", "on"},
             cors_allowed_origins=cors_allowed_origins,
             magic_mcp_enabled=magic_mcp_enabled,
             magic_mcp_url=os.getenv(
@@ -152,4 +184,22 @@ class Settings:
             weknora_timeout_seconds=float(
                 os.getenv("WEKNORA_TIMEOUT_SECONDS", "30")
             ),
+            prd_asset_root=Path(
+                os.getenv("PRD_ASSET_ROOT", str(root / "data" / "prd_assets"))
+            ).resolve(),
+            semantica_enabled=os.getenv("SEMATICA_ENABLED", "true").strip().lower()
+            in {"1", "true", "yes", "on"},
+            semantica_backend=os.getenv("SEMATICA_BACKEND", "neo4j").strip().lower(),
+            semantica_neo4j_uri=os.getenv("SEMATICA_NEO4J_URI", "bolt://localhost:7687").strip(),
+            semantica_neo4j_user=os.getenv("SEMATICA_NEO4J_USER", "neo4j").strip(),
+            semantica_neo4j_password=os.getenv("SEMATICA_NEO4J_PASSWORD") or None,
+            semantica_neo4j_database=os.getenv("SEMATICA_NEO4J_DATABASE", "neo4j").strip(),
+            semantica_graph_name=os.getenv("SEMATICA_GRAPH_NAME", "firstflight").strip(),
+            semantica_server_enabled=os.getenv("SEMATICA_SERVER_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"},
+            semantica_server_host=os.getenv("SEMATICA_SERVER_HOST", "127.0.0.1").strip(),
+            semantica_server_port=int(os.getenv("SEMATICA_SERVER_PORT", "8000")),
+            semantica_allow_anonymous=os.getenv("SEMATICA_ALLOW_ANONYMOUS", "false").strip().lower()
+            in {"1", "true", "yes", "on"},
+            semantica_api_key=os.getenv("SEMATICA_API_KEY") or None,
         )

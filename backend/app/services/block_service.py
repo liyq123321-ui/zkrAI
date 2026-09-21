@@ -5,11 +5,12 @@ from datetime import UTC, datetime
 from contextlib import contextmanager
 from uuid import uuid4
 from sqlalchemy import text, update
-from app.database.models import Project, SpecVersion, SpecReview, AgentSession, AgentCall, AuditEvent
-from app.models import Document, Block, BlockVersion, BlockComment, AgentRun
-from app.ai.provider import BlockPlan, PlanNode, SpecFragment
+from app.database.models import Project, SpecVersion, SpecReview, AgentSession, AgentCall, AuditEvent, WorkItem
+from app.models import Document, Block, BlockVersion, BlockComment, AgentRun, DocumentAsset
+from app.ai.provider import BlockPlan, PlanNode, SpecFragment, DocumentReview
 from app.domain.types import ProjectSpecPayload
 from app.services.prd_templates import TEMPLATES, parse_outline, validate_plan
+from app.services.project_title import concise_project_title
 from app.services.spec_review import run_rule_review
 
 
@@ -108,10 +109,19 @@ class BlockService:
             if project is None:
                 raise BlockError("项目不存在", 404)
             self.authorize(db, project.id, actor)
+            brief = dict(project.brief or {})
+            final_objective = str(brief.get("final_objective") or "")
+            project_title = concise_project_title(brief.get("title") or final_objective, "PRD 文档")
+            if brief.get("title") != project_title:
+                brief["title"] = project_title
+                project.brief = brief
+            root = db.query(WorkItem).filter_by(project_id=project.id, kind="ROOT").one_or_none()
+            if root is not None and (root.title == final_objective or len(root.title or "") > 40):
+                root.title = project_title
             doc = db.query(Document).filter_by(session_id=session_id).one_or_none()
             if doc is None:
                 doc = Document(id=uid("prd"), project_id=project.id, session_id=session_id,
-                               title=str(project.brief.get("title") or project.brief.get("project_name") or project.brief.get("final_objective") or "PRD 文档")[:100],
+                               title=project_title,
                                background=json.dumps(project.brief, ensure_ascii=False), global_rules="以已确认需求为准；不虚构业务事实、批准或完成状态。",
                                template="alibaba", plan_status="pending", revision=1, context_revision=1,
                                created_by=actor, source_spec_version_id=project.current_spec_version_id)
@@ -122,6 +132,8 @@ class BlockService:
                     self.import_spec(db, doc, spec, actor)
                 else:
                     self.replace_plan(db, doc, parse_outline(TEMPLATES["alibaba"]["outline"]), actor)
+            elif doc.title == final_objective or len(doc.title) > 40:
+                doc.title = project_title
             document_id = doc.id
         return self.snapshot(document_id, actor)
 
@@ -179,7 +191,17 @@ class BlockService:
             blocks = self.blocks(db, doc)
             versions = {b.id: b.version for b in blocks}
             # Do not expose prompt snapshots through routine polling.
+            assets = db.query(DocumentAsset).filter_by(document_id=doc.id).order_by(
+                DocumentAsset.created_at, DocumentAsset.id
+            ).all()
             return {"document": record(doc), "blocks": [record(b) for b in blocks],
+                    "assets": [{
+                        "id": asset.id, "document_id": asset.document_id, "block_id": asset.block_id,
+                        "type": asset.type, "file_name": asset.file_name, "mime_type": asset.mime_type,
+                        "size_bytes": asset.size_bytes, "width": asset.width, "height": asset.height,
+                        "metadata": asset.metadata_json or {},
+                        "created_at": asset.created_at.isoformat() if asset.created_at else None,
+                    } for asset in assets],
                     "comments": [record(c) for c in db.query(BlockComment).filter_by(document_id=doc.id).all()],
                     "runs": [{**{k: v for k, v in record(r).items() if k != "input_snapshot"},
                               **({"stale": r.context_revision != doc.context_revision or r.dependency_versions != versions}
@@ -306,7 +328,11 @@ class BlockService:
                 lines = b.content.splitlines(keepends=True)
                 if (start is None) != (end is None) or (start is not None and not 1 <= start <= end <= len(lines)):
                     raise BlockError("批注行范围无效", 422)
-                frozen.append({**target, "quote": ''.join(lines[start - 1:end]) if start else b.content[:2000]})
+                selected_text = target.get("selected_text")
+                scoped_text = ''.join(lines[start - 1:end]) if start else b.content
+                if selected_text and selected_text not in scoped_text:
+                    raise BlockError("选中文字已改变，请重新选择", 409)
+                frozen.append({**target, "quote": selected_text or scoped_text[:2000]})
             db.add(BlockComment(id=uid("comment"), document_id=doc.id, text=body, targets=frozen, actor_id=actor))
             doc.revision += 1
         return self.snapshot(document_id, actor)
@@ -333,13 +359,43 @@ class BlockService:
         walk(None, 1)
         return '\n\n'.join(lines) + '\n'
 
+    @staticmethod
+    def _clean_document_review(db, doc, blocks):
+        """Return the newest current review with no pending blocker/warning."""
+        versions = {block.id: block.version for block in blocks}
+        reviews = (
+            db.query(AgentRun)
+            .filter_by(document_id=doc.id, type="document_review", status="completed")
+            .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+            .all()
+        )
+        for review in reviews:
+            if (review.apply_status != "applied"
+                    or review.context_revision != doc.context_revision
+                    or review.dependency_versions != versions
+                    or not review.result):
+                continue
+            try:
+                report = DocumentReview.model_validate(review.result)
+            except ValueError:
+                continue
+            # Only the newest review for this exact content is authoritative. Info
+            # entries are advisory and do not count as pending review work.
+            if any(issue.severity in ("blocker", "warning") for issue in report.issues):
+                return None
+            return review
+        return None
+
     def submit(self, document_id, actor, expected_revision):
         with self.write() as db:
             doc = self.document(db, document_id, actor)
             if doc.revision != expected_revision:
                 raise BlockError("文档已改变，请刷新再提交")
             if doc.submitted_revision == doc.revision:
-                return {"spec_version_id": doc.submitted_spec_id}
+                return {
+                    "spec_version_id": doc.submitted_spec_id,
+                    "project_id": doc.project_id,
+                }
             project = self.authorize(db, doc.project_id, actor)
             if project.phase not in ("SPECIFICATION", "REVIEW"):
                 raise BlockError("当前项目阶段不允许替换 PRD；请先完成需求澄清或返回评审阶段")
@@ -369,7 +425,8 @@ class BlockService:
             except ValueError as error:
                 raise BlockError("Block 结构化内容尚不完整：" + str(error)[:1800]) from error
             findings = run_rule_review(payload, set(refs))
-            if findings:
+            clean_review = self._clean_document_review(db, doc, blocks)
+            if findings and clean_review is None:
                 raise BlockError("规格校验未通过：" + "；".join(f"{f.spec_path}: {f.message}" for f in findings)[:3000])
             content = payload.model_dump(mode="json")
             digest = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
@@ -384,12 +441,29 @@ class BlockService:
                                  parent_version_id=project.current_spec_version_id, change_summary="提交 Block 文档快照",
                                  content_hash=digest, status="HUMAN_REVIEW")
             db.add(version)
+            clearance_note = None
+            if findings and clean_review is not None:
+                clearance_note = (
+                    f"CURRENT_DOCUMENT_REVIEW_CLEARANCE:{clean_review.id}; "
+                    "Block fragment findings are retained in the submission audit event."
+                )
             db.add(SpecReview(id=uid("review"), project_id=project.id, spec_version_id=version_id, kind="RULE",
-                             reviewer_id="SYSTEM", input_spec_hash=digest, verdict="PASS", findings=[]))
-            # Local extraction is not a fictitious full-document semantic review receipt.
+                             reviewer_id="SYSTEM", input_spec_hash=digest, verdict="PASS", findings=[],
+                             comments=clearance_note))
+            if clean_review is not None:
+                report = DocumentReview.model_validate(clean_review.result)
+                db.add(SpecReview(id=uid("review"), project_id=project.id, spec_version_id=version_id, kind="AGENT",
+                                 reviewer_id=clean_review.id, input_spec_hash=digest, verdict="PASS", findings=[],
+                                 comments=report.summary))
+            # The optional AGENT receipt above is backed by the persisted, current
+            # whole-document review; fragment-only submissions still get no invented receipt.
             db.add(AuditEvent(id=uid("audit"), project_id=project.id, session_id=project.session_id,
-                              actor_id=actor, event_type="BLOCK_PRD_SUBMITTED", payload={"spec_version_id": version_id, "input_refs": refs}))
+                              actor_id=actor, event_type="BLOCK_PRD_SUBMITTED",
+                              payload={"spec_version_id": version_id, "input_refs": refs,
+                                       "document_review_run_id": clean_review.id if clean_review else None,
+                                       "accepted_fragment_findings": [item.model_dump(mode="json") for item in findings]
+                                       if clean_review else []}))
             project.current_spec_version_id, project.phase = version_id, "REVIEW"
             project.state_version += 1
             doc.submitted_revision, doc.submitted_spec_id = doc.revision, version_id
-        return {"spec_version_id": version_id}
+        return {"spec_version_id": version_id, "project_id": project.id}

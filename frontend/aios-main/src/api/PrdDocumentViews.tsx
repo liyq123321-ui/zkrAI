@@ -29,21 +29,22 @@ export function unchangedDiffRows(content: string): DiffRow[] {
   }));
 }
 
-export function PrdDocumentViews({ content, diagrams = [], prototype = null, prototypeSkippedForReview = false, prototypeBusy = false, readOnly = false, version, patch, commentable, ready, selectedLine, onSelectLine, onEditDiagram, onGeneratePrototype }: {
+export function PrdDocumentViews({ content, diagrams = [], prototype = null, prototypeSkippedForReview = false, prototypeBusy = false, readOnly = false, showDiff = false, version, patch, commentable, ready, selectedLine, onSelectLine, onEditDiagram, onGeneratePrototype }: {
   content: string; version: number; patch: string | null; commentable: PrdCommentableLinesDto | null;
   diagrams?: PrdErDiagramDto[];
   prototype?: PrdPrototypeDto | null;
   prototypeSkippedForReview?: boolean;
   prototypeBusy?: boolean;
   readOnly?: boolean;
+  showDiff?: boolean;
   ready: boolean; selectedLine: number | null; onSelectLine: (line: number) => void;
   onEditDiagram?: (diagram: PrdErDiagramDto) => void;
   onGeneratePrototype?: () => void;
 }) {
-  const [mode, setMode] = useState<'split' | 'document' | 'diff' | 'prototype'>(readOnly ? 'document' : 'diff');
+  const [mode, setMode] = useState<'split' | 'document' | 'diff' | 'prototype'>(readOnly || !showDiff ? 'document' : 'diff');
   useEffect(() => {
-    if (readOnly) setMode('document');
-  }, [readOnly]);
+    if (readOnly || !showDiff) setMode((current) => current === 'split' || current === 'diff' ? 'document' : current);
+  }, [readOnly, showDiff]);
   const allowed = new Set(commentable?.lines.map((line) => line.line) ?? []);
   const unchanged = patch === '';
   const rows = patch === null ? [] : unchanged ? unchangedDiffRows(content) : diffRows(patch);
@@ -51,15 +52,18 @@ export function PrdDocumentViews({ content, diagrams = [], prototype = null, pro
   const prototypeUrl = prototype?.status === 'ready' && prototype.content_url
     ? `${appConfig.apiBaseUrl}${prototype.content_url}`
     : null;
-  const modes: Array<readonly ['split' | 'document' | 'diff' | 'prototype', string]> = readOnly
-    ? [['document', '正文'], ['prototype', 'HTML 原型']]
-    : [['split', '并排查看'], ['document', '正文'], ['diff', 'Diff'], ['prototype', 'HTML 原型']];
+  const modes: Array<readonly ['split' | 'document' | 'diff' | 'prototype', string]> = showDiff && !readOnly
+    ? [['split', '并排查看'], ['document', '正文'], ['diff', 'Diff'], ['prototype', 'HTML 原型']]
+    : [['document', '正文'], ['prototype', 'HTML 原型']];
   return <div className="mb-5">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
       <div className="flex gap-1 rounded-lg bg-slate-950 p-1" aria-label="阅读方式">
         {modes.map(([value,label]) => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} className={`rounded px-3 py-1.5 text-xs ${mode === value ? 'bg-cyan-500/20 text-cyan-200' : 'text-slate-400 hover:text-slate-100'}`}>{label}</button>)}
       </div>
-      <p className="text-xs text-slate-400">{readOnly ? '此版本为只读正式文档，可查看已映射的 HTML 原型；不提供 Diff、编辑或重新生成。' : '在 Diff 的新增或上下文行上点击，可添加批注。'}</p>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <p className="text-xs text-slate-400">{readOnly ? '此版本为只读正式文档，可查看已映射的 HTML 原型。' : '当前展示已保存的 PRD 正文与对应 HTML 原型。'}</p>
+        {onGeneratePrototype && <button type="button" disabled={prototypeBusy} onClick={() => { setMode('prototype'); if (!prototypeUrl) onGeneratePrototype(); }} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50">{prototypeBusy ? '正在生成 HTML 原型…' : prototypeUrl ? '查看 HTML 原型' : '基于最新版 PRD 生成 HTML 原型'}</button>}
+      </div>
     </div>
     <div className={`grid gap-4 ${mode === 'split' ? 'lg:grid-cols-2' : ''}`}>
       {(mode === 'split' || mode === 'document') && <section aria-label="PRD 正文" className="min-w-0 rounded-xl border border-slate-700 bg-slate-950">

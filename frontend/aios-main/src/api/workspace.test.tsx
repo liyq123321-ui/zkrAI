@@ -6,6 +6,34 @@ import { PrdReviewPanel } from './PrdReviewPanel';
 import type { SessionStateDto, SessionSummaryDto, SpecVersionDto } from './dto';
 import { useWorkspaceProjects } from './useWorkspaceProjects';
 
+vi.mock('./prd-editor/PRDEditor', async () => {
+  const React = await import('react');
+  return {
+    PRDEditor: React.forwardRef(function MockEmbeddedPrdEditor({ sessionId, embedded, onClose, onAgentProgress }: {
+      sessionId: string; embedded?: boolean; onClose?: () => void;
+      onAgentProgress?: (progress: unknown) => void;
+    }, ref: React.ForwardedRef<{ requestClose: (onConfirm: () => void) => void }>) {
+      const [pendingClose, setPendingClose] = React.useState<(() => void) | null>(null);
+      React.useImperativeHandle(ref, () => ({
+        requestClose: (onConfirm) => setPendingClose(() => onConfirm),
+      }));
+      React.useEffect(() => {
+        onAgentProgress?.({
+          runId:'run-prd', status:'running', title:'全文自动修订', stage:'正在生成第 1 轮修订',
+          detail:'正在分析并修订相关 Block · 2/5', completed:2, total:5,
+          currentBlockId:'block-plan', currentBlockTitle:'项目规划',
+          activityText:'实时写入：正在补充项目规划的验收范围与依赖关系',
+        });
+        return () => onAgentProgress?.(null);
+      }, [onAgentProgress]);
+      return <section aria-label="模拟嵌入式 PRD 编辑器" data-session-id={sessionId} data-embedded={String(Boolean(embedded))}>
+        <button onClick={onClose}>关闭 PRD 编辑器</button>
+        {pendingClose && <button onClick={() => { const close = pendingClose; setPendingClose(null); close(); }}>继续关闭</button>}
+      </section>;
+    }),
+  };
+});
+
 const state: SessionStateDto = {
   session_id:'session-1', project_id:'project-1', phase:'REVIEW', state_version:6,
   current_spec_version_id:'spec-1', current_spec_status:'REWORK', legal_actions:['approve','revise','restore_spec_version'],
@@ -86,6 +114,7 @@ beforeEach(() => {
     }
     const payloads: Record<string, unknown> = {
       '/healthz':{status:'ok',database:'ok'},
+      '/sessions/agent-backends':[{provider:'codex',label:'Codex CLI',model:null,available:true,configuration_env:null}],
       '/sessions/session-1/state':state,
       '/sessions/session-1/specs':[spec],
       '/sessions/session-1/work-items':[
@@ -195,7 +224,33 @@ function QueuedTerminalReconciliationHarness() {
 }
 
 describe('workspace regression', () => {
-  it('shows the generated HTML prototype beside document and Diff views', async () => {
+  it('embeds PRD authoring beside the collapsible Agent chat and confirms leaving it', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const view = render(<ApiWorkspace />);
+    const agentPanel = view.container.querySelector('.ff-agent-panel') as HTMLElement;
+    fireEvent.click(await within(agentPanel).findByRole('button', { name: '编写 PRD' }));
+
+    const editor = await screen.findByRole('region', { name: '模拟嵌入式 PRD 编辑器' });
+    expect(editor.getAttribute('data-session-id')).toBe('session-1');
+    expect(editor.getAttribute('data-embedded')).toBe('true');
+    expect(screen.getByRole('log', { name: 'Agent 对话与工作记录' })).toBeTruthy();
+    expect(await screen.findByText('全文自动修订 · 正在生成第 1 轮修订')).toBeTruthy();
+    expect(screen.getByText(/我正在处理「项目规划」/)).toBeTruthy();
+    expect(screen.getByRole('status', { name: /实时处理流：实时写入/ })).toBeTruthy();
+    expect(screen.getByLabelText('PRD 进度 2/5')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '折叠 Agent 对话面板' }));
+    expect(screen.queryByRole('log', { name: 'Agent 对话与工作记录' })).toBeNull();
+    expect(screen.getByRole('region', { name: '模拟嵌入式 PRD 编辑器' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '打开敏捷任务看板' }));
+    expect(screen.getByRole('region', { name: '模拟嵌入式 PRD 编辑器' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '继续关闭' }));
+    expect(await screen.findByRole('textbox', { name: '搜索工单' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: '模拟嵌入式 PRD 编辑器' })).toBeNull();
+  });
+
+  it('shows the generated HTML prototype beside the document view', async () => {
     resourceOverrides['/prd/root-1'] = {
       ...doc,
       prototype: {
@@ -516,6 +571,45 @@ describe('workspace regression', () => {
     expect(screen.getByRole('button',{name:/客户支持助手.*PRD 生成后可打开/})).toBeTruthy();
   });
 
+  it('imports an existing PRD as the editable baseline for a new project', async () => {
+    const imported = {
+      filename:'existing-prd.md',
+      media_type:'text/markdown',
+      title:'Existing Checkout PRD',
+      content:'# Existing Checkout PRD\n\nThe old checkout rule needs correction.',
+    };
+    const createdState = {...state,session_id:'session-imported',project_id:'project-imported',current_spec_version_id:null,phase:'NEED_CLARIFICATION',legal_actions:['message']};
+    resourceOverrides = {
+      '/sessions/import-prd':imported,
+      '/sessions':createdState,
+      '/sessions/session-imported/state':createdState,
+      '/sessions/session-imported/specs':[],
+      '/sessions/session-imported/work-items':[{id:'root-imported',kind:'ROOT',title:'修订结算 PRD',parent_id:null,dependency_work_item_ids:[]}],
+      '/sessions/session-imported/agent-specs':[],
+      '/sessions/session-imported/events':[],
+    };
+
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button',{name:'展开常用功能'}));
+    fireEvent.click(screen.getByRole('menuitem',{name:/生成新项目/}));
+    fireEvent.click(screen.getByRole('button',{name:'导入现有 PRD'}));
+    const file = new File(['# Existing Checkout PRD'], 'existing-prd.md', {type:'text/markdown'});
+    fireEvent.change(screen.getByLabelText('选择现有 PRD 文件'),{target:{files:[file]}});
+
+    expect(await screen.findByText(/已导入 existing-prd\.md/)).toBeTruthy();
+    expect((screen.getByRole('textbox',{name:'希望如何修订'}) as HTMLTextAreaElement).value).toContain('审查并修正');
+    expect((screen.getByRole('textbox',{name:'修订后的最终目标'}) as HTMLTextAreaElement).value).toContain('Existing Checkout PRD');
+    fireEvent.click(screen.getByRole('button',{name:'创建并分析'}));
+
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([input, options]) =>
+      options?.method === 'POST' && new URL(String(input)).pathname === '/sessions')).toBe(true));
+    const createCall = fetchSpy.mock.calls.find(([input, options]) =>
+      options?.method === 'POST' && new URL(String(input)).pathname === '/sessions');
+    const body = JSON.parse(String(createCall?.[1]?.body));
+    expect(body.brief.source_prd).toEqual(imported);
+    expect(body.brief.reference_materials).toEqual(['导入基线 PRD：existing-prd.md']);
+  });
+
   it('restores healthy projects independently, removes missing sessions and retries temporary failures without changing the chat', async () => {
     missingSavedSession = true;
     localStorage.setItem('firstflight.active-session-id','session-missing');
@@ -738,7 +832,7 @@ describe('workspace regression', () => {
     expect((approve as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button',{name:'确认批注并生成新版 PRD'}) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole('checkbox', {
-      name: '我已阅读当前 PRD 正文，确认在 Gitea Diff 与评论暂不可用时继续。此操作不会伪造或补写 Gitea 批注。',
+      name: '我已阅读当前 PRD 正文，确认在 Gitea 评审数据暂不可用时继续。此操作不会伪造或补写 Gitea 批注。',
     }));
     expect((approve as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(approve);
@@ -752,10 +846,12 @@ describe('workspace regression', () => {
   it('opens the root PRD in a visible dialog and supports closing it', async () => {
     localStorage.setItem('firstflight.active-session-id','session-1');
     render(<ApiWorkspace />);
+    fireEvent.click(screen.getByRole('button',{name:'打开敏捷任务看板'}));
     fireEvent.click(await screen.findByRole('button',{name:/知识问答.*打开 PRD 审核/}));
     const dialog = await screen.findByRole('dialog', { name: '项目需求详情' });
-    expect(within(dialog).getByRole('button',{name:'Diff'}).getAttribute('aria-pressed')).toBe('true');
-    expect(await within(within(dialog).getByRole('region',{name:'PRD Diff'})).findByText('+这是已保存的 PRD 正文。')).toBeTruthy();
+    expect(within(dialog).queryByRole('button',{name:'Diff'})).toBeNull();
+    expect(within(dialog).queryByRole('button',{name:'并排查看'})).toBeNull();
+    expect(await within(within(dialog).getByRole('region',{name:'PRD 正文'})).findByText('这是已保存的 PRD 正文。')).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button',{name:'关闭详情'}));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
@@ -1635,22 +1731,17 @@ it('lists saved PRD versions and switches the rendered正文 in read-only mode',
   expect(screen.getByRole('heading', {name:'PRD 正文 · v1 · 完整文档'})).toBeTruthy();
 });
 
-it('shows the complete rendered PRD alongside a diff that includes removed lines', async () => {
+it('shows the complete rendered PRD while keeping Diff entry hidden', async () => {
   renderPanel();
-  fireEvent.click(screen.getByRole('button',{name:'并排查看'}));
   const body = await screen.findByRole('region',{name:'PRD 正文'});
   expect(within(body).getByRole('heading',{name:'需求说明'})).toBeTruthy();
   expect(within(body).getByText('这是已保存的 PRD 正文。')).toBeTruthy();
-  const diff = await screen.findByRole('region',{name:'PRD Diff'});
-  expect(within(diff).getByText('Diff · v1 初始版本')).toBeTruthy();
-  expect(await within(diff).findByText('-旧要求')).toBeTruthy();
-  const addedLine = within(diff).getByText('+这是已保存的 PRD 正文。');
-  expect(addedLine).toBeTruthy();
-  expect(addedLine.parentElement?.className).toContain('text-slate-900');
-  expect(within(diff).queryByRole('button',{name:/旧要求/})).toBeNull();
+  expect(screen.queryByRole('button',{name:'Diff'})).toBeNull();
+  expect(screen.queryByRole('button',{name:'并排查看'})).toBeNull();
+  expect(screen.queryByRole('region',{name:'PRD Diff'})).toBeNull();
 });
 
-it('shows an unchanged PRD as white commentable full-document diff rows', async () => {
+it('keeps internal Diff data hidden even when the saved version is unchanged', async () => {
   resourceOverrides = {
     '/prd/root-1/diff':{wi:'root-1',version:2,filename:'docs/prd/root-1/v2.md',commit_sha:'def456',patch:''},
     '/prd/root-1':{...doc,version:2,filename:'docs/prd/root-1/v2.md',commit_sha:'def456'},
@@ -1658,13 +1749,26 @@ it('shows an unchanged PRD as white commentable full-document diff rows', async 
   };
   renderPanel();
 
-  const diff = await screen.findByRole('region',{name:'PRD Diff'});
-  expect(within(diff).getByText('Diff · v2 对比 v1')).toBeTruthy();
-  expect(within(diff).getByText(/以下显示完整正文/)).toBeTruthy();
-  const firstLine = within(diff).getByRole('button',{name:'给第 1 行添加批注'});
-  expect(firstLine.className).toContain('bg-white');
-  fireEvent.click(firstLine);
-  expect(screen.getByPlaceholderText('给第 1 行添加批注')).toBeTruthy();
+  expect(await screen.findByRole('region',{name:'PRD 正文'})).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Diff'})).toBeNull();
+  expect(screen.queryByRole('region',{name:'PRD Diff'})).toBeNull();
+});
+
+it('exposes a prominent trigger that generates an HTML prototype from the latest PRD', async () => {
+  resourceOverrides['/prd/root-1/v/1/prototype'] = {
+    ...doc,
+    prototype: {
+      status:'ready', title:'最新版交互原型', content_url:'/prd/root-1/v/1/prototype',
+      generation_summary:'基于当前最新版 PRD 生成。', error_code:null, error_message:null,
+    },
+  };
+  renderPanel();
+
+  fireEvent.click(await screen.findByRole('button',{name:'基于最新版 PRD 生成 HTML 原型'}));
+
+  await waitFor(() => expect(fetchSpy.mock.calls.some(([input, options]) =>
+    new URL(String(input)).pathname === '/prd/root-1/v/1/prototype' && options?.method === 'POST')).toBe(true));
+  expect(await screen.findByTitle('最新版交互原型')).toBeTruthy();
 });
 
 it('round-trips a draw.io save into a polled PRD revision and clears the draft on success', async () => {
@@ -1752,4 +1856,107 @@ it('retains and restores the exact draw.io draft after a stale-version conflict'
   view.unmount();
   renderPanel();
   expect(await screen.findByText(/尚未确认写入新版 PRD/)).toBeTruthy();
+});
+
+describe('顶层图的「查看 PRD / 查看原型」入口', () => {
+  const frozenPrd = {
+    wi: 'root-1', version: 2, filename: 'docs/prd/root-1/v2.md', pr_number: 6, commit_sha: 'def456',
+    content: '# 需求说明\n这是已定型的 PRD 正文。', change_summary: null, er_diagrams: [],
+    read_only: false, workflow_version: 2,
+    prototype: {
+      status: 'ready', title: '知识问答交互原型', content_url: '/prd/root-1/v/2/prototype',
+      generation_summary: null, error_code: null, error_message: null,
+    },
+  };
+
+  async function openTopLevel() {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    render(<ApiWorkspace />);
+    fireEvent.click(await screen.findByRole('button', { name: '打开顶层图' }));
+    await screen.findByRole('heading', { name: '项目生命周期顶层图' });
+  }
+
+  async function clickWhenEnabled(name: string) {
+    const button = await screen.findByRole('button', { name });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(button);
+  }
+
+  it('「查看 PRD」等同点击「编写 PRD」，切到 PRD 编辑器', async () => {
+    await openTopLevel();
+
+    await clickWhenEnabled('查看 PRD');
+
+    expect(await screen.findByRole('region', { name: '模拟嵌入式 PRD 编辑器' })).toBeTruthy();
+  });
+
+  it('「查看原型」在已就绪时用新标签页打开 HTML 原型，当前页面不变', async () => {
+    resourceOverrides['/prd/root-1'] = frozenPrd;
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await openTopLevel();
+
+    await clickWhenEnabled('查看原型');
+
+    await waitFor(() => expect(open).toHaveBeenCalledWith(
+      'http://127.0.0.1:8088/prd/root-1/v/2/prototype', '_blank', 'noopener,noreferrer',
+    ));
+    // The SDLC page stays mounted; the prototype is only ever a new tab.
+    expect(screen.getByRole('heading', { name: '项目生命周期顶层图' })).toBeTruthy();
+  });
+
+  it('「查看原型」在尚未生成时提示仍在生成中，不打开新标签页', async () => {
+    resourceOverrides['/prd/root-1'] = { ...frozenPrd, prototype: null };
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await openTopLevel();
+
+    await clickWhenEnabled('查看原型');
+
+    expect(await screen.findByText('HTML 原型还在生成中，请稍候再试。')).toBeTruthy();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('「查看原型」在生成失败时呈现失败原因', async () => {
+    resourceOverrides['/prd/root-1'] = {
+      ...frozenPrd,
+      prototype: {
+        status: 'failed', title: null, content_url: null, generation_summary: null,
+        error_code: 'PROTOTYPE_GENERATION_FAILED', error_message: 'HTML 原型生成失败，可在生成下一版 PRD 后重试。',
+      },
+    };
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await openTopLevel();
+
+    await clickWhenEnabled('查看原型');
+
+    expect(await screen.findByText(/HTML 原型生成失败，可在生成下一版 PRD 后重试/)).toBeTruthy();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('PRD 尚未定型时提示先完成「进入下一阶段」，不请求原型', async () => {
+    resourceOverrides['/sessions/session-1/state'] = {
+      ...state, current_spec_version_id: null, current_spec_status: null,
+    };
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await openTopLevel();
+
+    await clickWhenEnabled('查看原型');
+
+    expect(await screen.findByText(/PRD 尚未定型/)).toBeTruthy();
+    expect(open).not.toHaveBeenCalled();
+    expect(fetchSpy.mock.calls.some(([input]) => new URL(String(input)).pathname === '/prd/root-1')).toBe(false);
+  });
+
+  it('关闭 PRD 后直接回到该项目的顶层图，而不是用户主页', async () => {
+    await openTopLevel();
+    await clickWhenEnabled('查看 PRD');
+    expect(await screen.findByRole('region', { name: '模拟嵌入式 PRD 编辑器' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭 PRD 编辑器' }));
+
+    const heading = await screen.findByRole('heading', { name: '项目生命周期顶层图' });
+    expect(heading.closest('section.ff-tab-pane')?.getAttribute('aria-hidden')).toBe('false');
+    // Exactly the top-level pane is active, so the personal dashboard is not shown.
+    expect(document.querySelectorAll('section.ff-tab-pane[aria-hidden="false"]')).toHaveLength(1);
+    expect(screen.queryByRole('region', { name: '模拟嵌入式 PRD 编辑器' })).toBeNull();
+  });
 });

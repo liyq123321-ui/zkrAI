@@ -15,11 +15,14 @@ import type {
   CommandSubmissionDto,
   LifecycleModel,
   LifecycleRouteDecisionDto,
+  ImportedPrdSourceDto,
   ProjectBriefDto,
   SessionStateDto,
   SessionSummaryDto,
   SpecVersionDto,
   WorkItemDto,
+  SemanticaStatusDto,
+  SemanticaDecisionsDto,
 } from './dto';
 
 const STANDARD_COMMAND_TIMEOUT_MS = 130_000;
@@ -50,6 +53,18 @@ export function createSession(
     body: { request_id: requestId, agent_backend: agentBackend, brief },
     signal,
     timeoutMs: SINGLE_AGENT_COMMAND_TIMEOUT_MS,
+  });
+}
+
+export function importPrdSource(
+  filename: string,
+  contentBase64: string,
+  signal?: AbortSignal,
+) {
+  return apiClient.request<ImportedPrdSourceDto>('/sessions/import-prd', {
+    method: 'POST',
+    body: { filename, content_base64: contentBase64 },
+    signal,
   });
 }
 
@@ -103,6 +118,20 @@ export const listAgentRuntimeEvents = (
   signal?: AbortSignal,
 ) => apiClient.request<AgentRuntimeEventDto[]>(
   `/sessions/${sessionId}/agents/${agentSessionId}/runtime-events`,
+  { signal },
+);
+
+export const getSemanticaStatus = (signal?: AbortSignal) =>
+  apiClient.request<SemanticaStatusDto>('/semantica/status', { signal });
+
+export const listSemanticaDecisions = (
+  projectId: string,
+  agentSessionId?: string,
+  signal?: AbortSignal,
+) => apiClient.request<SemanticaDecisionsDto>(
+  `/semantica/decisions?project_id=${encodeURIComponent(projectId)}${
+    agentSessionId ? `&agent_session_id=${encodeURIComponent(agentSessionId)}` : ''
+  }`,
   { signal },
 );
 

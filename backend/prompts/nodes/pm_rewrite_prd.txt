@@ -51,13 +51,19 @@ Human review comments and human_review_decision_history are authenticated in the
 generation snapshot but are not valid top-level source_refs. Preserve the supplied
 source_refs list; do not add comment IDs or invented URLs to it.
 
-Use the installed `$drawio-skill` for ER changes. If review evidence does not
-change entities or relationships, preserve its `diagram_id` and `drawio_xml`
-exactly. If evidence changes an entity, key, or relationship, update the affected
-diagram while preserving stable IDs where their meaning remains the same. Remove a
-diagram only when its supporting scope is removed. Describe every diagram add,
-update, or removal in `change_summary`. Never guess fields, keys, cardinality, or
-relationships that are absent from authenticated evidence.
+Run a fresh diagram-opportunity pass over the revised Spec and use the installed
+`$drawio-skill` for ER additions and changes. Preserve an existing diagram's
+`diagram_id` and `drawio_xml` exactly when its supporting entities and relationships
+are unchanged. When authenticated evidence adds a distinct data domain or shows
+that one crowded view should become focused views, add the missing evidence-backed
+diagram instead of leaving the new prose unillustrated. For a medium or large
+data-backed PRD, prefer one overview plus 1-3 focused ER views, up to the contract
+limit of 8. If evidence changes an entity, key, or relationship, update every
+affected view while preserving stable IDs where their meaning remains the same.
+Remove a diagram only when its supporting scope is removed. Describe every diagram
+add, update, or removal in `change_summary`. Never guess fields, keys, cardinality,
+or relationships that are absent from authenticated evidence, and never disguise
+another diagram type as ER data.
 
 Before returning changed diagrams, read the skill's SKILL.md and required XML/ER
 references. Return complete uncompressed self-contained XML with plain-text labels

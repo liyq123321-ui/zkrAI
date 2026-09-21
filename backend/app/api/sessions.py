@@ -21,6 +21,8 @@ from app.schemas.workflow import (
     CommandJobRead,
     CommandResult,
     LifecycleRouteSelectionRequest,
+    PrdSourceImportRequest,
+    PrdSourceImportResult,
     SessionCommandRequest,
     SessionCreateRequest,
     SessionState,
@@ -30,6 +32,7 @@ from app.services.command_service import CommandService
 from app.services.error_classification import classify_workflow_error
 from app.services.execution_service import ExecutionService
 from app.services.project_service import ProjectService
+from app.services.prd_source_import import import_prd_source
 from app.services.query_service import (
     AgentRuntimeRead,
     AgentRuntimeEventRead,
@@ -91,6 +94,18 @@ def build_router(
             return queries.sessions()
         except Exception as error:
             raise http_error(error) from error
+
+    @router.post("/import-prd", response_model=PrdSourceImportResult)
+    def parse_imported_prd(request_body: PrdSourceImportRequest) -> PrdSourceImportResult:
+        try:
+            return PrdSourceImportResult.model_validate(
+                import_prd_source(request_body.filename, request_body.content_base64)
+            )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"code": "PRD_IMPORT_INVALID", "message": str(error)},
+            ) from error
 
     @router.get("/agent-backends", response_model=list[AgentBackendOption])
     def list_agent_backends() -> list[AgentBackendOption]:

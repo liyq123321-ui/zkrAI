@@ -1,0 +1,5 @@
+Apply full traceability: source evidence -> PRD Block -> canonical FR/NFR ->
+acceptance criterion -> WorkItem/Agent Spec -> verification evidence. Preserve
+stable identifiers when meaning is unchanged. Detect orphaned or unknown links in
+both directions; never fabricate a source, approval, completed output, or test
+result to close a gap.

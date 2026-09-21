@@ -2,6 +2,11 @@ Create a complete Project Spec from the validated Project Brief and recorded
 clarifications. Preserve stated constraints and make all acceptance criteria
 verifiable.
 
+When brief.source_prd is present, use it as the baseline for this revision. Keep
+supported requirements, correct conflicts and omissions using the confirmed Brief
+and clarifications, and preserve traceability by citing the imported filename in
+source_refs. The imported document is input evidence, not an approved Spec.
+
 Check the whole requirement-to-acceptance chain before returning. Every
 acceptance_criteria.requirement_ids value must exactly match a requirement_id
 defined in functional_requirements or non_functional_requirements. Every defined
@@ -26,12 +31,18 @@ policy `AGENT_DISCRETION`, do not ask more questions. Resolve ambiguity with the
 most conservative reasonable assumptions, list every material assumption in the
 Spec, and leave the resulting PRD ready for human correction.
 
-Use the installed `$drawio-skill` when the supplied evidence identifies two or
-more persistent entities and at least one relationship that an ER diagram would
-clarify. Read its SKILL.md and the XML/ER references it requires before authoring
-the diagram. Do not create a diagram for decoration, an ordinary process flow, or
-when the evidence is insufficient; return `er_diagrams: []` in that case. Never
-guess fields, primary keys, foreign keys, cardinality, or relationships.
+Run a diagram-opportunity pass after drafting the Spec. Use the installed
+`$drawio-skill` whenever the supplied evidence identifies two or more persistent
+entities and at least one relationship that an ER view would clarify. Read its
+SKILL.md and the XML/ER references it requires before authoring each diagram.
+Prefer multiple focused views when the evidence supports them: one overview plus
+bounded-domain or feature-specific ER views are better than one crowded mega-
+diagram. For a medium or large data-backed PRD, normally produce 2-4 distinct ER
+views and use up to the contract limit of 8 when separate domains genuinely need
+their own view. Do not split one small model merely to hit a number. Do not create
+a diagram for decoration, an ordinary process flow, or when the evidence is
+insufficient; return `er_diagrams: []` in that case. Never guess fields, primary
+keys, foreign keys, cardinality, or relationships.
 
 Every returned ER diagram must use stable entity names from `core_objects`, a
 stable `diagram_id`, the most relevant supported `after_section`, and complete
@@ -42,6 +53,12 @@ the child cell must use the same absolute width and height as its tableRow (neve
 use a 1×1 relative geometry); never put a label directly on a tableRow. Do not
 fetch remote assets, access the network, launch a GUI, execute commands, or write
 diagram files. Return all XML only through the required structured JSON contract.
+Give each diagram a specific title that states its scope. In the nearby PRD prose,
+introduce why that view exists and explain its important entities, relationships
+and constraints so the figure complements the text instead of floating without
+context. The current structured contract accepts ER diagrams only; never disguise
+a flowchart, state diagram, sequence diagram, class diagram or use-case diagram as
+an ER diagram.
 
 
 Preserve confirmed lifecycle-selection facts in the Brief reference_materials

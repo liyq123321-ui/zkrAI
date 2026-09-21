@@ -1,0 +1,6 @@
+Audit cross-section consistency for terminology, actors and permissions, object
+definitions, state transitions, numerical limits and units, timing/defaults,
+scope/exclusions/extensions, requirement meaning, acceptance behavior, and diagram
+semantics. Detect duplicates, contradictions, definition drift, scope conflicts,
+state conflicts, and missing links. Correct only from authenticated evidence; leave
+genuine unresolved product choices explicit.

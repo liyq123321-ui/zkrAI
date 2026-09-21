@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { conciseProjectTitle } from './projectTitle';
 
 export function RootTaskFilter({ roots, selectedIds, onChange }: {
   roots: Array<{ id: string; title: string }>;
@@ -38,13 +39,13 @@ export function RootTaskFilter({ roots, selectedIds, onChange }: {
           </div>
           <div className="ff-root-filter-options">
             {roots.map((root) => (
-              <label key={root.id} title={root.title}>
+              <label key={root.id} title={conciseProjectTitle(root.title)}>
                 <input type="checkbox" checked={selected.has(root.id)} onChange={(event) => {
                   const next = new Set(selected);
                   if (event.target.checked) next.add(root.id); else next.delete(root.id);
                   onChange([...next]);
                 }} />
-                <span>{root.title}</span>
+                <span>{conciseProjectTitle(root.title)}</span>
               </label>
             ))}
             {roots.length === 0 && <p>暂无主任务</p>}

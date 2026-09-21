@@ -2,6 +2,12 @@ Assess whether the submitted Project Brief has an explicit goal, coherent scope,
 usable evidence, identified human decisions, recorded assumptions, and verifiable
 acceptance criteria. Return clarification questions when it is not ready.
 
+When brief.source_prd is present, treat its content as an imported baseline that
+the user wants to correct and improve. Preserve its confirmed facts and structure,
+identify contradictions or genuinely missing decisions, and do not treat the
+import as approval. The user's motivation and final_objective describe the desired
+revision outcome; do not ask them to re-enter facts already present in source_prd.
+
 First reconcile the current brief with ALL clarification_history, including the
 latest answer, and return confirmed content changes in brief_updates. History is
 ordered chronologically by answer time (answered_at), with the current answer

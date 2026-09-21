@@ -43,6 +43,8 @@ class Target(BaseModel):
     base_version: int = Field(ge=1)
     start_line: int | None = Field(default=None, ge=1)
     end_line: int | None = Field(default=None, ge=1)
+    selected_text: str | None = Field(default=None, min_length=1, max_length=2000)
+    action: Literal["comment", "delete"] = "comment"
 
 
 class Comment(Input):

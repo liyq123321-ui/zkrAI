@@ -1,7 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import type { AgentRun, Block, Comment, Snapshot } from './types';
+import type { AgentRun, Block, Comment, DocumentReviewIssue, Snapshot } from './types';
 
 export function fullDocument(blocks: Block[]) {
   const lines: string[] = [];
@@ -50,36 +47,36 @@ export function fullSnapshotChanged(before: Snapshot, current: Snapshot) {
     || before.blocks.some(b => current.blocks.find(next => next.id === b.id)?.version !== b.version);
 }
 
-export function FullDocumentView({ snapshot, selected, changed, active, loading, report, onRange, onSelect, onRefresh, onBack, onReview }: {
-  snapshot: Snapshot; selected: string; changed: boolean; active: boolean; loading: boolean; report?: AgentRun;
-  onRange: (start: number, end: number) => void; onSelect: (id: string) => void; onRefresh: () => void; onBack: () => void; onReview: () => void;
+export function FullDocumentReport({ snapshot, loading, resolving = false, report, reviewError, onSelect, onOpenIssue, onResolve = () => {} }: {
+  snapshot: Snapshot; loading: boolean; resolving?: boolean; report?: AgentRun; reviewError?: string;
+  onSelect: (id: string) => void; onOpenIssue?: (issue: DocumentReviewIssue) => void; onResolve?: () => void;
 }) {
-  const [preview, setPreview] = useState(false);
-  const textarea = useRef<HTMLTextAreaElement>(null);
-  const previewArea = useRef<HTMLElement>(null);
-  const full = fullDocument(snapshot.blocks);
-  useEffect(() => {
-    const section = fullDocument(snapshot.blocks).sections.find(s => s.block.id === selected);
-    if (!section) return;
-    if (textarea.current) textarea.current.scrollTop = (section.start - 1) * 23.4;
-    const target = previewArea.current?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(selected)}"]`);
-    if (target && previewArea.current) previewArea.current.scrollTop += target.getBoundingClientRect().top - previewArea.current.getBoundingClientRect().top - 15;
-  }, [selected, snapshot, preview]);
   return <>
-    <div className="prd-editor-title"><h2>全文审核模式</h2><span>{snapshot.blocks.length} 个模块</span><button onClick={() => setPreview(!preview)}>{preview ? '文字视图' : '预览'}</button></div>
-    <p className="prd-full-hint">按全文整体阅读和审核；选中文字可添加跨模块批注，点击目录可定位模块。</p>
-    {changed && <div className="prd-conflict">正文或背景已更新，请更新全文后再批注或审核。<button onClick={onRefresh} disabled={loading}>更新全文</button></div>}
-    {preview ? <article ref={previewArea} className="prd-preview prd-full-preview">{full.sections.map(section => <section key={section.block.id} data-block-id={section.block.id}><ReactMarkdown remarkPlugins={[remarkGfm]}>{full.text.split('\n').slice(section.start - 1, section.end).join('\n')}</ReactMarkdown></section>)}</article>
-      : <div className="prd-code-editor prd-full-editor"><pre aria-hidden="true">{full.text.split('\n').map((_, i) => i + 1).join('\n')}</pre>
-        <textarea ref={textarea} aria-label="PRD 全文" readOnly value={full.text} wrap="off"
-          onScroll={e => { const gutter = e.currentTarget.previousElementSibling; if (gutter) gutter.scrollTop = e.currentTarget.scrollTop; }}
-          onSelect={e => { const el = e.currentTarget; if (el.selectionStart !== el.selectionEnd) onRange(el.value.slice(0, el.selectionStart).split('\n').length, el.value.slice(0, el.selectionEnd - 1).split('\n').length); }} /></div>}
-    <div className="prd-toolbar"><button className="prd-primary" onClick={onReview} disabled={active || loading || changed || !snapshot.blocks.some(b => b.content.trim())}>{active ? '审核全文中…' : '审核全文'}</button><button onClick={onRefresh} disabled={loading}>更新全文</button><button onClick={onBack}>返回分块编辑</button></div>
-    {report?.result && <section className="prd-full-report" aria-label="全文审核意见"><h3>全文审核意见</h3><small>审核基线 · 文档 v{report.base_version}</small>
+    {reviewError && <div className="prd-review-failure" role="alert"><strong>本次全文审核失败</strong><span>{reviewError}</span><small>请再次点击“审核全文”重试；旧审核结果已隐藏。</small></div>}
+    {report?.result && <section className="prd-full-report" aria-label="全文审核意见"><header className="prd-full-report-header"><div><h3>全文审核意见</h3><small>审核基线 · 文档 v{report.base_version}</small></div><button className="prd-primary" onClick={onResolve} disabled={resolving || loading || report.stale || report.apply_status === 'conflict' || !report.result.issues?.some(issue => issue.severity !== 'info')}>{resolving ? '自动解决并复审中…' : '自动解决审核问题'}</button></header>
       {(report.stale || report.apply_status === 'conflict') && <p className="prd-conflict">正文或背景已变化，以下意见基于旧版本，请重新审核全文。</p>}
       <p>{report.result.summary}</p>
       {report.result.issues?.length === 0 && <p>本次审核未发现需列出的问题。</p>}
-      {report.result.issues?.map((issue, index) => <article key={index}><strong>{({ blocker: '阻断问题', warning: '建议改进', info: '提示' })[issue.severity]}</strong><p>{issue.description}</p><p>建议：{issue.suggestion}</p><div>{issue.block_ids.length ? issue.block_ids.map(id => <button key={id} onClick={() => onSelect(id)}>{snapshot.blocks.find(b => b.id === id)?.title ?? '相关模块'}</button>) : <small>涉及全文</small>}</div></article>)}
+      {report.result.issues?.map((issue, index) => <article key={index}>
+        <button type="button" className="prd-review-issue-open" onClick={() => onOpenIssue?.(issue)} disabled={!onOpenIssue}>
+          <strong>{({ blocker: '阻断问题', warning: '建议改进', info: '提示' })[issue.severity]}</strong>
+          <span>{issue.description}</span><small>建议：{issue.suggestion}</small><em>定位原文并处理</em>
+        </button>
+        <div>{issue.block_ids.length ? issue.block_ids.map(id => <button key={id} onClick={() => onSelect(id)}>{snapshot.blocks.find(b => b.id === id)?.title ?? '相关模块'}</button>) : <small>涉及全文</small>}</div>
+      </article>)}
     </section>}
+  </>;
+}
+
+export function FullDocumentView({ snapshot, changed, active, loading, resolving = false, report, reviewError, onSelect, onOpenIssue, onRefresh, onReview, onResolve = () => {}, deferReport = false }: {
+  snapshot: Snapshot; changed: boolean; active: boolean; loading: boolean; resolving?: boolean; report?: AgentRun; reviewError?: string;
+  onSelect: (id: string) => void; onOpenIssue?: (issue: DocumentReviewIssue) => void; onRefresh: () => void; onReview: () => void; onResolve?: () => void;
+  selected?: string; onRange?: (start: number, end: number) => void; onBack?: () => void;
+  deferReport?: boolean;
+}) {
+  return <>
+    {changed && <div className="prd-conflict">正文或背景已更新，上次全文审核基线已过期。可直接重新审核，也可先刷新全文。<button onClick={onRefresh} disabled={loading}>刷新全文</button></div>}
+    <div className="prd-toolbar"><button className="prd-primary" onClick={onReview} disabled={active || loading || !snapshot.blocks.some(b => b.content.trim())}>{active ? '审核全文中…' : '审核全文'}</button><button onClick={onRefresh} disabled={loading}>刷新全文</button></div>
+    {!deferReport && <FullDocumentReport snapshot={snapshot} loading={loading} resolving={resolving} report={report} reviewError={reviewError} onSelect={onSelect} onOpenIssue={onOpenIssue} onResolve={onResolve} />}
   </>;
 }

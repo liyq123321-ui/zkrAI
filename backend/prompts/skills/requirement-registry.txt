@@ -1,0 +1,7 @@
+Treat functional_requirements and non_functional_requirements as one canonical
+Requirement Registry. Compare entries by actor, trigger, action, governed object,
+observable outcome, failure behavior, and quantitative constraints rather than by
+ID or wording. Merge semantic duplicates and redirect all acceptance references to
+the retained stable FR/NFR ID. Preserve separate entries only for distinct testable
+obligations; expose conflicting overlaps instead of guessing. One requirement must
+contain one obligation.

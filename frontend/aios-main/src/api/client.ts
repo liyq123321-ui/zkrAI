@@ -1,5 +1,6 @@
 import { appConfig } from './config';
 import { ApiError, normalizeNetworkError, responseToApiError } from './errors';
+import { clearSession, getToken } from '../auth/session';
 
 export interface RequestOptions extends Omit<RequestInit, 'body'> {
   // JSON request bodies stay structured until this shared boundary. Keeping
@@ -32,17 +33,31 @@ export class ApiClient {
     options.signal?.addEventListener('abort', abortFromCaller, { once: true });
 
     try {
+      const token = getToken();
       const response = await fetch(`${this.baseUrl}${path}`, {
         ...options,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         headers: {
           Accept: 'application/json',
           ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...options.headers,
         },
         signal: controller.signal,
       });
-      if (!response.ok) throw await responseToApiError(response);
+      if (!response.ok) {
+        if (response.status === 401 && getToken()) {
+          clearSession();
+          globalThis.location.reload();
+          throw new ApiError({
+            status: 401,
+            code: 'SESSION_EXPIRED',
+            message: '登录已失效，请重新登录。',
+            retryable: false,
+          });
+        }
+        throw await responseToApiError(response);
+      }
       if (response.status === 204) return undefined as T;
       return (await response.json()) as T;
     } catch (error) {

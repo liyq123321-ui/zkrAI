@@ -40,7 +40,50 @@ def init_database(target_engine: Engine) -> None:
         _migrate_sqlite_work_items(target_engine)
         _migrate_sqlite_gitea_review_contracts(target_engine)
         _migrate_sqlite_command_jobs(target_engine)
+        _migrate_sqlite_user_roles(target_engine)
     Base.metadata.create_all(target_engine)
+
+
+def _migrate_sqlite_user_roles(target_engine: Engine) -> None:
+    """Normalise legacy ``users.role`` values onto the RBAC role codes.
+
+    The pre-RBAC accounts used free-text ``owner`` / ``admin``. Rather than
+    hard-coding the mapping in SQL, each distinct stored value is resolved
+    through :func:`app.auth.roles.normalize_role`, so the role catalogue stays
+    the single source of truth and this migration can never drift from it.
+    """
+
+    schema = inspect(target_engine)
+    if "users" not in set(schema.get_table_names()):
+        return
+    from app.auth.roles import normalize_role, role_codes
+
+    with target_engine.connect() as connection:
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        try:
+            stored = [
+                row[0]
+                for row in connection.exec_driver_sql(
+                    "SELECT DISTINCT role FROM users WHERE role IS NOT NULL"
+                )
+            ]
+            canonical = set(role_codes())
+            remapped = False
+            for value in stored:
+                if value in canonical:
+                    continue
+                connection.execute(
+                    text("UPDATE users SET role = :target WHERE role = :value"),
+                    {"target": normalize_role(value), "value": value},
+                )
+                remapped = True
+            if remapped:
+                connection.commit()
+            else:
+                connection.rollback()
+        except BaseException:
+            connection.rollback()
+            raise
 
 
 def _migrate_sqlite_command_jobs(target_engine: Engine) -> None:

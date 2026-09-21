@@ -19,6 +19,12 @@ from app.api.chat import build_router as build_chat_router
 from app.api.prd_review import build_router as build_prd_review_router
 from app.api.sessions import build_router as build_sessions_router
 from app.api.workspace_portal import build_router as build_workspace_router
+from app.api.semantica import build_router as build_semantica_router
+from app.api.auth import router as auth_router
+from app.api.admin_users import router as admin_users_router
+from app.auth import configure_auth
+from app.auth.deps import get_db as auth_get_db
+from app.auth.seed import seed_default_users
 from app.config import Settings
 from app.database.database import SessionLocal, init_database
 from app.domain.types import CommandAction
@@ -38,6 +44,8 @@ from app.api.documents import build_router as build_documents_router
 from app.api.blocks import build_router as build_blocks_router
 from app.services.block_service import BlockService, BlockError
 from app.services.ai_service import AIService
+from app.services.document_asset_service import DocumentAssetService
+from app.services.docx_service import DocxService
 from app.ai.codex_provider import CodexProvider
 from app.ai.provider import AIProvider
 
@@ -107,8 +115,13 @@ def create_app(
         gitea_client = GiteaClient(settings)
     review_service = PrdReviewService(session_factory, gitea_client)
     prototype_service = PrdPrototypeService(session_factory, agent_gateway)
+    configure_auth(settings.auth_jwt_secret, settings.auth_token_ttl_seconds)
     actor_resolver = ActorResolver(settings)
     block_service = BlockService(session_factory)
+    asset_service = DocumentAssetService(
+        block_service, settings.prd_asset_root or (settings.codex_cwd / ".firstflight-prd-assets")
+    )
+    docx_service = DocxService(block_service, asset_service)
     block_ai = AIService(block_service, block_provider or CodexProvider(settings))
     publish_coordinator = ReviewPublishCoordinator(
         session_factory,
@@ -134,6 +147,7 @@ def create_app(
         try:
             with session_factory() as db:
                 init_database(db.get_bind())
+            seed_default_users(session_factory)
             command_jobs.mark_interrupted_jobs()
             publish_coordinator.mark_interrupted_tasks()
             block_ai.recover()
@@ -146,11 +160,34 @@ def create_app(
     application = FastAPI(lifespan=lifespan)
     application.state.block_ai = block_ai
 
+    # The auth/admin endpoints historically resolved their session from the
+    # module-level ``SessionLocal``, ignoring an injected ``session_factory``.
+    # That made login and user management read/write a different database from
+    # the rest of the app and let tests hit the real one. Bind them to the same
+    # factory the application was built with.
+    def _auth_db_session():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    application.dependency_overrides[auth_get_db] = _auth_db_session
+
     @application.exception_handler(BlockError)
     async def block_error(_, error: BlockError):
         return JSONResponse(status_code=error.status, content={"detail": {"code": "BLOCK_ERROR", "message": str(error)}})
 
-    application.include_router(build_documents_router(block_service, block_ai, actor_resolver))
+    application.include_router(
+        build_documents_router(
+            block_service,
+            block_ai,
+            actor_resolver,
+            asset_service,
+            docx_service,
+            prototype_service,
+        )
+    )
     application.include_router(build_blocks_router(block_service, block_ai, actor_resolver))
 
     if settings.cors_allowed_origins:
@@ -208,6 +245,10 @@ def create_app(
     application.include_router(
         build_workspace_router(workspace_service, actor_resolver)
     )
+    application.include_router(auth_router)
+    application.include_router(admin_users_router)
+    # Read-only Semantica audit graph inspector (status + decisions).
+    application.include_router(build_semantica_router())
     return application
 
 

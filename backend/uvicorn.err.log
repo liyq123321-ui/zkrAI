@@ -1,0 +1,15 @@
+INFO:     Loading environment from '.env'
+INFO:     Started server process [52596]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8088 (Press CTRL+C to quit)
+Block job run_d8fdef700d6745b79412d67e6ec65e98 failed
+Traceback (most recent call last):
+  File "C:\Users\zkr\Documents\ChatGPT\firstFlight Project\backend\app\services\ai_service.py", line 648, in execute
+    raise BlockError(
+app.services.block_service.BlockError: AI 修改超出选区附近的浮动范围（前后各 4 行），结果未应用
+Block job run_cbb9e3d2b59b4ddcb3475d8ee848d576 failed
+Traceback (most recent call last):
+  File "C:\Users\zkr\Documents\ChatGPT\firstFlight Project\backend\app\services\ai_service.py", line 648, in execute
+    raise BlockError(
+app.services.block_service.BlockError: AI 修改超出选区附近的浮动范围（前后各 4 行），结果未应用

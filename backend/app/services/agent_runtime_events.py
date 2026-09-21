@@ -220,3 +220,10 @@ class AgentRuntimeEventStore:
                 db.commit()
         except Exception:
             logger.exception("Could not persist a Codex runtime event")
+        # Mirror into the Semantica audit graph (best-effort, never breaks work).
+        try:
+            from app.audit.recorder import record_runtime_event
+
+            record_runtime_event(context, event)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("Semantica audit mirror skipped", exc_info=True)

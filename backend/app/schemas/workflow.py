@@ -20,6 +20,26 @@ _ASYNC_COMMAND_ID = re.compile(ASYNC_COMMAND_ID_PATTERN)
 AgentBackendName = Literal["codex", "deepseek", "glm", "kimi"]
 
 
+class ImportedPrdSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=255)
+    media_type: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=100)
+    content: str = Field(min_length=1, max_length=100_000)
+
+
+class PrdSourceImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=33_600_000)
+
+
+class PrdSourceImportResult(ImportedPrdSource):
+    pass
+
+
 class ProjectBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -34,6 +54,7 @@ class ProjectBrief(BaseModel):
     final_approver: str = Field(min_length=1)
     project_manager_ids: list[str] = Field(default_factory=list)
     root_owner_ids: list[str] = Field(default_factory=list)
+    source_prd: ImportedPrdSource | None = None
 
 
 class SessionCreateRequest(BaseModel):

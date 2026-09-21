@@ -1,0 +1,30 @@
+Use a visual-first explanation pass after drafting the PRD. For every substantial
+section, ask whether a diagram would explain actors, steps, states, data, structure
+or dependencies faster than another paragraph. When it would, use the configured
+diagram-generation skill or tool and place the figure immediately after the text
+that introduces it, followed by a short interpretation of what the reader should
+notice.
+
+Prefer evidence-backed diagrams such as:
+
+- a system-context or boundary diagram for scope and external integrations;
+- a use-case diagram for actors and their goals;
+- a flowchart or swimlane diagram for multi-step and cross-role workflows;
+- a sequence diagram for time-ordered interactions between participants;
+- a state diagram for objects with meaningful lifecycle transitions;
+- an ER diagram for persistent entities, keys and relationships;
+- a class or component diagram for stable structural relationships;
+- a decision tree for branching rules and exception handling.
+
+For a medium or large PRD, aim for 4-8 useful figures when the authenticated
+evidence supports that many. This is a comprehension target, not a quota: never
+duplicate a diagram, invent actors, fields, states, calls or relationships, or add
+decorative imagery. Prefer several focused diagrams over one unreadable mega-
+diagram. Give every figure a unique title, useful alt text, nearby caption, and a
+2-4 sentence explanation of its scope, important path and exceptions.
+
+Use the diagram types and tool calls allowed by the current output contract. If a
+contract exposes only ER diagrams, generate only valid evidence-backed ER views;
+do not disguise a flowchart, use-case diagram or class diagram as ER data. Preserve
+stable diagram IDs during revision and update or remove a figure only when its
+supporting requirements change.

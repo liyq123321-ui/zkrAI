@@ -11,3 +11,7 @@ pytest-asyncio
 httpx
 PyYAML>=6.0.3,<7
 pypdf>=5,<7
+python-docx>=1.1,<2
+Pillow>=10,<13
+# Agent-behavior audit layer (W3C PROV-O provenance graph)
+semantica[graph-neo4j]==0.6.8

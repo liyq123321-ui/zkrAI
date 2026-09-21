@@ -1,0 +1,5 @@
+Apply vertical task decomposition. Each executable task must deliver one bounded,
+end-to-end and independently verifiable outcome, have explicit required outputs,
+acceptance and verification, and depend only on genuine prerequisite tasks. Split
+oversized or multi-outcome tasks; do not create horizontal catch-all tasks. Order
+dependencies for early risk discovery while respecting the selected SDLC gates.

@@ -1,0 +1,8 @@
+Looking in indexes: https://pypi.tuna.tsinghua.edu.cn/simple
+Collecting semantica==0.6.8
+  Using cached https://pypi.tuna.tsinghua.edu.cn/packages/f5/4d/edf005139044fca3f86711d2bff96de93ae3e10ed1a6d02bc05252b610e2/semantica-0.6.8-py3-none-any.whl (2.5 MB)
+Installing collected packages: semantica
+Successfully installed semantica-0.6.8
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: C:\Users\zkr\Documents\ChatGPT\firstFlight Project\backend\.venv\Scripts\python.exe -m pip install --upgrade pip

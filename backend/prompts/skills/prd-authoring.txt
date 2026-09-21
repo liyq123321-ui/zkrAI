@@ -1,0 +1,4 @@
+Apply the PRD authoring method: make the problem and affected users explicit; keep
+goals measurable; separate scope from non-goals; state assumptions and tradeoffs;
+describe solution behavior and release boundaries without inventing evidence. Keep
+the result concise but complete and connect every P0 behavior to the stated problem.
