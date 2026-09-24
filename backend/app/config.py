@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import shlex
 
 from dotenv import load_dotenv
 
@@ -16,6 +17,11 @@ class Settings:
     codex_inactivity_timeout_seconds: float = 2000
     codex_skip_git_repo_check: bool = False
     codex_ignore_user_config: bool = False
+    deepseek_harness_enabled: bool = False
+    deepseek_harness_binary: str = "dsh"
+    deepseek_harness_launch_args: tuple[str, ...] = ()
+    deepseek_harness_profile: str = "headless"
+    deepseek_harness_timeout_seconds: float = 2000
     agent_api_timeout_seconds: float = 2000
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -117,6 +123,29 @@ class Settings:
                 "CODEX_IGNORE_USER_CONFIG", "false"
             ).strip().lower()
             in {"1", "true", "yes", "on"},
+            deepseek_harness_enabled=os.getenv(
+                "DEEPSEEK_HARNESS_ENABLED", "false"
+            ).strip().lower()
+            in {"1", "true", "yes", "on"},
+            deepseek_harness_binary=(
+                os.getenv("DEEPSEEK_HARNESS_BINARY", "dsh").strip() or "dsh"
+            ),
+            deepseek_harness_launch_args=tuple(
+                shlex.split(
+                    os.getenv("DEEPSEEK_HARNESS_LAUNCH_ARGS", ""),
+                    posix=os.name != "nt",
+                )
+            ),
+            deepseek_harness_profile=(
+                os.getenv("DEEPSEEK_HARNESS_PROFILE", "headless").strip()
+                or "headless"
+            ),
+            deepseek_harness_timeout_seconds=float(
+                os.getenv(
+                    "DEEPSEEK_HARNESS_TIMEOUT_SECONDS",
+                    str(codex_timeout_seconds),
+                )
+            ),
             agent_api_timeout_seconds=float(
                 os.getenv("AGENT_API_TIMEOUT_SECONDS", str(codex_timeout_seconds))
             ),

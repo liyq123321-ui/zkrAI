@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
+import shutil
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -30,7 +32,7 @@ class AgentBackendService:
         self._settings = settings
 
     def catalogue(self) -> list[AgentBackendOption]:
-        return [
+        options = [
             AgentBackendOption(
                 provider="codex",
                 label="Codex CLI",
@@ -59,6 +61,20 @@ class AgentBackendService:
                 configuration_env="MOONSHOT_API_KEY",
             ),
         ]
+        if self._settings.deepseek_harness_enabled:
+            options.insert(
+                1,
+                AgentBackendOption(
+                    provider="deepseek_harness",
+                    label="DeepSeek Harness",
+                    model=None,
+                    available=bool(
+                        self._resolve_binary(self._settings.deepseek_harness_binary)
+                    ),
+                    configuration_env="DEEPSEEK_HARNESS_BINARY",
+                ),
+            )
+        return options
 
     def option(self, provider: AgentBackendName) -> AgentBackendOption:
         option = next(
@@ -188,7 +204,8 @@ class AgentBackendService:
         provider = (
             pm.provider
             if pm is not None
-            and pm.provider in {"codex", "deepseek", "glm", "kimi"}
+            and pm.provider
+            in {"codex", "deepseek_harness", "deepseek", "glm", "kimi"}
             else "codex"
         )
         option = self.option(provider)
@@ -196,6 +213,13 @@ class AgentBackendService:
             provider=provider,
             model=(pm.model if pm is not None and pm.model else option.model),
         )
+
+    @staticmethod
+    def _resolve_binary(binary: str) -> str | None:
+        path = Path(binary)
+        if path.is_file():
+            return str(path.resolve())
+        return shutil.which(binary)
 
     @staticmethod
     def _project(db: Session, session_id: str) -> Project:

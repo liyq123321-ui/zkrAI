@@ -1,5 +1,6 @@
 """FastAPI application assembly for the project workflow gateway."""
 
+import os
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.codex import CodexAgentGateway
 from app.agents.compatible import OpenAICompatibleStructuredRunner
+from app.agents.deepseek_harness import DeepSeekHarnessStructuredRunner
 from app.agents.gateway import AgentGateway
 from app.agents.routing import RoutingAgentGateway
 from app.api.chat import build_router as build_chat_router
@@ -22,6 +24,8 @@ from app.api.workspace_portal import build_router as build_workspace_router
 from app.api.semantica import build_router as build_semantica_router
 from app.api.auth import router as auth_router
 from app.api.admin_users import router as admin_users_router
+from app.mcp_gateway.protocol import McpGateway
+from app.mcp_gateway.router import build_mcp_gateway_router
 from app.auth import configure_auth
 from app.auth.deps import get_db as auth_get_db
 from app.auth.seed import seed_default_users
@@ -71,6 +75,15 @@ def create_app(
                 settings=settings, session_factory=session_factory
             )
         }
+        if settings.deepseek_harness_enabled:
+            routed_gateways["deepseek_harness"] = CodexAgentGateway(
+                runner=DeepSeekHarnessStructuredRunner(
+                    settings=settings,
+                    runtime_event_store=AgentRuntimeEventStore(session_factory),
+                ),
+                settings=settings,
+                session_factory=session_factory,
+            )
         compatible = (
             (
                 "deepseek",
@@ -249,6 +262,14 @@ def create_app(
     application.include_router(admin_users_router)
     # Read-only Semantica audit graph inspector (status + decisions).
     application.include_router(build_semantica_router())
+
+    # MCP gateway (Streamable HTTP at POST /mcp). It shares this process so
+    # configuration, JWT secret and audit storage stay in one place.
+    # Set MCP_GATEWAY_ENABLED=0 to boot without it.
+    if os.getenv("MCP_GATEWAY_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
+        mcp_gateway = McpGateway.build(jwt_secret=settings.auth_jwt_secret)
+        application.state.mcp_gateway = mcp_gateway
+        application.include_router(build_mcp_gateway_router(gateway=mcp_gateway))
     return application
 
 

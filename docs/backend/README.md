@@ -39,11 +39,19 @@ python -m venv .venv
 ### Agent 模型后端
 
 输入框中的模型菜单可以按项目选择 `Codex CLI`、`DeepSeek`、`GLM` 或
-`Kimi`。选择会写入项目 AgentSession，后续澄清、PRD、审核、SDLC 拆分与修复
+`Kimi`。后台还预留了本机 `DeepSeek Harness` 入口，默认隐藏且不会改变当前
+Codex 调用；未来启用后可沿用同一项目级选择接口。选择会写入项目
+AgentSession，后续澄清、PRD、审核、SDLC 拆分与修复
 调用均沿用该来源。远程接口使用 OpenAI 兼容的 Chat Completions 协议，API Key
 只从 `backend/.env` 读取；未配置 Key 的来源会在前端显示为不可用。
 
 ```dotenv
+DEEPSEEK_HARNESS_ENABLED=false
+DEEPSEEK_HARNESS_BINARY=dsh
+DEEPSEEK_HARNESS_LAUNCH_ARGS=
+DEEPSEEK_HARNESS_PROFILE=headless
+DEEPSEEK_HARNESS_TIMEOUT_SECONDS=2000
+
 DEEPSEEK_API_KEY=
 DEEPSEEK_MODEL=deepseek-v4-pro
 ZHIPU_API_KEY=
@@ -54,6 +62,12 @@ MOONSHOT_MODEL=kimi-k3
 
 对应 Base URL 和超时时间可通过 `DEEPSEEK_BASE_URL`、`ZHIPU_BASE_URL`、
 `MOONSHOT_BASE_URL`、`AGENT_API_TIMEOUT_SECONDS` 覆盖。修改配置后需要重启后端。
+
+本机 Harness 使用官方 headless profile。若 `dsh` 不在后端进程的 `PATH`，请将
+`DEEPSEEK_HARNESS_BINARY` 配置为完整路径；若通过官方 npm 包启动，可设为
+`npx.cmd`，并将 `DEEPSEEK_HARNESS_LAUNCH_ARGS` 设为
+`--yes @deepseek-ai/dsh`。准备切换时再将 `DEEPSEEK_HARNESS_ENABLED=true`；
+未启用时不会出现在后端目录中，也不会影响现有 Codex CLI。
 
 如已激活虚拟环境，启动命令等价于：
 

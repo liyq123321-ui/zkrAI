@@ -1,0 +1,99 @@
+# MCP Gateway 主配置（单一事实来源：agent 注册 + 暴露面白名单 + 治理参数）
+#
+# 安全基线：默认 deny-all。agent 只能看到 allowed_* 中显式放行的项，
+# 未列出的工具/资源/提示词既不出现在 list 结果里，调用时也会返回 -32001。
+#
+# 环境变量可覆盖绝大多数取值（见 docs/mcp-gateway.md）：
+#   MCP_GATEWAY_CONFIG_DIR / MCP_GATEWAY_JWT_SECRET / GATEWAY_JWT_SECRET
+#   MCP_GATEWAY_STATIC_TOKENS="tok:agentId,tok2:agentId2"
+#   MCP_GATEWAY_RATE_LIMIT_PER_MINUTE / MCP_GATEWAY_AUDIT_DIR
+#   MCP_GATEWAY_MOCK_UPSTREAM / MCP_GATEWAY_ADMIN_TOKEN / MCP_GATEWAY_AUTH_MODE
+
+server:
+  name: firstflight-mcp-gateway
+  version: 0.1.0
+  protocol_version: "2025-06-18"
+  sessions: true
+  instructions: >
+    FirstFlight MCP Gateway。工具/资源/提示词均按调用者身份裁剪；
+    未授权项不会出现在列表中。后端服务凭据只在网关侧持有，不会下发给 agent。
+
+auth:
+  # jwt | static | both
+  mode: both
+  jwt_secret_env: GATEWAY_JWT_SECRET
+  # ⚠️ 下列为开发用固定 token，上生产前必须删除或改为环境变量注入
+  #    （MCP_GATEWAY_STATIC_TOKENS）。
+  static_tokens:
+    - token: "dev-token-codex"
+      agent_id: "codex-main"
+    - token: "dev-token-prd"
+      agent_id: "prd-agent"
+    - token: "dev-token-worker"
+      agent_id: "worker-default"
+    - token: "dev-token-viewer"
+      agent_id: "readonly-viewer"
+
+ratelimit:
+  enabled: true
+  per_agent_per_minute: 60
+
+audit:
+  enabled: true
+  # dir: backend/data/mcp-gateway   # 默认；可用 MCP_GATEWAY_AUDIT_DIR 覆盖
+  memory_size: 200
+  arg_preview_chars: 200
+
+# MOCK_UPSTREAM=1 时所有适配器返回假数据，便于无凭据联调
+mock_upstream: false
+
+admin_token_env: MCP_GATEWAY_ADMIN_TOKEN
+
+agents:
+  - id: "codex-main"
+    roles: ["dev"]
+    description: "主力开发 agent：画图、知识检索、代码检索、评审提示词"
+    allowed_tools:
+      - "gateway_ping"
+      - "gateway_whoami"
+      - "generate_image"
+      - "search_knowledge"
+      - "code-search.*"
+    allowed_resources:
+      - "spaces://individual/knowledge/*"
+      - "spaces://collab/knowledge/*"
+    allowed_prompts:
+      - "code-review"
+      - "prd-review"
+    rate_limit_per_minute: 120
+
+  - id: "prd-agent"
+    roles: ["pm"]
+    description: "PRD 工作流 agent：只读知识库 + PRD 评审提示词"
+    allowed_tools:
+      - "gateway_ping"
+      - "gateway_whoami"
+      - "search_knowledge"
+    allowed_resources:
+      - "spaces://individual/knowledge/*"
+      - "spaces://collab/knowledge/*"
+    allowed_prompts:
+      - "prd-review"
+
+  - id: "worker-default"
+    roles: ["pipeline"]
+    description: "流水线 worker：最小权限，仅自检"
+    allowed_tools:
+      - "gateway_ping"
+    allowed_resources: []
+    allowed_prompts: []
+    rate_limit_per_minute: 30
+
+  - id: "readonly-viewer"
+    roles: ["viewer"]
+    description: "只读观察者：仅企业空间知识读取"
+    allowed_tools: []
+    allowed_resources:
+      - "spaces://enterprise/knowledge/*"
+    allowed_prompts: []
+    rate_limit_per_minute: 20

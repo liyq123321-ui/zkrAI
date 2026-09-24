@@ -18,6 +18,7 @@ Block PRD 的完整用户行为、运行限制和历次验证记录另见 [`bloc
 
 - [`architecture/frontend-codex-architecture-and-api.md`](architecture/frontend-codex-architecture-and-api.md)：主前端架构与 API。
 - [`backend/README.md`](backend/README.md)：后端运行方式与 API 示例。
+- [`mcp-gateway.md`](mcp-gateway.md)：自运营 MCP Gateway（POST /mcp），含上线前注意事项清单。
 - [`backend/gitea-prd-review-engineering-guide.md`](backend/gitea-prd-review-engineering-guide.md)：后端工程框架与 Gitea PRD 审核链路。
 - [`frontend-backend-integration-contract.md`](frontend-backend-integration-contract.md)：第一阶段前后端契约。
 - [`frontend-backend-integration-tasks.md`](frontend-backend-integration-tasks.md)：第一阶段集成任务记录。

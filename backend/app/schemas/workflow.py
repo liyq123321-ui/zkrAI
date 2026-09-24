@@ -17,7 +17,9 @@ from app.domain.types import (
 
 ASYNC_COMMAND_ID_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9._~-]{0,254})$"
 _ASYNC_COMMAND_ID = re.compile(ASYNC_COMMAND_ID_PATTERN)
-AgentBackendName = Literal["codex", "deepseek", "glm", "kimi"]
+AgentBackendName = Literal[
+    "codex", "deepseek_harness", "deepseek", "glm", "kimi"
+]
 
 
 class ImportedPrdSource(BaseModel):

@@ -148,7 +148,7 @@ export interface AgentRuntimeDto {
   call_count: number;
 }
 
-export type AgentBackendName = 'codex' | 'deepseek' | 'glm' | 'kimi';
+export type AgentBackendName = 'codex' | 'deepseek_harness' | 'deepseek' | 'glm' | 'kimi';
 
 export interface AgentBackendOptionDto {
   provider: AgentBackendName;

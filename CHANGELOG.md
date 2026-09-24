@@ -1,5 +1,27 @@
 # 修改日志
 
+## 2026-09-21 — 后端 8088 登录自启（「默认打开」补齐最后一环）
+
+- **先做自启审计**：`memory-neo4j` 重启策略 `unless-stopped` + Docker Desktop 已注册在
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（且 `settings-store.json` 里 `"AutoStart": true`），
+  即 **Neo4j/Semantica 本就随登录自动恢复**；链条里只有「8088 后端」「3001 前端」没有自启。
+  注意 `Startup` 文件夹里没有 Docker 的 `.lnk` 属正常（它注册的是 Run 键），不能据此判断未自启。
+- 新增 `tools/start-backend.cmd`：幂等 launcher。解析仓库根 → 校验 venv → **8088 已监听则跳过** →
+  否则 `cd backend` 起 uvicorn（stdout 追加 `backend/data/backend-8088.out.log`）。
+  自身留痕写到独立文件 `backend/data/backend-8088.launcher.log`，避免与 uvicorn 抢同一日志，
+  也保证自启（无可见控制台）不会静默失败。
+- 新增启动文件夹项 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\firstFlight-backend.cmd`：
+  `start "firstFlight backend 8088" /min "<repo>\tools\start-backend.cmd"`。**删除该文件即关闭自启。**
+- 为什么不用计划任务：`schtasks /create /sc onlogon` 在本机报 `错误: 拒绝访问。`（关闭沙箱亦然，需管理员），
+  启动文件夹免管理员且效果等价。
+- 验证：守卫谓词匹配成功；端口空闲时执行脚本成功拉起服务（`/healthz` 200、`/semantica/status` `available:true`）；
+  服务在跑时执行脚本记录 `8088 already listening, skip.` 且**不产生第二个实例**；启动文件夹项实测可执行。
+- 已知边界：agent 会话内启动的进程会被沙箱在工具调用结束后回收，**这不影响登录自启**；
+  但若需要后端在当前会话中长期存活，应由用户自行启动（双击启动项或重启机器）。
+- 顺带清理：`09-20` 遗留的僵尸 python 进程对（PID 63196/6084，不占端口）已终止，8088 服务未受影响。
+- 文档：技能 `.workbuddy/skills/firstflight-local-runtime/` 增加自启安装说明、cmd 三个坑
+  （`%~dp0` 带尾反斜杠导致 `%ROOT%backend` 丢分隔符等）、以及沙箱内执行 `.cmd` 的唯一可行路径。
+
 ## 2026-09-21 — 修复 Semantica 决策溯源「无法连接 Neo4j 图谱数据库」
 
 - **根因不是服务没开**：Neo4j 容器 `memory-neo4j` 一直 `Up`（宿主 7474/7687，重启策略 `unless-stopped`），

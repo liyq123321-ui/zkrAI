@@ -1,0 +1,145 @@
+# 技能注册清单（v1 用文件维护，后续可换成 Registry API）
+#
+# 三类 kind：tool（可调用）/ resource（可读）/ prompt（可展开模板）
+# adapter 决定后端实现；所有上游凭据只从环境变量读取（*_env 字段只是变量名）。
+
+skills:
+  # ------------------------------ 内置自检 ------------------------------
+  - id: "gateway_ping"
+    kind: "tool"
+    name: "gateway_ping"
+    description: "网关连通性自检：回显 message，并返回当前 agent 可见能力数量。"
+    input_schema:
+      type: "object"
+      properties:
+        message: { type: "string", description: "任意回显文本" }
+    adapter: "builtin"
+
+  - id: "gateway_whoami"
+    kind: "tool"
+    name: "gateway_whoami"
+    description: "返回当前调用者身份、角色、配额与可见工具/资源/提示词清单。"
+    input_schema:
+      type: "object"
+      properties: {}
+    adapter: "builtin"
+
+  # ------------------------------ 画图 ------------------------------
+  - id: "generate_image"
+    kind: "tool"
+    name: "generate_image"
+    description: "根据提示词生成图片，支持文生图与图生图（返回 base64 PNG）。"
+    input_schema:
+      type: "object"
+      properties:
+        prompt:    { type: "string", description: "图片内容描述" }
+        width:     { type: "integer", default: 1024 }
+        height:    { type: "integer", default: 1024 }
+        ref_image: { type: "string", description: "可选参考图 URL（图生图）" }
+      required: ["prompt"]
+    adapter: "http-json"
+    api_key_env: "IMG_GEN_API_KEY"
+    timeout_sec: 120
+    options:
+      upstream_env: "IMG_GEN_URL"        # 上游地址走环境变量，避免写死
+      method: "POST"
+      # 上游为异步任务时：返回体含 task_id 字段 → 轮询直到终态
+      async: true
+      task_id_field: "task_id"
+      status_url_template: "{upstream}/tasks/{task_id}"
+      status_field: "status"
+      done_values: ["succeeded", "success", "completed", "done"]
+      failed_values: ["failed", "error", "canceled"]
+      result_field: "data"
+      image_field: "b64_json"            # 同步返回 base64 时取这个字段
+      image_url_field: "url"             # 返回 URL 时下载后转 base64
+      max_image_bytes: 5242880           # >5MB 退化为 URL 文本
+      poll_interval_sec: 2
+      # 请求体映射：把 args 按字段名直接透传；可用 body_template 定制
+      body_template: null
+
+  # ------------------------------ 知识库检索 ------------------------------
+  - id: "search_knowledge"
+    kind: "tool"
+    name: "search_knowledge"
+    description: "检索知识库并注入上下文（默认对接 WeKnora RAG 检索接口）。"
+    input_schema:
+      type: "object"
+      properties:
+        query:  { type: "string", description: "检索问题或关键词" }
+        scope:  { type: "string", description: "individual | collab | enterprise", default: "collab" }
+        top_k:  { type: "integer", default: 5 }
+      required: ["query"]
+    adapter: "rag-knowledge"
+    api_key_env: "RAG_API_KEY"
+    timeout_sec: 30
+    options:
+      upstream_env: "RAG_SEARCH_URL"
+      fallback_upstream_env: "WEKNORA_BASE_URL"
+      fallback_path: "/knowledge-base/search"
+      max_chars: 64000
+
+  - id: "spaces-knowledge"
+    kind: "resource"
+    name: "spaces-knowledge"
+    uri_template: "spaces://{scope}/knowledge/{docId}"
+    description: "读取个体/协作/企业空间内经授权的文档（经检索服务取回后截断注入）。"
+    mime_type: "text/markdown"
+    adapter: "rag-knowledge"
+    api_key_env: "RAG_API_KEY"
+    timeout_sec: 30
+    options:
+      upstream_env: "RAG_SEARCH_URL"
+      fallback_upstream_env: "WEKNORA_BASE_URL"
+      fallback_path: "/knowledge-base/search"
+      scopes: ["individual", "collab", "enterprise"]
+      max_chars: 64000
+
+  # ------------------------------ 级联外部 MCP ------------------------------
+  - id: "code-search"
+    kind: "tool"
+    name: "code-search"
+    description: "级联外部 MCP 代码检索服务；其工具以 `code-search.<upstream_tool>` 暴露。"
+    adapter: "external-mcp"
+    timeout_sec: 60
+    options:
+      upstream_env: "CODE_SEARCH_MCP_URL"
+      token_env: "CODE_SEARCH_TOKEN"
+      # 级联工具命名模板：{skill}.{tool}
+      name_template: "{skill}.{tool}"
+      cache_ttl_sec: 60
+
+  # ------------------------------ 提示词模板 ------------------------------
+  - id: "code-review"
+    kind: "prompt"
+    name: "code-review"
+    description: "代码审查模板：审查维度 + 输出格式"
+    arguments:
+      - { name: "diff", description: "待审查的代码 diff", required: true }
+      - { name: "focus", description: "额外关注点", required: false }
+    template: |
+      请按以下维度审查代码 diff：
+      1) 正确性与边界条件 2) 安全风险 3) 可维护性 4) 与既有约定的一致性
+      输出格式：问题清单（严重程度 + 位置 + 建议），最后给出总体结论。
+      {% if focus %}额外关注：{{focus}}{% endif %}
+      diff:
+      {{diff}}
+
+  - id: "prd-review"
+    kind: "prompt"
+    name: "prd-review"
+    description: "PRD 评审模板：面向 firstFlight PRD 工作流的评审维度"
+    arguments:
+      - { name: "prd", description: "PRD 正文或章节", required: true }
+      - { name: "stage", description: "所处阶段", required: false }
+    template: |
+      你是资深产品评审人。请对以下 PRD 做结构化评审：
+      1) 问题定义是否清晰、可验证
+      2) 范围边界与不做的事（out-of-scope）
+      3) 验收标准是否可测（Given/When/Then）
+      4) 依赖、风险与回滚方案
+      5) 与既有 SDLC 规则的一致性
+      输出：阻塞项 / 建议项 / 通过结论三段式清单。
+      {% if stage %}当前阶段：{{stage}}{% endif %}
+      PRD:
+      {{prd}}

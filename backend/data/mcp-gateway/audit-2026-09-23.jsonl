@@ -1,0 +1,1 @@
+{"ts": "2026-09-23T23:30:58+0800", "agent_id": "codex-main", "method": "resources/read", "name": "spaces://enterprise/knowledge/x", "args_summary": {"uri": {"type": "string", "chars": 31, "preview": "spaces://enterprise/knowledge/x"}}, "result_size": null, "latency_ms": 0.03, "status": "ok"}

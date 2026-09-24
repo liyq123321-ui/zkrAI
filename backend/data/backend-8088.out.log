@@ -206,3 +206,22 @@ INFO:     127.0.0.1:11886 - "GET /prd-documents/prd_f5df64ba038a4ae099f321449043
 INFO:     127.0.0.1:11886 - "GET /sessions/35cdd245-43f0-4a98-ab71-c5d5a6f711c5/agents/runtime HTTP/1.1" 200 OK
 INFO:     127.0.0.1:11902 - "GET /healthz HTTP/1.1" 200 OK
 INFO:     127.0.0.1:11903 - "GET /semantica/status HTTP/1.1" 200 OK
+[firstFlight] 2026/09/21 ÷‹“ª 17:37:56.73 starting uvicorn on 127.0.0.1:8088
+INFO:     Loading environment from '.env'
+INFO:     Started server process [18992]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8088 (Press CTRL+C to quit)
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7080 - "GET /healthz HTTP/1.1" 200 OK
+Received notification from DBMS server: <GqlStatusObject gql_status='01N02', status_description='warn: feature deprecated without replacement. id is deprecated and will be removed without a replacement.', position=<SummaryInputPosition line=1, column=27, offset=26>, raw_classification='DEPRECATION', classification=<NotificationClassification.DEPRECATION: 'DEPRECATION'>, raw_severity='WARNING', severity=<NotificationSeverity.WARNING: 'WARNING'>, diagnostic_record={'_classification': 'DEPRECATION', '_severity': 'WARNING', '_position': {'offset': 26, 'line': 1, 'column': 27}, 'OPERATION': '', 'OPERATION_CODE': '0', 'CURRENT_SCHEMA': '/'}> for query: 'MATCH (n:Decision) RETURN id(n) as id, n, labels(n) as labels LIMIT 1'
+INFO:     127.0.0.1:7081 - "GET /semantica/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:7077 - "GET /sessions/23472550-6d83-4da4-9fb4-5217eadaea46/agents/runtime HTTP/1.1" 200 OK
