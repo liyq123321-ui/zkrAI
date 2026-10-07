@@ -11,7 +11,7 @@ function loadDismissed(documentId: string): Set<string> {
   } catch { return new Set(); }
 }
 export function runTitle(run: AgentRun, blocks: Block[]) {
-  return run.type === 'document_review' ? '全文审核'
+  return run.type === 'document_review' ? (run.review_scope === 'affected' ? '受影响内容复审' : '全文审核')
     : run.type === 'document_revision' ? '全文自动修订'
     : run.type === 'initial' ? '首版自动生成'
     : blocks.find(block => block.id === run.block_id)?.title ?? '结构规划';
@@ -19,7 +19,7 @@ export function runTitle(run: AgentRun, blocks: Block[]) {
 export function stageText(run: AgentRun) {
   const stage = run.result?.progress_stage;
   if (run.status === 'queued') return '正在排队';
-  if (run.type === 'document_review') return '正在综合审核全文';
+  if (run.type === 'document_review') return run.review_scope === 'affected' ? '正在复审变动范围及校验全局规则' : '正在综合审核全文';
   if (stage === 'revising') return `正在生成第 ${run.result?.resolution_round ?? 1} 轮修订`;
   if (stage === 'verifying') return '正在复审修订结果';
   if (stage === 'streaming') return '正在流式写入正文';
@@ -31,13 +31,16 @@ export function statusText(run: AgentRun) {
   if (isActive(run)) {
     const completed = run.result?.completed, total = run.result?.total;
     const count = typeof completed === 'number' && typeof total === 'number' && total > 0 ? ` · ${completed}/${total}` : '';
-    if (run.type === 'document_review') return `正在审核全文${typeof total === 'number' ? ` · ${total} 个 Block` : ''}`;
+    if (run.type === 'document_review') return `${run.review_scope === 'affected' ? '正在复审受影响内容及全局规则' : '正在审核全文'}${typeof total === 'number' ? ` · ${total} 个 Block` : ''}`;
     return `${stageText(run)}${count}`;
   }
   if (run.status === 'failed') return run.error || '生成失败';
   if (run.status === 'cancelled') return '已取消';
   if (run.type === 'document_review') return run.apply_status === 'resolved' ? '审核问题已自动解决' : run.stale || run.apply_status === 'conflict' ? '审核完成，正文已变化' : '审核完成';
-  if (run.type === 'document_revision') return run.apply_status === 'conflict' ? '自动修订完成，但正文已变化' : '审核问题已自动解决';
+  if (run.type === 'document_revision') return run.apply_status === 'conflict' ? '自动修订完成，但正文已变化'
+    : typeof run.result?.remaining_issues === 'number'
+      ? run.result.remaining_issues > 0 ? `自动修订完成，复审仍有 ${run.result.remaining_issues} 条问题` : '审核问题已自动解决'
+      : '自动修订完成，等待手动审核';
   if (run.apply_status === 'conflict') return '生成成功，待处理版本冲突';
   if (run.apply_status === 'pending') return '生成成功，待应用';
   return run.type === 'plan' ? '规划完成' : ['review', 'document_review'].includes(run.type) ? '审核完成' : '生成成功';
@@ -82,7 +85,10 @@ export function GenerationStatus({ documentId, runs, blocks, notice, onDismissNo
         const completed = run.result?.completed ?? 0, total = run.result?.total ?? 0;
         const progress = total > 0 ? Math.max(4, Math.min(100, (completed / total) * 100)) : 14;
         return <div key={run.id} className={`prd-run-message${active ? ' is-active' : ''}`} tabIndex={active ? 0 : undefined}>
-          <span className={`prd-dot is-${dot}`} /><span className="prd-run-description">{title}<small>{statusText(run)}</small></span>
+          <span className={`prd-dot is-${dot}`} /><span className="prd-run-description">{title}<small>{statusText(run)}</small>
+            {typeof run.result?.elapsed_seconds === 'number' && <small>已记录耗时 {run.result.elapsed_seconds.toFixed(1)} 秒</small>}
+            {Boolean(run.result?.timing_events?.length) && <details><summary>查看步骤耗时</summary><ol>{run.result?.timing_events?.map((item, i) => <li key={i}>+{item.elapsed_seconds.toFixed(1)} 秒 · {item.message}</li>)}</ol></details>}
+          </span>
           {active ? <button aria-label={`取消${title}`} onClick={() => onCancel(run)}>取消</button>
             : <button className="prd-run-delete" aria-label={`删除${title}消息`} title="删除消息" onClick={() => dismiss(run)}><Trash2 size={14} /></button>}
           {active && <aside className="prd-run-popover" aria-label={`${title}执行进度`}>

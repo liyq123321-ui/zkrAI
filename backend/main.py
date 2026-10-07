@@ -40,6 +40,7 @@ from app.services.gitea import GiteaClient
 from app.services.pm_agent import ReviewPublishCoordinator
 from app.services.prd_review import PrdReviewService
 from app.services.prd_prototype import PrdPrototypeService
+from app.services.prd_presentation import PrdPresentationService
 from app.services.agent_backends import AgentBackendService
 from app.services.agent_runtime_events import AgentRuntimeEventStore
 from app.services.weknora import WeKnoraClient
@@ -47,6 +48,10 @@ from app.services.workspace_portal import WorkspacePortalService
 from app.api.documents import build_router as build_documents_router
 from app.api.blocks import build_router as build_blocks_router
 from app.services.block_service import BlockService, BlockError
+from app.services.document_edit_service import DocumentEditService
+from app.services.document_workbench import DocumentWorkbench
+from app.services.document_jobs import DocumentJobs
+from app.api.document_workbench import build_router as build_workbench_router
 from app.services.ai_service import AIService
 from app.services.document_asset_service import DocumentAssetService
 from app.services.docx_service import DocxService
@@ -128,6 +133,7 @@ def create_app(
         gitea_client = GiteaClient(settings)
     review_service = PrdReviewService(session_factory, gitea_client)
     prototype_service = PrdPrototypeService(session_factory, agent_gateway)
+    presentation_service = PrdPresentationService(session_factory, settings)
     configure_auth(settings.auth_jwt_secret, settings.auth_token_ttl_seconds)
     actor_resolver = ActorResolver(settings)
     block_service = BlockService(session_factory)
@@ -136,6 +142,9 @@ def create_app(
     )
     docx_service = DocxService(block_service, asset_service)
     block_ai = AIService(block_service, block_provider or CodexProvider(settings))
+    document_edits = DocumentEditService(block_service, block_ai.provider, asset_service)
+    document_workbench = DocumentWorkbench(block_service, document_edits)
+    document_jobs = DocumentJobs(document_workbench)
     publish_coordinator = ReviewPublishCoordinator(
         session_factory,
         gitea_client,
@@ -164,8 +173,10 @@ def create_app(
             command_jobs.mark_interrupted_jobs()
             publish_coordinator.mark_interrupted_tasks()
             block_ai.recover()
+            document_jobs.recover()
             yield
         finally:
+            await document_jobs.close()
             await block_ai.close()
             if owns_gitea_client:
                 await gitea_client.aclose()
@@ -201,7 +212,8 @@ def create_app(
             prototype_service,
         )
     )
-    application.include_router(build_blocks_router(block_service, block_ai, actor_resolver))
+    application.include_router(build_blocks_router(block_service, block_ai, actor_resolver, document_edits))
+    application.include_router(build_workbench_router(document_workbench, actor_resolver, document_jobs))
 
     if settings.cors_allowed_origins:
         application.add_middleware(
@@ -240,6 +252,7 @@ def create_app(
             command_jobs,
             prototype_service,
             agent_backends,
+            presentation_service=presentation_service,
         )
     )
     application.include_router(

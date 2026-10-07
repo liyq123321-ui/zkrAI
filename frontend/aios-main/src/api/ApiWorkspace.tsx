@@ -1,3 +1,4 @@
+import { RecoveryNotice, useDraftRecovery } from './prd-editor/draftRecovery';
 import { FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
@@ -17,7 +18,9 @@ import {
   Loader2,
   LogOut,
   Menu,
+  ImagePlus,
   Plus,
+  Presentation,
   RefreshCw,
   Send,
   Server,
@@ -76,15 +79,22 @@ import {
   getAgentBackend,
   getCommandJob,
   getSessionState,
+  generateAndDownloadPrdPresentation,
   importPrdSource,
   isCommandJobAccepted,
   listAgentRuntime,
   listAgentRuntimeEvents,
   listAgentBackends,
+  listWorkspaceChatMessages,
+  loadWorkspaceChatImage,
+  locateWorkspaceChatImage,
   recommendLifecycleRoutes,
+  saveWorkspaceChatMessage,
+  uploadWorkspaceChatImage,
   selectLifecycleRoute,
   selectAgentBackend,
 } from './sessions';
+import type { PrdPresentationAudience } from './sessions';
 import { streamChat } from './chat';
 import { observeCommandJob } from './commandJobs';
 import type { CommandJobAcceptedDto, CommandResultDto } from './dto';
@@ -98,7 +108,8 @@ import {
   type WorkItemLane,
 } from './workflowUi';
 import { defaultWorkItemFilters, filterWorkItems, type WorkItemFilterState } from './workItemFilters';
-import type { PRDEditorHandle, PrdAgentProgress } from './prd-editor/PRDEditor';
+import type { PRDEditorHandle, PrdAgentProgress, PrdChatContext, PrdEditReceipt } from './prd-editor/PRDEditor';
+import { isPrdRevisionInstruction } from './prd-editor/instructionRouting';
 
 const EmbeddedPRDEditor = lazy(() => import('./prd-editor/PRDEditor').then(module => ({ default: module.PRDEditor })));
 
@@ -133,8 +144,24 @@ type ChatMessage = {
   role: 'user' | 'agent';
   body: string;
   detail?: string;
+  image_ids?: string[];
   createdAt: string;
 };
+
+function ChatMessageImage({ sessionId, imageId, actorId }: { sessionId: string; imageId: string; actorId: string }) {
+  const [source, setSource] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl = '';
+    void loadWorkspaceChatImage(sessionId, imageId, actorId).then(url => {
+      objectUrl = url;
+      if (cancelled) URL.revokeObjectURL(url);
+      else setSource(url);
+    }).catch(() => undefined);
+    return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [sessionId, imageId, actorId]);
+  return source ? <a href={source} target="_blank" rel="noreferrer" aria-label="查看完整 PRD 截图"><img className="ff-chat-image" src={source} alt="用户提供的 PRD 截图" /></a> : <span className="ff-chat-image-loading">正在读取截图…</span>;
+}
 
 const NEW_CHAT_KEY = '__new__';
 import { currentActorId } from '../auth/session';
@@ -317,6 +344,10 @@ export function ApiWorkspace() {
   const [chatTool, setChatTool] = useState<ChatTool>(null);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [chatDraft, setChatDraft] = useState('');
+  const chatRecovery = useDraftRecovery(activeSessionId ? `chat:${activeSessionId}` : null, chatDraft.trim() ? { text: chatDraft } : null);
+  const [chatImages, setChatImages] = useState<Array<{ file: File; preview: string }>>([]);
+  const chatImageInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => { setChatImages([]); }, [activeSessionId]);
   const [showSettings, setShowSettings] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [agentBackends, setAgentBackends] = useState(DEFAULT_AGENT_BACKENDS);
@@ -324,7 +355,12 @@ export function ApiWorkspace() {
   const [agentBackendMenuOpen, setAgentBackendMenuOpen] = useState(false);
   const [switchingAgentBackend, setSwitchingAgentBackend] = useState(false);
   const [chatMessages, setChatMessages] = useState<Record<string, ChatMessage[]>>({});
+  const [chatHistoryLoaded, setChatHistoryLoaded] = useState<Record<string, boolean>>({});
+  const [chatHistoryErrors, setChatHistoryErrors] = useState<Record<string, string>>({});
+  const [chatHistoryRefresh, setChatHistoryRefresh] = useState(0);
   const [prdAgentProgress, setPrdAgentProgress] = useState<PrdAgentProgress | null>(null);
+  const [prdChatContext, setPrdChatContext] = useState<PrdChatContext | null>(null);
+  const [prdEditReceipt, setPrdEditReceipt] = useState<PrdEditReceipt | null>(null);
   const [agentRuntime, setAgentRuntime] = useState<AgentRuntimeDto[]>([]);
   const [topLevelRuntimeEvents, setTopLevelRuntimeEvents] = useState<AgentRuntimeEventDto[]>([]);
   const [lifecycleDecision, setLifecycleDecision] = useState<LifecycleRouteDecisionDto | null>(null);
@@ -335,12 +371,16 @@ export function ApiWorkspace() {
   const [clipboardResult, setClipboardResult] = useState<string | null>(null);
   const [prototypeNotice, setPrototypeNotice] = useState<PrototypeNotice | null>(null);
   const [prototypeBusy, setPrototypeBusy] = useState(false);
+  const [presentationBusy, setPresentationBusy] = useState(false);
   const pendingCommandIds = useRef(new Map<string, string>());
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const decompositionLifecycles = useRef(new Set<AbortController>());
   const reconciledDecompositionJobs = useRef(new Set<string>());
   const reconcilingDecompositionJobs = useRef(new Set<string>());
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const chatWriteQueues = useRef(new Map<string, Promise<void>>());
+  const unsavedChatMessages = useRef(new Map<string, Map<string, ChatMessage>>());
+  const recordedPrdRuns = useRef(new Set<string>());
   const prdEditorRef = useRef<PRDEditorHandle | null>(null);
   const prdProgressClearTimerRef = useRef<number | null>(null);
 
@@ -354,20 +394,80 @@ export function ApiWorkspace() {
     role: ChatMessage['role'],
     body: string,
     detail?: string,
+    id?: string,
+    imageIds?: string[],
   ) => {
     const key = sessionId ?? NEW_CHAT_KEY;
     const message: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: id ?? crypto.randomUUID(),
       role,
       body,
       detail,
+      image_ids: imageIds,
       createdAt: new Date().toISOString(),
     };
-    setChatMessages((previous) => ({
-      ...previous,
-      [key]: [...(previous[key] ?? []), message],
-    }));
-  }, []);
+    setChatMessages((previous) => previous[key]?.some(item => item.id === message.id)
+      ? previous : { ...previous, [key]: [...(previous[key] ?? []), message] });
+    if (sessionId) {
+      const unsaved = unsavedChatMessages.current.get(sessionId) ?? new Map<string, ChatMessage>();
+      unsaved.set(message.id, message);
+      unsavedChatMessages.current.set(sessionId, unsaved);
+      const previousWrite = chatWriteQueues.current.get(sessionId) ?? Promise.resolve();
+      const write = previousWrite.then(async () => {
+        await saveWorkspaceChatMessage(sessionId, ownerId, message);
+        unsavedChatMessages.current.get(sessionId)?.delete(message.id);
+        if (!unsavedChatMessages.current.get(sessionId)?.size) {
+          setChatHistoryErrors(previous => ({ ...previous, [sessionId]: '' }));
+        }
+      }).catch(() => {
+        setChatHistoryErrors(previous => ({ ...previous, [sessionId]: '有消息尚未保存到对话记录。' }));
+      });
+      chatWriteQueues.current.set(sessionId, write);
+    }
+  }, [ownerId]);
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const sessionId = activeSessionId;
+    const controller = new AbortController();
+    listWorkspaceChatMessages(sessionId, ownerId, controller.signal).then((stored) => {
+      if (controller.signal.aborted) return;
+      setChatMessages(previous => {
+        const merged = new Map<string, ChatMessage>();
+        for (const row of stored) merged.set(row.id, { ...row, detail: row.detail ?? undefined });
+        for (const row of previous[sessionId] ?? []) if (!merged.has(row.id)) merged.set(row.id, row);
+        return { ...previous, [sessionId]: [...merged.values()].sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)) };
+      });
+      setChatHistoryLoaded(previous => ({ ...previous, [sessionId]: true }));
+      if (!unsavedChatMessages.current.get(sessionId)?.size) {
+        setChatHistoryErrors(previous => ({ ...previous, [sessionId]: '' }));
+      }
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setChatHistoryLoaded(previous => ({ ...previous, [sessionId]: true }));
+      setChatHistoryErrors(previous => ({ ...previous, [sessionId]: '读取对话记录失败。' }));
+    });
+    return () => controller.abort();
+  }, [activeSessionId, ownerId, chatHistoryRefresh]);
+
+  async function retryChatHistory() {
+    if (!activeSessionId) return;
+    const sessionId = activeSessionId;
+    const pending = [...(unsavedChatMessages.current.get(sessionId)?.values() ?? [])];
+    const previousWrite = chatWriteQueues.current.get(sessionId) ?? Promise.resolve();
+    const write = previousWrite.then(async () => {
+      for (const message of pending) {
+        await saveWorkspaceChatMessage(sessionId, ownerId, message);
+        unsavedChatMessages.current.get(sessionId)?.delete(message.id);
+      }
+    }).catch(() => {
+      setChatHistoryErrors(previous => ({ ...previous, [sessionId]: '对话记录仍未保存，请稍后重试。' }));
+    });
+    chatWriteQueues.current.set(sessionId, write);
+    await write;
+    setChatHistoryRefresh(value => value + 1);
+  }
 
   const handlePrdAgentProgress = useCallback((progress: PrdAgentProgress | null) => {
     if (prdProgressClearTimerRef.current !== null) {
@@ -380,12 +480,20 @@ export function ApiWorkspace() {
     }
     setPrdAgentProgress(progress);
     if (['completed', 'failed', 'cancelled'].includes(progress.status)) {
+      const messageId = `prd-run-${progress.runId}-${progress.status}`;
+      if (activeSessionId && !recordedPrdRuns.current.has(messageId)) {
+        recordedPrdRuns.current.add(messageId);
+        appendChatMessage(activeSessionId, 'agent',
+          progress.status === 'completed' ? `${progress.title}已完成`
+            : progress.status === 'failed' ? `${progress.title}失败` : `${progress.title}已取消`,
+          progress.detail, messageId);
+      }
       prdProgressClearTimerRef.current = window.setTimeout(() => {
         setPrdAgentProgress(null);
         prdProgressClearTimerRef.current = null;
       }, 8_000);
     }
-  }, []);
+  }, [activeSessionId, appendChatMessage]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -513,6 +621,7 @@ export function ApiWorkspace() {
     chatTool,
     prdAgentProgress?.detail,
     prdAgentProgress?.stage,
+    prdAgentProgress?.activitySteps,
     state?.phase,
     visibleChatMessages.length,
     workflowProgress,
@@ -1290,8 +1399,13 @@ export function ApiWorkspace() {
     }
   }
 
-  async function runGlobalInstruction(message: string) {
+  async function runGlobalInstruction(message: string, imageIds: string[] = []) {
     const normalized = message.trim().replace(/[。！!？?，,]/g, '').toLowerCase();
+    if (imageIds.length && /(?:代码|源文件|前端页面|后端接口|后端服务|数据库表|迁移脚本|看板|工单|Agent\s*Spec|顶层图|任务流转图|审计记录)/i.test(message)
+      && !/(?:\bPRD\b|产品需求文档|当前文档|文档里)/i.test(message)) {
+      appendChatMessage(state?.session_id ?? null, 'agent', '截图已保存到对话记录。当前截图定位支持 PRD 文章；若要修改其他页面，请在指令中直接说明目标。');
+      return;
+    }
     const navigation: Array<{ phrases: string[]; tab: Exclude<WorkspaceTab, 'prd'>; reply: string }> = [
       { phrases: ['打开dashboard', '打开仪表盘', '查看总览', '首页', '仪表盘'], tab: 'dashboard', reply: '已打开个人 Dashboard。' },
       { phrases: ['打开顶层图', '查看顶层图', '顶层图'], tab: 'topLevel', reply: '已打开当前任务的 SDLC 顶层图。' },
@@ -1352,8 +1466,34 @@ export function ApiWorkspace() {
       return;
     }
 
-    if (state.legal_actions.includes('message')) {
-      await runAction('message', message);
+    if (activeTab === 'prd' && ['修订prd', '生成修订版'].includes(normalized)) {
+      appendChatMessage(state.session_id, 'agent', '请说明要修改的 PRD 章节和具体要求，例如“把项目目标部分补充量化指标”。');
+      return;
+    }
+    if (activeTab === 'prd' && (isPrdRevisionInstruction(message, true) || imageIds.length > 0)) {
+      setBusy(true);
+      setError(null);
+      setWorkflowProgress(imageIds.length ? '正在用 Codex 识别截图并定位 PRD 段落…'
+        : /所有|全部|批量|统一/.test(message) && /替换|改为|改成|换成/.test(message)
+          ? '正在识别批量规则并列出命中与例外…'
+          : /图片|插画|插图|配图/.test(message)
+            ? '正在生成配图并准备修改预览…'
+            : '正在定位 PRD 目标并规划修改…');
+      try {
+        if (!prdEditorRef.current) throw new Error('PRD 编辑器正在打开，请稍后重试。');
+        const screenshot = imageIds.length ? await locateWorkspaceChatImage(state.session_id, imageIds[0], ownerId) : undefined;
+        if (screenshot) setWorkflowProgress('已识别截图，正在核对原文并提交修改…');
+        const title = await prdEditorRef.current.requestRevision(message, screenshot);
+        appendChatMessage(state.session_id, 'agent', /\[prd-(?:action|job):/.test(title) || title.startsWith('已打开') ? title : title.startsWith('待确认：')
+          ? `${title}。请在右侧查看影响范围并应用选中的修改。`
+          : `已将修改指令交给「${title}」章节的 Agent。`,
+          /\[prd-(?:action|job):/.test(title) ? '可从本条消息打开保存结果；生成中的候选会在完成后供你预览，正文不会自动应用。' : title.startsWith('待确认：') ? '请检查右侧预览；确认后这次指令的改动会合并为一个全文版本。' : '生成进度与结果会显示在右侧 PRD；如有未保存输入，先保存再修改。');
+      } catch (reason) {
+        appendChatMessage(state.session_id, 'agent', '这条 PRD 修改指令未能执行', errorText(reason));
+      } finally {
+        setWorkflowProgress(null);
+        setBusy(false);
+      }
       return;
     }
 
@@ -1381,6 +1521,21 @@ export function ApiWorkspace() {
       return;
     }
 
+    if (state.legal_actions.includes('message')) {
+      await runAction('message', message);
+      return;
+    }
+
+    if (activeTab === 'prd' && ['NEED_CLARIFICATION', 'SPECIFICATION', 'REVIEW'].includes(state.phase) && !requestedAction) {
+      appendChatMessage(
+        state.session_id,
+        'agent',
+        '当前 PRD 已打开，请直接说明要修改的章节、段落或图表；也可以先在右侧选中内容，再描述修改要求。',
+        '如果目标是其他页面或项目资源，请在指令中写明目标与操作。',
+      );
+      return;
+    }
+
     const legalLabels = state.legal_actions
       .filter((action) => action !== 'message' && action !== 'restore_spec_version')
       .map((action) => actionLabels[action]);
@@ -1398,11 +1553,51 @@ export function ApiWorkspace() {
     event.preventDefault();
     const message = chatDraft.trim();
     if (!message || busy || projectsLoading || health !== 'ok') return;
-    appendChatMessage(state?.session_id ?? null, 'user', message);
+    if (chatImages.length && (!state || activeTab !== 'prd')) {
+      setError('请先打开已有项目的 PRD，再发送截图修改指令。');
+      return;
+    }
+    let imageIds: string[] = [];
+    if (chatImages.length && state) {
+      setBusy(true);
+      setWorkflowProgress('正在上传 PRD 截图…');
+      try {
+        for (const image of chatImages) {
+          const uploaded = await uploadWorkspaceChatImage(state.session_id, ownerId, image.file.type, await fileAsBase64(image.file));
+          imageIds.push(uploaded.id);
+        }
+      } catch (reason) {
+        setError(errorText(reason));
+        setBusy(false);
+        setWorkflowProgress(null);
+        return;
+      }
+      setBusy(false);
+      setWorkflowProgress(null);
+    }
+    appendChatMessage(state?.session_id ?? null, 'user', message, undefined, undefined, imageIds);
     setChatDraft('');
+    setChatImages([]);
     setChatMenuOpen(false);
     setAgentBackendMenuOpen(false);
-    await runGlobalInstruction(message);
+    await runGlobalInstruction(message, imageIds);
+  }
+
+  async function addChatImages(files: File[]) {
+    const allowed = files.filter(file => ['image/png', 'image/jpeg', 'image/webp'].includes(file.type));
+    if (allowed.length !== files.length || allowed.some(file => file.size > 5 * 1024 * 1024)) {
+      setError('仅支持单张不超过 5 MB 的 PNG、JPEG 或 WebP 截图。');
+      return;
+    }
+    if (chatImages.length + allowed.length > 1) {
+      setError('一次修改请只贴一张截图，以便准确定位段落。');
+      return;
+    }
+    const previews = await Promise.all(allowed.map(async file => ({
+      file, preview: `data:${file.type};base64,${await fileAsBase64(file)}`,
+    })));
+    setChatImages(previous => [...previous, ...previews]);
+    setError(null);
   }
 
   async function chooseAgentBackend(provider: AgentBackendName) {
@@ -1505,6 +1700,23 @@ export function ApiWorkspace() {
     }
   }
 
+  async function createPrdPresentation(audience: PrdPresentationAudience) {
+    if (!state?.current_spec_version_id) {
+      setPrototypeNotice({ tone: 'warn', text: '请先在 PRD 页提交并冻结当前版本。' });
+      return;
+    }
+    setPresentationBusy(true);
+    setPrototypeNotice({ tone: 'info', text: audience === 'team' ? '正在制作团队讲解 PPT…' : '正在制作对外介绍 PPT…' });
+    try {
+      await generateAndDownloadPrdPresentation(state.session_id, ownerId, audience, state.current_spec_version_id);
+      setPrototypeNotice({ tone: 'info', text: '可编辑 PPTX 已下载；相同的冻结版本再次点击会直接下载。' });
+    } catch (reason) {
+      setPrototypeNotice({ tone: 'error', text: `PPT 生成失败：${errorText(reason)}` });
+    } finally {
+      setPresentationBusy(false);
+    }
+  }
+
   function switchConversation(sessionId: string | null) {
     const wasObservingDecomposition = commandObservations.current.size > 0;
     decompositionLifecycles.current.forEach((controller) => controller.abort());
@@ -1525,6 +1737,8 @@ export function ApiWorkspace() {
     setAgentBackendMenuOpen(false);
     setPrdAgentProgress(null);
     setPrototypeNotice(null);
+    setPrdChatContext(null);
+    setPrdEditReceipt(null);
     setError(null);
   }
 
@@ -1677,6 +1891,8 @@ export function ApiWorkspace() {
           </div>
 
           <div ref={chatScrollRef} className="ff-chat-scroll" role="log" aria-label="Agent 对话与工作记录">
+            {activeSessionId && !chatHistoryLoaded[activeSessionId] && <p className="ff-chat-history-note">正在加载对话记录…</p>}
+            {activeSessionId && chatHistoryErrors[activeSessionId] && <p className="ff-chat-history-note" role="alert">{chatHistoryErrors[activeSessionId]} <button type="button" onClick={() => void retryChatHistory()}>重试</button></p>}
             {visibleChatMessages.length === 0 && !state && (
               <div className="ff-message ff-message-agent">
                 <span className="ff-avatar">PM</span>
@@ -1695,15 +1911,19 @@ export function ApiWorkspace() {
                 <div className="ff-message-content">
                   <p className="ff-message-meta">{message.role === 'agent' ? 'Project Orchestrator Agent' : 'Project Owner'} · {displayTime(message.createdAt)}</p>
                   <div className="ff-message-bubble">
-                    <strong>{message.body}</strong>
+                    <strong>{message.body.replace(/\n\[prd-(?:action|job):[^\]]+\]/g, '')}</strong>
+                    {activeTab === 'prd' && message.role === 'agent' && /\[prd-action:([^\]]+)\]/.test(message.body) && <button type="button" onClick={() => prdEditorRef.current?.openSavedAction(message.body.match(/\[prd-action:([^\]]+)\]/)![1])}>打开此操作的保存结果</button>}
+                    {activeTab === 'prd' && message.role === 'agent' && (/\[prd-job:/.test(message.body) || message.id.startsWith('prd-run-prdjob_')) && <button type="button" onClick={() => prdEditorRef.current?.openTasks()}>定位候选任务与预览</button>}
                     {message.detail && <p>{message.detail}</p>}
+                    {activeSessionId && message.image_ids?.map(imageId =>
+                      <ChatMessageImage key={imageId} sessionId={activeSessionId} imageId={imageId} actorId={ownerId} />)}
                   </div>
                 </div>
                 {message.role === 'user' && <span className="ff-avatar ff-avatar-user">U</span>}
               </div>
             ))}
 
-            {state && visibleChatMessages.length === 0 && (
+            {state && chatHistoryLoaded[activeSessionId ?? ''] && visibleChatMessages.length === 0 && (
               <div className="ff-message ff-message-user">
                 <div className="ff-message-content">
                   <p className="ff-message-meta">Project Owner</p>
@@ -1767,6 +1987,10 @@ export function ApiWorkspace() {
                     <p>{prdAgentProgress.currentBlockTitle
                       ? `${prdProgressActive ? '我正在处理' : '刚刚处理了'}「${prdAgentProgress.currentBlockTitle}」。${prdAgentProgress.detail}`
                       : prdAgentProgress.detail}</p>
+                    {typeof prdAgentProgress.elapsedSeconds === 'number' && <small>已记录耗时 {prdAgentProgress.elapsedSeconds.toFixed(1)} 秒</small>}
+                    {prdProgressActive && Boolean(prdAgentProgress.activitySteps?.length) && <ol className="ff-prd-activity-steps" aria-label="Agent 当前处理步骤">
+                      {prdAgentProgress.activitySteps?.map((step, index, steps) => <li key={`${index}:${step}`} className={index === steps.length - 1 ? 'is-current' : ''}>{step}</li>)}
+                    </ol>}
                     {prdProgressActive && prdAgentProgress.activityText && <div className="ff-prd-token-stream" role="status" aria-label={`实时处理流：${prdAgentProgress.activityText}`}>
                       <span key={prdAgentProgress.activityText} aria-hidden="true">{prdAgentProgress.activityText}<i>　·　</i>{prdAgentProgress.activityText}</span>
                     </div>}
@@ -1916,6 +2140,35 @@ export function ApiWorkspace() {
           </div>
 
           <footer className="ff-chat-composer">
+            {chatImages.length > 0 && <div className="ff-chat-attachments" aria-label="待发送截图">
+              {chatImages.map((image, index) => <div key={`${image.file.name}:${index}`} className="ff-chat-attachment">
+                <img src={image.preview} alt="待发送的 PRD 截图预览" />
+                <button type="button" aria-label="移除截图" onClick={() => setChatImages(previous => previous.filter((_, position) => position !== index))}><X size={14} /></button>
+              </div>)}
+            </div>}
+            {activeTab === 'prd' && prdChatContext && <section className="ff-prd-chat-context" aria-label="当前 PRD 操作目标">
+              <strong>{prdChatContext.title}{prdChatContext.version ? ` · v${prdChatContext.version}` : ''}</strong>
+              <label>当前章节<select aria-label="选择 Agent 修改目标" value={prdChatContext.selectedId} onChange={event => prdEditorRef.current?.focusChapter(event.target.value)}>
+                {prdChatContext.chapters.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
+              </select></label>
+              <small>{prdChatContext.selection ? `已选：${prdChatContext.selection}` : '默认修改当前章节；指令中可指定其他位置。'}</small>
+              {prdChatContext.discussion && <div aria-label="持续讨论对象"><strong>{prdChatContext.discussion.pinned ? '已固定 · ' : '讨论中 · '}{prdChatContext.discussion.label}</strong>
+                <small>来源章节版本 {prdChatContext.discussion.version} · 本机保留</small>
+                {prdChatContext.discussion.issue && <p role="alert">{prdChatContext.discussion.issue}</p>}
+                <button type="button" onClick={() => prdEditorRef.current?.updateDiscussion('pin')}>{prdChatContext.discussion.pinned ? '取消固定' : '固定对象'}</button>
+                <button type="button" onClick={() => prdEditorRef.current?.updateDiscussion('clear')}>移除对象与约束</button>
+              </div>}
+              <label>本对象的编辑约束<input maxLength={800} placeholder="例如：不改金额，保留业务编号" value={prdChatContext.discussion?.constraints ?? ''} onChange={e => prdEditorRef.current?.updateDiscussion('constraints', e.target.value)} /></label>
+              <button type="button" onClick={() => prdEditorRef.current?.chooseObject()}>选择表格单元格 / 图中对象</button>
+            </section>}
+            {activeTab === 'prd' && prdEditReceipt && <section className="ff-prd-chat-context" aria-label="PRD 修改回执">
+              <strong>{prdEditReceipt.version ? `已保存 v${prdEditReceipt.version}` : '修改已保存'} · 待手动审核</strong>
+              <div>{prdEditReceipt.chapters.map(item => <button key={item.id} type="button" onClick={() => prdEditorRef.current?.focusChapter(item.id)}>{item.title}</button>)}</div>
+              {prdEditReceipt.skipped > 0 && <small>未应用 {prdEditReceipt.skipped} 项操作</small>}
+              <button type="button" onClick={() => setPrdEditReceipt(null)}>收起回执</button>
+            </section>}
+            <RecoveryNotice recovery={chatRecovery} onRestore={v => setChatDraft(v.text)} />
+            {activeTab === 'prd' && <button type="button" onClick={() => prdEditorRef.current?.openTasks()}>查看 PRD 候选任务 / 打开保存的预览</button>}
             <form onSubmit={submitChat} className="ff-stream-composer">
               <div className="ff-chat-menu-wrap">
                 <button type="button" className={`ff-chat-menu-button ${chatMenuOpen ? 'is-open' : ''}`} onClick={() => setChatMenuOpen((open) => !open)} aria-label="展开常用功能" aria-expanded={chatMenuOpen}>
@@ -1935,15 +2188,32 @@ export function ApiWorkspace() {
                 value={chatDraft}
                 disabled={busy || health !== 'ok'}
                 onChange={(event) => setChatDraft(event.target.value)}
+                onPaste={(event) => {
+                  const files = Array.from(event.clipboardData.items)
+                    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+                    .map(item => item.getAsFile()).filter((file): file is File => Boolean(file));
+                  if (files.length) { event.preventDefault(); void addChatImages(files); }
+                }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault();
                     event.currentTarget.form?.requestSubmit();
                   }
                 }}
-                placeholder={state ? '输入全局指令、澄清答案或页面命令…' : '直接描述新项目，或从左侧菜单打开完整表单…'}
+                placeholder={state ? activeTab === 'prd'
+                  ? '例如：把项目目标部分补充验收标准；也可下达其他项目指令…'
+                  : '输入全局指令、澄清答案或页面命令…'
+                  : '直接描述新项目，或从左侧菜单打开完整表单…'}
                 rows={1}
               />
+              <button type="button" className="ff-chat-image-button" aria-label="添加 PRD 截图" title="添加 PRD 截图" disabled={busy || health !== 'ok'} onClick={() => chatImageInputRef.current?.click()}>
+                <ImagePlus size={17} aria-hidden="true" />
+              </button>
+              <input ref={chatImageInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy || health !== 'ok'} onChange={event => {
+                  const files = Array.from(event.target.files ?? []);
+                  event.target.value = '';
+                  if (files.length) void addChatImages(files);
+                }} />
               <div className="ff-agent-backend-picker">
                 <button
                   type="button"
@@ -2057,6 +2327,11 @@ export function ApiWorkspace() {
               embedded
               onClose={() => setActiveTab('topLevel')}
               onAgentProgress={handlePrdAgentProgress}
+              onChatContext={setPrdChatContext}
+              onChatEditApplied={(summary: string, receipt?: PrdEditReceipt) => {
+                setPrdEditReceipt(receipt ?? null);
+                appendChatMessage(state.session_id, 'agent', `已应用修改：${summary}${receipt?.version ? `\n全文版本 v${receipt.version}` : ''}${receipt?.chapters.length ? `\n修改位置：${receipt.chapters.map(item => item.title).join('、')}` : ''}${receipt?.skipped ? `\n未应用 ${receipt.skipped} 项操作` : ''}`, '已保存为新版本，等待手动审核。');
+              }}
             />
           </Suspense>
         </section>}
@@ -2119,6 +2394,12 @@ export function ApiWorkspace() {
               {prototypeBusy
                 ? <Loader2 className="ff-spin" aria-hidden="true" />
                 : <ExternalLink aria-hidden="true" />}查看原型
+            </button>
+            <button type="button" className="ff-secondary-button" disabled={!state?.current_spec_version_id || presentationBusy} onClick={() => void createPrdPresentation('team')} title="基于已冻结 PRD 制作团队讲解版 PPT">
+              {presentationBusy ? <Loader2 className="ff-spin" aria-hidden="true" /> : <Presentation aria-hidden="true" />}团队 PPT
+            </button>
+            <button type="button" className="ff-secondary-button" disabled={!state?.current_spec_version_id || presentationBusy} onClick={() => void createPrdPresentation('external')} title="基于已冻结 PRD 制作对外介绍版 PPT">
+              <Presentation aria-hidden="true" />对外 PPT
             </button>
             <button onClick={() => void refreshAllProjects()} disabled={busy || projectsLoading} className="ff-secondary-button">
               <RefreshCw className={projectsLoading ? 'ff-spin' : ''} aria-hidden="true" />刷新

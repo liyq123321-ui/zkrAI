@@ -86,7 +86,7 @@ class HttpJsonAdapter(BaseAdapter):
         if options.get("async") and task_id_field:
             payload = await self._poll_task(skill, url, payload)
 
-        return self._to_result(skill, payload)
+        return await self._to_result(skill, payload)
 
     # --- internals ------------------------------------------------------------
     def _build_body(self, skill: SkillSpec, args: Mapping[str, Any]) -> dict[str, Any]:
@@ -154,16 +154,17 @@ class HttpJsonAdapter(BaseAdapter):
             data={"skill": skill.id, "stage": "poll"},
         )
 
-    def _to_result(self, skill: SkillSpec, payload: Any) -> ToolResult:
+    async def _to_result(self, skill: SkillSpec, payload: Any) -> ToolResult:
         options = skill.options or {}
         result_field = options.get("result_field")
         result = get_path(payload, str(result_field)) if result_field else payload
         if result is None:
             result = payload
+        image_result = next((item for item in result if isinstance(item, Mapping)), result) if isinstance(result, list) else result
 
         image_field = options.get("image_field")
         if image_field:
-            data = get_path(result, str(image_field))
+            data = get_path(image_result, str(image_field))
             if isinstance(data, str) and data:
                 return ToolResult(
                     content=[image_content(data, self._mime(skill, options))]
@@ -171,9 +172,9 @@ class HttpJsonAdapter(BaseAdapter):
 
         url_field = options.get("image_url_field")
         if url_field:
-            url = get_path(result, str(url_field))
+            url = get_path(image_result, str(url_field))
             if isinstance(url, str) and url.startswith("http"):
-                return self._url_to_image(skill, url)
+                return await self._url_to_image(skill, url)
 
         if isinstance(result, str):
             return ToolResult(content=[text_content(result)])

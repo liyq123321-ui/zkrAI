@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from app.mcp_gateway.adapters.base import BaseAdapter, ToolResult, text_content
 from app.mcp_gateway.config import SkillSpec
 from app.mcp_gateway.errors import McpError, SKILL_NOT_FOUND
+from app.mcp_gateway.routing import decide_route
 
 
 class BuiltinAdapter(BaseAdapter):
@@ -20,6 +21,9 @@ class BuiltinAdapter(BaseAdapter):
             return ToolResult(content=[text_content(self._ping(args, agent))])
         if skill.id == "gateway_whoami":
             return ToolResult(content=[text_content(self._whoami(agent))])
+        if skill.id == "route_capability":
+            decision = decide_route(self.ctx.config, args)
+            return ToolResult(content=[text_content(json.dumps(decision, ensure_ascii=False))])
         raise McpError(SKILL_NOT_FOUND, f"内置工具 '{skill.id}' 未实现。")
 
     def _ping(self, args: Mapping[str, Any], agent: Any) -> str:

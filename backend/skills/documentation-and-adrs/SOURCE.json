@@ -1,0 +1,12 @@
+{
+  "name": "documentation-and-adrs",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "path": "skills/documentation-and-adrs",
+  "git_tree": "eeff83d93dd39454d0b9d193ba3ea5c85f681530",
+  "tree_sha256": "3c0ee6aa372c4df1c0df9d947920c003140909ca1e6a33b76daa0b67514ad02a",
+  "scenarios": [
+    9,
+    17
+  ]
+}

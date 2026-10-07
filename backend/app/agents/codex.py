@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 import shutil
@@ -41,6 +42,9 @@ NODE_PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts" / "nodes"
 SKILL_PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts" / "skills"
 BUNDLED_SKILL_ROOT = Path(__file__).resolve().parents[2] / "skills"
 PRD_DRAWIO_NODES = frozenset({"pm_generate_spec", "pm_rewrite_prd"})
+SPEC_BREAKDOWN_NODES = frozenset({
+    "pm_decompose", "pm_revise_breakdown", "pm_plan_task", "reviewer_breakdown",
+})
 NODE_SKILL_PROFILES: dict[str, tuple[str, ...]] = {
     "pm_analyze": ("prd-critique", "requirement-registry", "prd-consistency"),
     "pm_generate_spec": (
@@ -82,12 +86,25 @@ _BUNDLED_SKILL_TEXT_SUFFIXES = frozenset({
     ".yml",
 })
 _TRUSTED_BUNDLED_SKILLS = frozenset({
+    "chart-visualization",
     "create-prd",
     "deliver-acceptance-criteria",
+    "design-system",
+    "diagram-design",
+    "documentation-and-adrs",
     "drawio-skill",
+    "frontend-ui-engineering",
+    "git-workflow-and-versioning",
+    "mermaid-skill",
+    "observability-and-instrumentation",
+    "officecli-skill",
+    "ooxml-edit-skill",
+    "planning-and-task-breakdown",
+    "ppt-generation",
     "prd-consistency-skill",
     "prd-critique",
     "requirement-registry-skill",
+    "spec-driven-development",
     "traceability-skill",
 })
 
@@ -120,12 +137,15 @@ def _bundled_skill_digest(source: Path) -> str:
     """Hash sorted paths and canonical text bytes using the checked-in format."""
 
     entries: list[str] = []
+    if source.is_symlink():
+        raise AgentExecutionError("bundled skill integrity check failed")
+    candidates = list(source.rglob("*"))
+    if any(candidate.is_symlink() for candidate in candidates):
+        raise AgentExecutionError("bundled skill integrity check failed")
     for path in sorted(
-        (candidate for candidate in source.rglob("*") if candidate.is_file()),
+        (candidate for candidate in candidates if candidate.is_file()),
         key=lambda candidate: candidate.relative_to(source).as_posix(),
     ):
-        if path.is_symlink():
-            raise AgentExecutionError("bundled skill integrity check failed")
         relative = path.relative_to(source).as_posix()
         digest = hashlib.sha256(_bundled_skill_file_bytes(path)).hexdigest()
         entries.append(f"{digest}  ./{relative}\n")
@@ -146,7 +166,7 @@ def install_bundled_skills(runtime_home: Path, names: tuple[str, ...]) -> None:
             expected = str(manifest["tree_sha256"])
         except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
             raise AgentExecutionError("bundled skill integrity check failed") from error
-        if not source.is_dir() or _bundled_skill_digest(source) != expected:
+        if manifest.get("name") != name or not source.is_dir() or _bundled_skill_digest(source) != expected:
             raise AgentExecutionError("bundled skill integrity check failed")
         destination.mkdir(exist_ok=True)
         shutil.copytree(source, destination / name)
@@ -222,6 +242,7 @@ class CodexStructuredRunner:
         *, validate_output: Callable[[ModelT], None] | None = None,
         bundled_skills: tuple[str, ...] = (),
         use_magic_mcp: bool = False,
+        image_paths: tuple[Path, ...] = (),
     ) -> ModelT:
         repair_prompt = prompt
         last_error: ValidationError | OutputConsistencyError | None = None
@@ -241,6 +262,7 @@ class CodexStructuredRunner:
                     cwd,
                     bundled_skills=bundled_skills,
                     use_magic_mcp=use_magic_mcp,
+                    image_paths=image_paths,
                 )
                 result = output_type.model_validate_json(output)
                 if validate_output is not None:
@@ -304,6 +326,7 @@ class CodexStructuredRunner:
         *,
         bundled_skills: tuple[str, ...] = (),
         use_magic_mcp: bool = False,
+        image_paths: tuple[Path, ...] = (),
     ) -> str:
         with tempfile.TemporaryDirectory(prefix="codex-structured-") as directory:
             temp_dir = Path(directory)
@@ -315,6 +338,11 @@ class CodexStructuredRunner:
             if source_auth.is_file():
                 shutil.copy2(source_auth, runtime_home / "auth.json")
             install_bundled_skills(runtime_home, bundled_skills)
+            if bundled_skills:
+                report_agent_progress(
+                    "skills_selected",
+                    "本轮调用 Skills：" + "、".join(bundled_skills),
+                )
             schema_path = temp_dir / "output-schema.json"
             output_path = temp_dir / "output.json"
             schema_path.write_text(
@@ -370,12 +398,16 @@ class CodexStructuredRunner:
                 str(schema_path),
                 "--output-last-message",
                 str(output_path),
+                *[part for path in image_paths for part in ("--image", str(path))],
                 "--cd",
                 str(workspace_dir),
                 "-",
             ]
             env = os.environ.copy()
             env["CODEX_HOME"] = str(runtime_home)
+            if os.name == "nt" and "officecli-skill" in bundled_skills:
+                officecli_dir = runtime_home / "skills" / "officecli-skill"
+                env["PATH"] = str(officecli_dir) + os.pathsep + env.get("PATH", "")
             try:
                 process = await asyncio.create_subprocess_exec(
                     *command,
@@ -569,6 +601,29 @@ class CodexStructuredRunner:
         event_type = event.get("type") if isinstance(event, dict) else None
         if isinstance(event, dict):
             self._persist_runtime_event(event)
+        if event_type in ("item.started", "item.completed"):
+            item = event.get("item")
+            command = item.get("command") if isinstance(item, dict) else None
+            if not isinstance(command, str) and isinstance(item, dict):
+                arguments = item.get("arguments")
+                if isinstance(arguments, dict):
+                    command = arguments.get("command") or arguments.get("cmd")
+            if isinstance(command, str):
+                names = dict.fromkeys(name.lower() for name in re.findall(
+                    r"skills[\\/]([a-z0-9-]+)[\\/]SKILL\.md", command, re.I
+                ))
+                for name in names:
+                    if name in _TRUSTED_BUNDLED_SKILLS:
+                        failed = event_type == "item.completed" and (
+                            item.get("exit_code") not in (None, 0) or item.get("status") == "failed"
+                        )
+                        report_agent_progress(
+                            ("skill_active" if event_type == "item.started"
+                             else "skill_failed" if failed else "skill_completed"),
+                            (f"正在调用 {name}：读取 Skill 规则…" if event_type == "item.started"
+                             else f"读取 {name} 未成功，Agent 正在处理…" if failed
+                             else f"已读取 {name}，正在应用规则…"),
+                        )
         progress = {
             "thread.started": ("model_started", "模型任务已连接。"),
             "turn.started": ("model_reasoning", "模型正在生成结构化结果。"),
@@ -701,9 +756,18 @@ class CodexAgentGateway:
         elif node_name in {"pm_decompose", "pm_revise_breakdown", "pm_plan_task", "reviewer_breakdown"}:
             objective += "\n\n" + (NODE_PROMPT_DIR / "task_implementation_rules.txt").read_text(encoding="utf-8")
         prompt = build_node_prompt(objective=objective, input_payload=payload)
-        bundled_skills = (
-            ("drawio-skill",) if node_name in PRD_DRAWIO_NODES else ()
-        )
+        if node_name in PRD_DRAWIO_NODES:
+            bundled_skills = ("drawio-skill",)
+        elif node_name in SPEC_BREAKDOWN_NODES:
+            bundled_skills = ("planning-and-task-breakdown",)
+        else:
+            bundled_skills = ()
+        if node_name in SPEC_BREAKDOWN_NODES:
+            prompt += (
+                "\nUse $planning-and-task-breakdown to check task boundaries and dependencies. "
+                "The approved Spec and supplied SDLC rules take precedence over generic examples "
+                "in that Skill; do not infer approvals, phases, or schedule facts.\n"
+            )
         use_magic_mcp = node_name == "pm_generate_prototype" and not direct_prototype
         operation_by_node = {
             "pm_recommend_lifecycle": "recommend_lifecycle",

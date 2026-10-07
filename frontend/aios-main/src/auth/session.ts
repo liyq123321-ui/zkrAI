@@ -74,6 +74,7 @@ export function setSession(token: string, user: SessionUser): void {
 }
 
 export function clearSession(): void {
+  for (const key of Object.keys(localStorage)) if ((key.startsWith('ff-prd-recovery:') || key.startsWith('ff-prd-submit:') || key.startsWith('ff-prd-context:'))) localStorage.removeItem(key);
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
 }

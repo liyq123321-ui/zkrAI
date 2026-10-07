@@ -1,0 +1,10 @@
+{
+  "name": "diagram-design",
+  "version": "2.6.46",
+  "source": "https://github.com/cathrynlavery/diagram-design",
+  "source_path": "skills/diagram-design",
+  "commit": "57148ac6f7cf8f2d0080f23437ab2929bca15f3e",
+  "source_tree": "e2dbbff94504513faa9cf558fc4e4927a61b477e",
+  "license": "MIT",
+  "tree_sha256": "aedd1e55838e3c3ce446733fd3340d792745fd9a0cf45090ba3389fc31016825"
+}

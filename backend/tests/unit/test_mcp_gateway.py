@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import pytest
 from fastapi import FastAPI
@@ -76,6 +77,22 @@ def test_tools_list_is_filtered_per_agent(client):
     assert worker_tools == {"gateway_ping"}
     assert "generate_image" not in prd_tools
     assert "search_knowledge" in prd_tools
+
+
+def test_route_capability_is_authorized_and_uses_invocation_metadata(client):
+    arguments = {
+        "capability": "review-release",
+        "resource_scope": "local_repo",
+        "credential_class": "none",
+        "compute_class": "light",
+        "governance": "approval",
+        "latency_sensitivity": "normal",
+        "control_type": "worker",
+    }
+    body = rpc(client, "tools/call", {"name": "route_capability", "arguments": arguments}).json()
+    assert json.loads(body["result"]["content"][0]["text"])["route"] == "ORCH"
+    denied = rpc(client, "tools/call", {"name": "route_capability", "arguments": arguments}, token=WORKER).json()
+    assert denied["error"]["code"] == -32001
 
 
 def test_unauthorized_tool_call_returns_32001(client):

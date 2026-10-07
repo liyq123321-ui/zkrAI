@@ -1,0 +1,26 @@
+.prd-workbench { width: min(1180px, 96vw); height: min(880px, 94vh); display: flex; flex-direction: column; background: #f8fbfa; border: 1px solid #cbded8; border-radius: 18px; box-shadow: 0 24px 90px #16372c30; overflow: hidden; color: #223d35; }
+.prd-workbench > header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; background: white; }
+.prd-workbench h2 { margin: 0 0 6px; font-size: 20px; }
+.prd-workbench h3 { margin: 0 0 8px; font-size: 15px; }
+.prd-workbench small { display: block; color: #657c73; line-height: 1.7; }
+.prd-workbench > nav { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 22px; border-block: 1px solid #deebe6; }
+.prd-workbench button { border: 1px solid #cbded8; background: white; border-radius: 7px; padding: 7px 10px; cursor: pointer; color: #215c45; }
+.prd-workbench button[aria-pressed=true] { background: #167247; color: white; border-color: #167247; }
+.prd-workbench button:disabled { opacity: .5; cursor: default; }
+.prd-workbench main { flex: 1; overflow: auto; padding: 18px 24px 28px; }
+.prd-workbench textarea { display: block; width: 100%; box-sizing: border-box; min-height: 80px; resize: vertical; margin: 10px 0; border: 1px solid #cbded8; border-radius: 8px; padding: 10px; background: white; color: inherit; }
+.prd-workbench select { max-width: 100%; border: 1px solid #cbded8; border-radius: 6px; padding: 7px; margin: 6px; background: white; color: inherit; }
+.prd-workbench-card { background: white; border: 1px solid #d7e5df; border-radius: 10px; padding: 14px; margin: 10px 0; min-width: 0; overflow-wrap: anywhere; }
+.prd-workbench-card.is-affected { border-left: 4px solid #d6a337; background: #fffdf5; }
+.prd-workbench-card p, .prd-workbench-card li { line-height: 1.7; }
+.prd-workbench-card button { margin: 4px 6px 4px 0; }
+.prd-workbench-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.prd-impact-map { display: grid; grid-template-columns: minmax(160px, .6fr) 24px minmax(200px, 1.4fr); gap: 18px; align-items: center; }
+.prd-impact-origin { border-top: 4px solid #188958; }
+.prd-workbench-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; }
+.prd-workbench-actions label { max-width: 100%; }
+.prd-workbench-status { margin: 0; padding: 10px 24px; background: #e7f3ec; }
+.prd-workbench pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 380px; overflow: auto; font-size: 12px; line-height: 1.6; }
+.prd-meeting-preview { background: white; padding: 20px; border: 1px solid #d7e5df; max-height: none !important; }
+.prd-workbench blockquote { border-left: 3px solid #d6a337; padding-left: 10px; margin: 10px 0; }
+@media (max-width: 760px) { .prd-workbench-grid, .prd-impact-map { grid-template-columns: 1fr; } .prd-impact-map > svg { display: none; } .prd-workbench main { padding: 12px; } }

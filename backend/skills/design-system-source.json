@@ -1,0 +1,11 @@
+{
+  "name": "design-system",
+  "version": "unknown",
+  "source": "https://github.com/affaan-m/everything-claude-code",
+  "source_path": "skills/design-system",
+  "commit": "d3b8a3e908904e242ed2dbe66af62cca71131419",
+  "source_tree": "4a894196d13121f98e730522e93444a9bbc31aa6",
+  "license": "MIT",
+  "tree_sha256": "081d3358fbd0cdfb8ef590a14c9f8b3aab56baab3cbe7810000bbcf8e7c239c6",
+  "origin": "ECC"
+}

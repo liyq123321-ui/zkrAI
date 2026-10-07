@@ -1,5 +1,6 @@
 import { apiClient } from './client';
 import { appConfig } from './config';
+import { getToken } from '../auth/session';
 import type {
   AgentBackendName,
   AgentBackendOptionDto,
@@ -108,6 +109,71 @@ export function getSessionState(sessionId: string, signal?: AbortSignal) {
 
 export const listSessions = (signal?: AbortSignal) =>
   apiClient.request<SessionSummaryDto[]>('/sessions', { signal });
+
+export interface WorkspaceChatMessageDto {
+  id: string;
+  role: 'user' | 'agent';
+  body: string;
+  detail?: string | null;
+  image_ids?: string[];
+  createdAt: string;
+}
+
+export interface ChatImageAnchorDto { anchor_text: string; heading: string; visual_context: string }
+
+export const uploadWorkspaceChatImage = (sessionId: string, actorId: string, mimeType: string, contentBase64: string) =>
+  apiClient.request<{ id: string }>(`/sessions/${encodeURIComponent(sessionId)}/chat-images`, {
+    method: 'POST', body: { actor_id: actorId, mime_type: mimeType, content_base64: contentBase64 },
+    timeoutMs: 45_000,
+  });
+
+export const locateWorkspaceChatImage = (sessionId: string, imageId: string, actorId: string) =>
+  apiClient.request<ChatImageAnchorDto>(`/sessions/${encodeURIComponent(sessionId)}/chat-images/${encodeURIComponent(imageId)}/locate?actor_id=${encodeURIComponent(actorId)}`, {
+    method: 'POST', timeoutMs: 180_000,
+  });
+
+export async function loadWorkspaceChatImage(sessionId: string, imageId: string, actorId: string): Promise<string> {
+  const token = getToken();
+  const response = await fetch(`${appConfig.apiBaseUrl}/sessions/${encodeURIComponent(sessionId)}/chat-images/${encodeURIComponent(imageId)}?actor_id=${encodeURIComponent(actorId)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) throw new Error('无法读取对话图片。');
+  return URL.createObjectURL(await response.blob());
+}
+
+export type PrdPresentationAudience = 'team' | 'external';
+
+export async function generateAndDownloadPrdPresentation(
+  sessionId: string, actorId: string, audience: PrdPresentationAudience, expectedSpecId?: string | null,
+): Promise<void> {
+  const path = `/sessions/${encodeURIComponent(sessionId)}/presentations/${audience}`;
+  const query = `?actor_id=${encodeURIComponent(actorId)}${expectedSpecId ? `&expected_spec_id=${encodeURIComponent(expectedSpecId)}` : ''}`;
+  await apiClient.request(path + query, {
+    method: 'POST', timeoutMs: 30 * 60 * 1000,
+  });
+  const token = getToken();
+  const response = await fetch(`${appConfig.apiBaseUrl}${path}/file?actor_id=${encodeURIComponent(actorId)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) throw new Error('PPT 已生成，但下载失败，请重试。');
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `prd-${audience}.pptx`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  globalThis.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+export const listWorkspaceChatMessages = (sessionId: string, actorId: string, signal?: AbortSignal) =>
+  apiClient.request<WorkspaceChatMessageDto[]>(`/sessions/${encodeURIComponent(sessionId)}/chat-messages?actor_id=${encodeURIComponent(actorId)}`, { signal });
+
+export const saveWorkspaceChatMessage = (sessionId: string, actorId: string, message: WorkspaceChatMessageDto) =>
+  apiClient.request<WorkspaceChatMessageDto>(`/sessions/${encodeURIComponent(sessionId)}/chat-messages`, {
+    method: 'POST',
+    body: { ...message, actor_id: actorId },
+  });
 
 export const listAgentRuntime = (sessionId: string, signal?: AbortSignal) =>
   apiClient.request<AgentRuntimeDto[]>(`/sessions/${sessionId}/agents/runtime`, { signal });

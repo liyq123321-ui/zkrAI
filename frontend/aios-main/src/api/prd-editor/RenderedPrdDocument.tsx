@@ -3,6 +3,10 @@ import type { ElementType, ReactElement, ReactNode } from 'react';
 import mermaid from 'mermaid';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { MessageSquareText } from 'lucide-react';
+import { DrawioErDiagram } from '../DrawioErDiagram';
+import { appConfig } from '../config';
+import { documentPath } from './api';
 import type { Block, Comment } from './types';
 import { orderedBlocks } from './univer/blockDocumentAdapter';
 
@@ -67,6 +71,10 @@ function MermaidDiagram({ source, title, cacheKey, streaming = false }: { source
   </figure>;
 }
 
+export function PrdMermaidPreview({ source, title }: { source: string; title: string }) {
+  return <MermaidDiagram source={source} title={title} cacheKey={`preview:${source}`} />;
+}
+
 export interface ReadingSelection {
   blockId: string;
   quote: string;
@@ -113,7 +121,9 @@ interface ReadingHighlight {
   temporary?: boolean;
 }
 
-function decorateText(text: string, highlights: ReadingHighlight[], onOpenComment: (commentId: string, blockId: string) => void) {
+type OpenComment = (commentId: string, blockId: string, anchor?: { x: number; y: number }) => void;
+
+function decorateText(text: string, highlights: ReadingHighlight[], onOpenComment: OpenComment) {
   const result: ReactNode[] = [];
   const used = new Set<string>();
   let cursor = 0;
@@ -131,18 +141,25 @@ function decorateText(text: string, highlights: ReadingHighlight[], onOpenCommen
       continue;
     }
     const open = () => onOpenComment(next.highlight.commentId, next.highlight.blockId);
-    const common = { key: `${next.highlight.commentId}-${next.index}`, tabIndex: 0, role: 'link', title: '查看批注', onClick: open,
+    const common = { tabIndex: 0, role: 'link', title: '查看批注', onClick: open,
       onKeyDown: (event: React.KeyboardEvent) => { if (event.key === 'Enter' || event.key === ' ') open(); } };
-    result.push(next.highlight.action === 'delete'
-      ? <del {...common} className="prd-inline-annotation is-delete">{text.slice(next.index, end)}</del>
-      : <mark {...common} className="prd-inline-annotation is-comment">{text.slice(next.index, end)}</mark>);
+    result.push(<span key={`${next.highlight.commentId}-${next.index}`} className="prd-annotated-inline">
+      {next.highlight.action === 'delete'
+        ? <del {...common} className="prd-inline-annotation is-delete">{text.slice(next.index, end)}</del>
+        : <mark {...common} className="prd-inline-annotation is-comment">{text.slice(next.index, end)}</mark>}
+      <button type="button" className="prd-inline-comment-button" aria-label="查看这条批注" title="查看这条批注" onMouseDown={event => event.preventDefault()} onClick={event => {
+        event.stopPropagation();
+        const rect = event.currentTarget.getBoundingClientRect();
+        onOpenComment(next.highlight.commentId, next.highlight.blockId, { x: rect.right, y: rect.top });
+      }}><MessageSquareText size={14} aria-hidden="true" /></button>
+    </span>);
     used.add(next.highlight.commentId);
     cursor = end;
   }
   return result;
 }
 
-function decorateChildren(children: ReactNode, highlights: ReadingHighlight[], onOpenComment: (commentId: string, blockId: string) => void): ReactNode {
+function decorateChildren(children: ReactNode, highlights: ReadingHighlight[], onOpenComment: OpenComment): ReactNode {
   if (typeof children === 'string') return decorateText(children, highlights, onOpenComment);
   if (Array.isArray(children)) return Children.map(children, child => decorateChildren(child, highlights, onOpenComment));
   if (!isValidElement(children)) return children;
@@ -153,7 +170,7 @@ function decorateChildren(children: ReactNode, highlights: ReadingHighlight[], o
 
 interface MarkdownBodyProps {
   block: Block; streaming: boolean; highlights: ReadingHighlight[];
-  onOpenComment: (commentId: string, blockId: string) => void;
+  onOpenComment: OpenComment;
 }
 
 function sameHighlights(left: ReadingHighlight[], right: ReadingHighlight[]) {
@@ -168,8 +185,12 @@ function sameHighlights(left: ReadingHighlight[], right: ReadingHighlight[]) {
 const MarkdownBody = memo(function MarkdownBody({ block, streaming, highlights, onOpenComment }: MarkdownBodyProps) {
   const renderedContent = useMemo(() => {
     let diagramNumber = 0;
-    return block.content.replace(/^```mermaid\s*$/gim, () => `\`\`\`mermaid-${++diagramNumber}`);
-  }, [block.content]);
+    return block.content
+      .replace(/^```mermaid\s*$/gim, () => `\`\`\`mermaid-${++diagramNumber}`)
+      .replace(/(!\[[^\]]*\]\()asset:\/\/([A-Za-z0-9_-]+)(\))/g,
+        (_, before: string, assetId: string, after: string) =>
+          `${before}${appConfig.apiBaseUrl}${documentPath(block.document_id)}/assets/${encodeURIComponent(assetId)}${after}`);
+  }, [block.content, block.document_id]);
 
   const forNode = (node: unknown) => {
     const position = (node as { position?: { start?: { line?: number }; end?: { line?: number } } } | undefined)?.position;
@@ -201,15 +222,17 @@ const MarkdownBody = memo(function MarkdownBody({ block, streaming, highlights, 
   && previous.block.content === next.block.content && previous.streaming === next.streaming
   && sameHighlights(previous.highlights, next.highlights));
 
-export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streamingBlockId, streamingLabel = '正在流式写入', reviewSelection, onSelectBlock, onCreateComment, onEditSource, onOpenComment }: {
+export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streamingBlockId, streamingLabel = '正在流式写入', reviewSelection, onSelectBlock, onSelectionChange, onCreateComment, onEditSource, onOpenComment, onChooseObject }: {
   blocks: Block[]; streamingBlockId?: string; streamingLabel?: string;
   comments: Comment[];
   selectedBlockId: string;
   reviewSelection?: ReadingSelection | null;
   onSelectBlock: (blockId: string) => void;
+  onSelectionChange?: (selection: ReadingSelection | null) => void;
   onCreateComment: (selection: ReadingSelection, text: string, action: ReadingAnnotationAction) => Promise<void>;
   onEditSource: (selection: ReadingSelection) => void;
-  onOpenComment: (commentId: string, blockId: string) => void;
+  onOpenComment: OpenComment;
+  onChooseObject?: (blockId: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const ordered = useMemo(() => orderedBlocks(blocks), [blocks]);
@@ -247,12 +270,12 @@ export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streami
 
   function readSelection() {
     const browserSelection = window.getSelection();
-    if (!browserSelection || browserSelection.isCollapsed || !browserSelection.rangeCount) { setSelection(null); return; }
+    if (!browserSelection || browserSelection.isCollapsed || !browserSelection.rangeCount) { setSelection(null); onSelectionChange?.(null); return; }
     const range = browserSelection.getRangeAt(0);
     const startElement = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer as Element : range.startContainer.parentElement;
     const endElement = range.endContainer.nodeType === Node.ELEMENT_NODE ? range.endContainer as Element : range.endContainer.parentElement;
     const body = startElement?.closest<HTMLElement>('.prd-rendered-block-body');
-    if (!body || body !== endElement?.closest('.prd-rendered-block-body')) { setSelection(null); return; }
+    if (!body || body !== endElement?.closest('.prd-rendered-block-body')) { setSelection(null); onSelectionChange?.(null); return; }
     const blockId = body.closest<HTMLElement>('[data-block-id]')?.dataset.blockId;
     const block = blocks.find(item => item.id === blockId);
     const selectedText = browserSelection.toString().trim();
@@ -261,11 +284,12 @@ export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streami
     prefix.setEnd(range.startContainer, range.startOffset);
     const occurrence = selectedText ? prefix.toString().split(selectedText).length - 1 : 0;
     const located = block && locateReadingSelection(block, selectedText, occurrence);
-    if (!located) { setSelection(null); return; }
+    if (!located) { setSelection(null); onSelectionChange?.(null); return; }
     const rect = range.getBoundingClientRect();
     setSelection({ ...located, x: Math.min(window.innerWidth - 170, Math.max(170, rect.left + rect.width / 2)), y: Math.max(70, rect.top - 10) });
     setComposing(false); setCommentText(''); setSelectionError('');
     onSelectBlock(located.blockId);
+    onSelectionChange?.(located);
   }
 
   async function create(text: string, action: ReadingAnnotationAction) {
@@ -275,6 +299,7 @@ export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streami
       await onCreateComment(selection, text.trim(), action);
       window.getSelection()?.removeAllRanges();
       setSelection(null); setComposing(false); setCommentText('');
+      onSelectionChange?.(null);
     } catch (error) {
       setSelectionError(error instanceof Error ? error.message : String(error));
     } finally { setSubmitting(false); }
@@ -296,9 +321,15 @@ export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streami
       return <section key={block.id} data-block-id={block.id} className={className}
         onClick={() => onSelectBlock(block.id)}>
         <Heading>{block.title}</Heading>
+        {onChooseObject && /```mermaid|\|\s*:?-{3,}/.test(block.content) && <button type="button" onClick={event => { event.stopPropagation(); onChooseObject(block.id); }}>选择本章表格 / 图中对象</button>}
         {block.id === streamingBlockId && <div className="prd-stream-progress" role="status"><span />{streamingLabel}…</div>}
         <div className="prd-rendered-block-body"><MarkdownBody block={block} streaming={block.id === streamingBlockId}
-          highlights={highlights.filter(highlight => highlight.blockId === block.id)} onOpenComment={openComment} /></div>
+          highlights={highlights.filter(highlight => highlight.blockId === block.id)} onOpenComment={openComment} />
+          {block.fragment?.er_diagrams?.map(diagram => {
+            const anchor = block.content.match(new RegExp(`firstflight-er-${diagram.diagram_id}-[0-9a-f]{8}`))?.[0]
+              ?? `firstflight-er-${diagram.diagram_id}`;
+            return <DrawioErDiagram key={diagram.diagram_id} diagram={{ ...diagram, anchor }} />;
+          })}</div>
       </section>;
     })}
   </div>;

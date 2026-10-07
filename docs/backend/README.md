@@ -91,7 +91,7 @@ export CODEX_INACTIVITY_TIMEOUT_SECONDS='<seconds>'
 `CODEX_TIMEOUT_SECONDS` 限制一次 Codex 调用的总时长（默认 2,000 秒）；
 `CODEX_INACTIVITY_TIMEOUT_SECONDS` 限制连续收不到 Codex JSONL 事件的时长；默认跟随总调用上限（2,000 秒），避免误杀长时间无流式正文的正常结构化推理，也可在部署环境显式调小。后者用于终止已经失去活动迹象的子进程；等待期间服务每 30 秒更新一次安全的后台等待进度，不暴露模型正文。
 
-结构化 Agent 调用在一次性的中立临时工作目录中运行，并固定使用 `--ignore-user-config`。每次调用还会创建仅复制 `auth.json` 的临时 `CODEX_HOME`，不加载用户级 `AGENTS.md`、记忆、技能或偏好；唯一例外是 PRD 初次生成和批注修订节点会复制仓库内完整性校验通过的固定 `drawio-skill`。Reviewer、拆分及其他节点仍不加载该 skill。节点提示和业务证据只由服务显式传入，避免元指令污染 PRD、任务名称或交付物合同。未设置 `CODEX_MODEL` 时不传 `--model`，由每台机器本地 Codex 的默认模型决定；部署也可通过该环境变量显式指定覆盖值。
+结构化 Agent 调用在一次性的中立临时工作目录中运行，并固定使用 `--ignore-user-config`。每次调用还会创建仅复制 `auth.json` 的临时 `CODEX_HOME`，不加载用户级 `AGENTS.md`、记忆、技能或偏好。项目的 20 个捆绑 Skill 均有完整性清单并通过运行时允许名单；每次只复制调用点指定的 Skill，不会一次性加载整个目录。结构化 PRD 初次生成和批注修订节点仍选用 `drawio-skill`，Spec 拆解、修订、逐任务规划和拆解审核节点选用 `planning-and-task-breakdown`；Block PRD 的选用规则在 `app.ai.codex_provider`。其他 Skill 在具体功能显式选用前不会进入 Agent 运行环境，详见 `skills/README.md`。节点提示和业务证据只由服务显式传入，避免元指令污染 PRD、任务名称或交付物合同。未设置 `CODEX_MODEL` 时不传 `--model`，由每台机器本地 Codex 的默认模型决定；部署也可通过该环境变量显式指定覆盖值。
 
 `drawio-skill` 固定到 `Agents365-ai/drawio-skill@65f5fa0505f43d8af104d00c6087cb02c8c0e2f3`（3.2.1，MIT）；来源、Git tree 和规范化目录 SHA-256 在 `skills/drawio-skill-source.json`。升级时必须替换完整 `skills/drawio-skill`、更新来源元数据和许可证，并运行 Agent 隔离与完整性测试。ER XML 使用 `defusedxml` 解析，并限制体积、页面、实体、关系、标签和链接等安全边界。
 

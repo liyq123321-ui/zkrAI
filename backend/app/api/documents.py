@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import logging
+from typing import Literal
 from urllib.parse import quote
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.encoders import jsonable_encoder
@@ -63,6 +64,8 @@ class Submit(Input):
 
 class Review(Submit):
     request_id: str = Field(min_length=1, max_length=100)
+    prepare_submission: bool = True
+    scope: Literal["full", "affected"] = "full"
 
 
 class Context(Submit):
@@ -103,6 +106,14 @@ def build_router(service, ai, actors, assets=None, docx=None, prototypes=None):
     @router.get("/{document_id}")
     def snapshot(document_id: str, request: Request, actor_id: str | None = None):
         return service.snapshot(document_id, actors.resolve(request, actor_id))
+
+    @router.get("/{document_id}/versions")
+    def document_versions(document_id: str, request: Request, actor_id: str | None = None):
+        return service.document_versions(document_id, actors.resolve(request, actor_id))
+
+    @router.get("/{document_id}/versions/{version}")
+    def document_version(document_id: str, version: int, request: Request, actor_id: str | None = None):
+        return service.document_version(document_id, version, actors.resolve(request, actor_id))
 
     @router.put("/{document_id}/outline")
     def outline(document_id: str, body: Outline, request: Request):
@@ -154,7 +165,8 @@ def build_router(service, ai, actors, assets=None, docx=None, prototypes=None):
 
     @router.post("/{document_id}/review", status_code=202)
     async def review(document_id: str, body: Review, request: Request):
-        run = ai.enqueue_document_review(document_id, actors.resolve(request, body.actor_id), body.request_id, body.expected_revision)
+        run = ai.enqueue_document_review(document_id, actors.resolve(request, body.actor_id), body.request_id,
+                                        body.expected_revision, prepare_submission=body.prepare_submission, scope=body.scope)
         return {key: value for key, value in run.items() if key != "input_snapshot"}
 
     @router.post("/{document_id}/review/{review_run_id}/resolve", status_code=202)

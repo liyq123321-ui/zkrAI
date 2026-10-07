@@ -1,0 +1,10 @@
+{
+  "version": "unknown",
+  "source_tree": "92d87ae1fe98e6b67403bace2ef01264f9664468",
+  "license": "Apache-2.0",
+  "name": "git-workflow-and-versioning",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "tree_sha256": "f1dd5feccd14c24b5d61c6dea1e9d31fa95f4821680f1230e8925b1c0c55cfc6",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "source_path": "skills/git-workflow-and-versioning"
+}

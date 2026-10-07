@@ -8,14 +8,16 @@ import { useWorkspaceProjects } from './useWorkspaceProjects';
 
 vi.mock('./prd-editor/PRDEditor', async () => {
   const React = await import('react');
+  const requestRevision = vi.fn(async () => '项目规划');
   return {
     PRDEditor: React.forwardRef(function MockEmbeddedPrdEditor({ sessionId, embedded, onClose, onAgentProgress }: {
       sessionId: string; embedded?: boolean; onClose?: () => void;
       onAgentProgress?: (progress: unknown) => void;
-    }, ref: React.ForwardedRef<{ requestClose: (onConfirm: () => void) => void }>) {
+    }, ref: React.ForwardedRef<{ requestClose: (onConfirm: () => void) => void; requestRevision: (instruction: string) => Promise<string> }>) {
       const [pendingClose, setPendingClose] = React.useState<(() => void) | null>(null);
       React.useImperativeHandle(ref, () => ({
         requestClose: (onConfirm) => setPendingClose(() => onConfirm),
+        requestRevision,
       }));
       React.useEffect(() => {
         onAgentProgress?.({
@@ -28,6 +30,7 @@ vi.mock('./prd-editor/PRDEditor', async () => {
       }, [onAgentProgress]);
       return <section aria-label="模拟嵌入式 PRD 编辑器" data-session-id={sessionId} data-embedded={String(Boolean(embedded))}>
         <button onClick={onClose}>关闭 PRD 编辑器</button>
+        <button onClick={() => onAgentProgress?.({runId:'run-prd',status:'completed',title:'全文自动修订',detail:'修订已写入 PRD'})}>模拟 PRD 完成</button>
         {pendingClose && <button onClick={() => { const close = pendingClose; setPendingClose(null); close(); }}>继续关闭</button>}
       </section>;
     }),
@@ -59,6 +62,7 @@ let resourceFailureSequences: Record<string, number[]> = {};
 let resourceDelaySequences: Record<string, Promise<void>[]> = {};
 let sessionCatalog: SessionSummaryDto[] = [];
 let fetchSpy: ReturnType<typeof vi.fn>;
+let storedChatMessages: Record<string, Array<Record<string, unknown>>> = {};
 
 class WorkspaceEventSource {
   static instances: WorkspaceEventSource[] = [];
@@ -82,11 +86,24 @@ beforeEach(() => {
   resourceFailureSequences = {};
   resourceDelaySequences = {};
   sessionCatalog = [{session_id:'session-1',project_id:'project-1',root_work_item_id:'root-1',title:'知识问答'}];
+  storedChatMessages = {};
   localStorage.clear();
   WorkspaceEventSource.instances = [];
   vi.stubGlobal('EventSource', WorkspaceEventSource);
   fetchSpy = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     const path = new URL(String(input)).pathname;
+    const chatSession = path.match(/^\/sessions\/([^/]+)\/chat-messages$/)?.[1];
+    if (chatSession && options?.method === 'POST') {
+      const body = JSON.parse(String(options.body)) as Record<string, unknown>;
+      const messages = storedChatMessages[chatSession] ?? [];
+      const saved = messages.find(item => item.id === body.id) ?? {
+        id: body.id, role: body.role, body: body.body, detail: body.detail ?? null,
+        createdAt: new Date().toISOString(),
+      };
+      if (!messages.some(item => item.id === body.id)) storedChatMessages[chatSession] = [...messages, saved];
+      return new Response(JSON.stringify(saved), {status:201});
+    }
+    if (chatSession) return new Response(JSON.stringify(storedChatMessages[chatSession] ?? []), {status:200});
     const delay = resourceDelaySequences[path]?.shift();
     if (delay) await delay;
     const queuedFailure = resourceFailureSequences[path]?.shift();
@@ -224,6 +241,68 @@ function QueuedTerminalReconciliationHarness() {
 }
 
 describe('workspace regression', () => {
+  it('restores PRD Agent commands and replies after reopening the workspace', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const first = render(<ApiWorkspace />);
+    const agentPanel = first.container.querySelector('.ff-agent-panel') as HTMLElement;
+    fireEvent.click(await within(agentPanel).findByRole('button', { name: '编写 PRD' }));
+    await screen.findByRole('region', { name: '模拟嵌入式 PRD 编辑器' });
+
+    fireEvent.change(screen.getByRole('textbox', { name: '给 Project Agent 发送消息' }), {
+      target: { value: '把当前 PRD 的项目目标补充指标' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送消息' }));
+    expect(await screen.findByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '模拟 PRD 完成' }));
+    await waitFor(() => expect(storedChatMessages['session-1']).toHaveLength(3));
+
+    first.unmount();
+    render(<ApiWorkspace />);
+    expect(await screen.findByText('把当前 PRD 的项目目标补充指标')).toBeTruthy();
+    expect(await screen.findByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeTruthy();
+    expect(await screen.findByText('全文自动修订已完成')).toBeTruthy();
+    expect(storedChatMessages['session-1'].map(item => item.role)).toEqual(['user', 'agent', 'agent']);
+  });
+
+  it('uses the open PRD as context for chat edits and still honors other commands', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    const view = render(<ApiWorkspace />);
+    const agentPanel = view.container.querySelector('.ff-agent-panel') as HTMLElement;
+    fireEvent.click(await within(agentPanel).findByRole('button', { name: '编写 PRD' }));
+    await screen.findByRole('region', { name: '模拟嵌入式 PRD 编辑器' });
+
+    fireEvent.change(screen.getByRole('textbox', { name: '给 Project Agent 发送消息' }), {
+      target: { value: '请把项目规划部分的验收标准写清楚' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送消息' }));
+    expect(await screen.findByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('textbox', { name: '给 Project Agent 发送消息' }), {
+      target: { value: '打开看板' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送消息' }));
+    expect(screen.getByRole('region', { name: '模拟嵌入式 PRD 编辑器' })).toBeTruthy();
+    expect(screen.getByText('已打开任务看板。')).toBeTruthy();
+  });
+
+  it('routes diagram regeneration to the open PRD even when the phase exposes only create_spec', async () => {
+    localStorage.setItem('firstflight.active-session-id', 'session-1');
+    resourceOverrides['/sessions/session-1/state'] = {
+      ...state, phase: 'SPECIFICATION', current_spec_version_id: null,
+      current_spec_status: null, legal_actions: ['create_spec'],
+    };
+    const view = render(<ApiWorkspace />);
+    fireEvent.click(await within(view.container.querySelector('.ff-agent-panel') as HTMLElement)
+      .findByRole('button', { name: '编写 PRD' }));
+    await screen.findByRole('region', { name: '模拟嵌入式 PRD 编辑器' });
+    fireEvent.change(screen.getByRole('textbox', { name: '给 Project Agent 发送消息' }), {
+      target: { value: '产品概念设计里的信息结构图和产品结构图请重新生成' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发送消息' }));
+    expect(await screen.findByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeTruthy();
+    expect(screen.queryByText(/为保持阶段门禁/)).toBeNull();
+  });
+
   it('embeds PRD authoring beside the collapsible Agent chat and confirms leaving it', async () => {
     localStorage.setItem('firstflight.active-session-id', 'session-1');
     const view = render(<ApiWorkspace />);

@@ -45,6 +45,11 @@ beforeEach(() => {
   vi.stubGlobal('EventSource', Source);
   fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
     const path = new URL(url).pathname;
+    if (path.endsWith('/versions')) return new Response(JSON.stringify([
+      { id: 'whole-2', version: 2, source: 'manual', created_at: '2026-09-28T02:03:04+00:00' },
+      { id: 'whole-1', version: 1, source: 'outline', created_at: '2026-09-27T01:02:03+00:00' },
+    ]), { status: 200 });
+    if (path.endsWith('/versions/2')) return new Response(JSON.stringify({ id: 'whole-2', version: 2, source: 'manual', created_at: '2026-09-28T02:03:04+00:00', snapshot }), { status: 200 });
     if (options?.method === 'PUT') {
       const body = JSON.parse(options.body as string);
       if (delaySave) await new Promise<void>(resolve => { deferredSave = resolve; });
@@ -72,6 +77,78 @@ async function editor() {
 }
 
 describe('Block editor draft isolation', () => {
+  it('keeps activity and all comments in the compact dock until opened', async () => {
+    snapshot.comments = [
+      { id: 'comment-a', text: 'A 的批注', resolved: false, targets: [{ block_id: 'A', base_version: 1, start_line: 1, end_line: 1, quote: 'A original' }] },
+      { id: 'comment-b', text: 'B 的批注', resolved: false, targets: [{ block_id: 'B', base_version: 1, start_line: 1, end_line: 1, quote: 'B original' }] },
+    ];
+    snapshot.runs = [{ id: 'failed-run', block_id: 'A', type: 'generate', base_version: 1, status: 'failed', apply_status: 'pending', error: '生成失败', result: null }];
+    const view = render(<PRDEditor sessionId="s" embedded />);
+    await screen.findByLabelText('PRD 图文阅读');
+
+    expect(view.container.querySelector('.prd-right')).toBeNull();
+    expect(screen.getByRole('complementary', { name: 'PRD 工具栏' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: '生成消息列表' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '生成消息' }));
+    expect(within(screen.getByRole('dialog', { name: '生成消息' })).getByText('生成失败')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '全部批注' }));
+    const all = screen.getByRole('dialog', { name: '全部批注' });
+    expect(within(all).getByText('A 的批注')).toBeTruthy();
+    expect(within(all).getByText('B 的批注')).toBeTruthy();
+  });
+
+  it('opens a focused comment from the icon beside highlighted document text', async () => {
+    snapshot.comments = [{ id: 'comment-b', text: '请补充说明', resolved: false,
+      targets: [{ block_id: 'B', base_version: 1, start_line: 1, end_line: 1, quote: 'B original', selected_text: 'B original' }] }];
+    render(<PRDEditor sessionId="s" embedded />);
+    await screen.findByLabelText('PRD 图文阅读');
+
+    const annotation = screen.getByText('B original').closest('.prd-annotated-inline') as HTMLElement;
+    expect(annotation.querySelector('mark')).toBeTruthy();
+    fireEvent.click(within(annotation).getByRole('button', { name: '查看这条批注' }));
+    const popup = screen.getByRole('dialog', { name: '正文批注' });
+    expect(within(popup).getByText('请补充说明')).toBeTruthy();
+    expect(within(popup).queryByRole('textbox', { name: '修改意见' })).toBeNull();
+  });
+
+  it('submits a chat instruction to the named PRD block without saving other drafts', async () => {
+    const ref = createRef<PRDEditorHandle>();
+    render(<PRDEditor ref={ref} sessionId="s" embedded />);
+    await screen.findByLabelText('PRD 图文阅读');
+    await act(async () => {
+      expect(await ref.current!.requestRevision('请修改 B 章节的验收标准')).toBe('B');
+    });
+    const run = fetchMock.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/blocks/B/runs'));
+    expect(run).toBeTruthy();
+    expect(JSON.parse(run![1]!.body as string)).toMatchObject({
+      type: 'revise', feedback: '请修改 B 章节的验收标准',
+    });
+    expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(false);
+  });
+
+  it('blocks chat revision when the target has an unsaved draft', async () => {
+    const ref = createRef<PRDEditorHandle>();
+    render(<PRDEditor ref={ref} sessionId="s" embedded />);
+    await screen.findByLabelText('PRD 图文阅读');
+    fireEvent.click(screen.getByRole('button', { name: '编辑源码' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Univer PRD 文档' }), { target: { value: 'A draft' } });
+    await expect(ref.current!.requestRevision('请修改 A 章节')).rejects.toThrow('未保存内容');
+    expect(fetchMock.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/blocks/A/runs'))).toBe(false);
+  });
+
+  it('uses the selected block when the chat instruction does not name a chapter', async () => {
+    const ref = createRef<PRDEditorHandle>();
+    render(<PRDEditor ref={ref} sessionId="s" embedded />);
+    await screen.findByLabelText('PRD 图文阅读');
+    const tree = screen.getByRole('navigation', { name: 'Block 目录' });
+    fireEvent.click(within(tree).getByRole('button', { name: /B/ }));
+    await act(async () => {
+      expect(await ref.current!.requestRevision('请把这一部分写得更具体')).toBe('B');
+    });
+    expect(fetchMock.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/blocks/B/runs'))).toBe(true);
+  });
+
   it('preserves dirty drafts when AI or another client supplies a new version', () => {
     const b = initial().blocks[0], draft = { ...fromBlock(b), content: 'my unsaved text', dirty: true };
     expect(mergeDrafts({ A: draft }, [{ ...b, content: 'AI text', version: 2 }]).A).toBe(draft);
@@ -110,7 +187,7 @@ describe('Block editor draft isolation', () => {
     await waitFor(() => expect(screen.getByText('当前 Block · B')).toBeTruthy());
     expect((screen.getByRole('textbox', { name: 'Univer PRD 文档' }) as HTMLTextAreaElement).value).toBe('B original');
     fireEvent.click(within(map).getByRole('button', { name: '收起思维导图' }));
-    expect(screen.getByRole('region', { name: '生成队列' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '生成消息' })).toBeTruthy();
   });
   it('retains unsaved input when switching blocks', async () => {
     const input = await editor();
@@ -209,7 +286,9 @@ describe('Block editor draft isolation', () => {
       id: 'revision-run', block_id: null, type: 'document_revision', base_version: 1,
       status: 'running', apply_status: 'pending', error: null,
       result: { progress_stage: 'revising', resolution_round: 1, completed: 1, total: 2, current_block_id: 'B',
-        stream_blocks: { B: '正在补充用户流程。继续写入验收范围。' }, stream_sentence_count: 2 },
+        stream_blocks: { B: '正在补充用户流程。继续写入验收范围。' }, stream_sentence_count: 2,
+        activity_message: '正在调用 prd-consistency-skill：读取 Skill 规则…',
+        activity_steps: ['正在检查全文一致性和需求追溯…', '正在调用 prd-consistency-skill：读取 Skill 规则…'] },
     }];
     const onAgentProgress = vi.fn();
     render(<PRDEditor sessionId="s" embedded onAgentProgress={onAgentProgress} />);
@@ -221,7 +300,30 @@ describe('Block editor draft isolation', () => {
       status: 'running', title: '全文自动修订', stage: '正在生成第 1 轮修订',
       completed: 1, total: 2, currentBlockId: 'B', currentBlockTitle: 'B',
       activityText: '实时写入：正在补充用户流程。继续写入验收范围。',
+      activitySteps: ['正在检查全文一致性和需求追溯…', '正在调用 prd-consistency-skill：读取 Skill 规则…'],
     });
+  });
+  it('submits one run for each named diagram instead of rewriting their parent', async () => {
+    snapshot.blocks.unshift({ ...snapshot.blocks[0], id: 'parent', title: '产品概念设计', parent_id: null });
+    snapshot.blocks[1].title = '信息结构图';
+    snapshot.blocks[1].parent_id = 'parent';
+    snapshot.blocks[2].title = '产品结构图';
+    snapshot.blocks[2].parent_id = 'parent';
+    const ref = createRef<PRDEditorHandle>();
+    render(<PRDEditor ref={ref} sessionId="s" embedded />);
+    await screen.findByLabelText('PRD 图文阅读');
+
+    let titles = '';
+    await act(async () => {
+      titles = await ref.current!.requestRevision('产品概念设计里的信息结构图和产品结构图请重新生成');
+    });
+
+    expect(titles).toBe('信息结构图、产品结构图');
+    const posted = fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST')
+      .map(([url]) => new URL(String(url)).pathname);
+    expect(posted).toContain('/prd-documents/d/blocks/A/runs');
+    expect(posted).toContain('/prd-documents/d/blocks/B/runs');
+    expect(posted).not.toContain('/prd-documents/d/blocks/parent/runs');
   });
   it('does not apply an AI candidate over unsaved local input', async () => {
     const input = await editor();
@@ -253,17 +355,25 @@ it('requests first-draft automation on entry, leaving eligibility to the server'
   expect(screen.queryByText(/首版正在按模块连续生成/)).toBeNull();
 });
 
-it('enables the next stage only after the current whole-document review has no pending issues', async () => {
+it('asks for an explicit review when entering the next stage and allows a reviewed version through', async () => {
   await editor();
   const next = screen.getByRole('button', { name: '进入下一阶段' }) as HTMLButtonElement;
-  expect(next.disabled).toBe(true);
+  expect(next.disabled).toBe(false);
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/review'))).toBe(false);
+  fireEvent.click(next);
+  const dialog = screen.getByRole('dialog', { name: '进入下一阶段前审核' });
+  expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/review'))).toBe(false);
+  fireEvent.click(within(dialog).getByRole('button', { name: '开始审核当前版本' }));
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url, options]) => String(url).endsWith('/review') && JSON.parse(options!.body as string).prepare_submission)).toBe(true));
+  fireEvent.click(within(dialog).getByRole('button', { name: '继续编辑' }));
   snapshot = structuredClone(snapshot);
+  snapshot.blocks.forEach(block => { block.fragment_version = block.version; });
   snapshot.runs = [{
     id: 'clean-review', block_id: null, type: 'document_review', base_version: snapshot.document.revision,
     status: 'completed', apply_status: 'applied', stale: false, error: null,
     result: { summary: '全文审核通过', issues: [] },
   }];
-  Source.current.emit(snapshot);
+  act(() => Source.current.emit(snapshot));
   await waitFor(() => expect(next.disabled).toBe(false));
   fireEvent.click(next);
   await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/submit'))).toBe(true));
@@ -272,9 +382,10 @@ it('enables the next stage only after the current whole-document review has no p
 it('shows first-draft progress and lets the user stop the entire sequence', async () => {
   snapshot.runs = [{ id: 'initial', block_id: null, type: 'initial', base_version: 1, status: 'running', apply_status: 'pending', error: null, result: { completed: 1, total: 2 } }];
   await editor();
-  expect(screen.getByText(/首版正在按模块连续生成（1\/2）/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '生成消息' }));
+  expect(screen.getByText('正在连续生成 PRD · 1/2')).toBeTruthy();
   expect((screen.getByRole('button', { name: '重新生成' }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: '停止自动生成' }));
+  fireEvent.click(screen.getByRole('button', { name: '取消首版自动生成' }));
   await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/runs/initial/cancel'))).toBe(true));
 });
 
@@ -302,23 +413,35 @@ it('always uses the continuous full-document canvas while keeping Block tools', 
   await editor();
   expect(screen.queryByRole('button', { name: 'AI 修改' })).toBeNull();
   expect(screen.queryByRole('button', { name: '浏览全文' })).toBeNull();
-  expect(await screen.findByText('全文 DOCX 编辑')).toBeTruthy();
+  expect(screen.getByRole('button', { name: '编辑源码' })).toBeTruthy();
   expect(screen.getByRole('textbox', { name: 'Univer PRD 文档' })).toBeTruthy();
   expect(screen.queryByRole('textbox', { name: 'PRD 全文' })).toBeNull();
   expect(screen.getByRole('navigation', { name: 'Block 目录' })).toBeTruthy();
   expect(screen.getByRole('region', { name: '当前 Block 工具' })).toBeTruthy();
-  expect(screen.getByRole('region', { name: '生成队列' })).toBeTruthy();
-  expect(screen.getByRole('textbox', { name: '修改意见' })).toBeTruthy();
+  expect(screen.queryByRole('region', { name: '生成队列' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '全部批注' }));
+  expect(within(screen.getByRole('dialog', { name: '全部批注' })).getByRole('textbox', { name: '修改意见' })).toBeTruthy();
   expect(screen.getByRole('button', { name: '审核全文' })).toBeTruthy();
 });
 
-it('places the editor before the whole-document review findings', async () => {
+it('opens whole-document review findings from the dock', async () => {
   snapshot.runs = [{ id: 'review', block_id: null, type: 'document_review', base_version: 1, status: 'completed', apply_status: 'applied', error: null,
     result: { summary: '审核摘要', issues: [{ severity: 'warning', block_ids: ['A'], description: '审核项', suggestion: '调整' }] } }];
   await editor();
-  const canvas = screen.getByRole('textbox', { name: 'Univer PRD 文档' });
-  const report = screen.getByRole('region', { name: '全文审核意见' });
-  expect(canvas.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByRole('region', { name: '全文审核意见' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '全文审核意见' }));
+  expect(within(screen.getByRole('dialog', { name: '全文审核意见' })).getByText('审核项')).toBeTruthy();
+});
+
+it('lists whole-document versions with exact modification times and opens a full snapshot', async () => {
+  await editor();
+  fireEvent.click(screen.getByRole('button', { name: '修订版本' }));
+  const panel = screen.getByRole('dialog', { name: '修订版本' });
+  await within(panel).findByRole('button', { name: /全文版本 v2/ });
+  expect(within(panel).getByText('2026-09-28 10:03:04 (北京时间)')).toBeTruthy();
+  fireEvent.click(within(panel).getByRole('button', { name: /全文版本 v2/ }));
+  expect(await within(panel).findByText('全文版本 v2')).toBeTruthy();
+  expect(within(panel).getByText('A original')).toBeTruthy();
 });
 
 it('follows the visible document Block without requiring a directory click', async () => {
@@ -331,6 +454,7 @@ it('follows the visible document Block without requiring a directory click', asy
 
 it('adds a whole-document comment to all blocks and requests one holistic review', async () => {
   await editor();
+  fireEvent.click(screen.getByRole('button', { name: '全部批注' }));
   fireEvent.click(screen.getByRole('checkbox', { name: '全文批注' }));
   expect((screen.getByRole('spinbutton', { name: '起始行' }) as HTMLInputElement).disabled).toBe(true);
   expect((screen.getByRole('spinbutton', { name: '结束行' }) as HTMLInputElement).disabled).toBe(true);
@@ -348,6 +472,7 @@ it('adds a whole-document comment to all blocks and requests one holistic review
 
 it('defaults comments to the current Block rather than the whole document', async () => {
   await editor();
+  fireEvent.click(screen.getByRole('button', { name: '全部批注' }));
   fireEvent.change(screen.getByRole('textbox', { name: '修改意见' }), { target: { value: '只改当前部分' } });
   fireEvent.click(screen.getByRole('button', { name: '添加批注 · 1 个 Block' }));
   await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/comments'))).toBe(true));
@@ -362,5 +487,4 @@ it('renders a validated sentence stream inside the active Block', async () => {
     result: { stream_content: '第一句。第二句。', stream_sentence_count: 2, stream_complete: false } }];
   Source.current.emit(snapshot);
   await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe('第一句。第二句。'));
-  expect(screen.getByText('正在写入全文 · 2 句')).toBeTruthy();
 });

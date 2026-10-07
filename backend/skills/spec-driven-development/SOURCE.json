@@ -1,0 +1,14 @@
+{
+  "name": "spec-driven-development",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "path": "skills/spec-driven-development",
+  "git_tree": "3c412780068d7faf9f504a9fac10b8137fcd5faa",
+  "tree_sha256": "bcd75ff560d3d5a6d6b53d7f4cf8560e4289b7dea684584de32b1a5b98998877",
+  "scenarios": [
+    1,
+    5,
+    13,
+    19
+  ]
+}

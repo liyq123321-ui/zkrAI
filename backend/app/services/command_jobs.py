@@ -331,6 +331,9 @@ class CommandJobCoordinator:
 
         def report_progress(stage: str, message: str) -> None:
             nonlocal current_version
+            if stage == "skills_selected":
+                count = len([name for name in message.partition("：")[2].split("、") if name])
+                message = f"已载入当前步骤所需的 {count} 个 Skill，正在启动 Agent…"
             updated = self.update_progress(
                 job_id, current_version, stage=stage, message=message
             )

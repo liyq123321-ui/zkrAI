@@ -2,6 +2,7 @@
 from typing import Literal
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
+from app.ai.provider import DocumentEditStep
 
 
 class Input(BaseModel):
@@ -60,8 +61,98 @@ class Retry(Input):
     request_id: str = Field(min_length=1, max_length=100)
 
 
-def build_router(service, ai, actors):
+class ChatEditPlan(Input):
+    instruction: str = Field(min_length=1, max_length=12000)
+    target_ids: list[str] = Field(min_length=1, max_length=8)
+    selected_text: str = Field(default="", max_length=2000)
+    screenshot_anchor: str = Field(default="", max_length=2000)
+    conversation_context: str = Field(default="", max_length=2400)
+
+
+class ChatEditApply(Input):
+    expected_revision: int = Field(ge=1)
+    steps: list[DocumentEditStep] = Field(min_length=1, max_length=500)
+    alternative_id: str | None = None
+    job_id: str | None = None
+
+
+class ChatRebase(Input):
+    steps: list[DocumentEditStep] = Field(min_length=1, max_length=500)
+
+
+class CandidateReuse(Input):
+    job_id: str = Field(max_length=100)
+    indices: list[int] = Field(min_length=1, max_length=500)
+    take_indices: list[int] = Field(default_factory=list, max_length=500)
+
+
+class SelectionPreview(Input):
+    expected_revision: int = Field(ge=1)
+    steps: list[DocumentEditStep] = Field(min_length=1, max_length=500)
+
+
+class ChatBulkPlan(Input):
+    instruction: str = Field(min_length=1, max_length=12000)
+
+
+class DocumentRestorePlan(Input):
+    version: int | None = Field(default=None, ge=1)
+
+
+class DocumentRestoreApply(Input):
+    version: int = Field(ge=1)
+    expected_revision: int = Field(ge=1)
+
+
+def build_router(service, ai, actors, document_edits=None):
     router = APIRouter(prefix="/prd-documents/{document_id}", tags=["prd-blocks"])
+
+    if document_edits is not None:
+        @router.post('/chat-edits/reuse')
+        def reuse_candidate(document_id: str, body: CandidateReuse, request: Request):
+            from app.services.document_candidate_reuse import reuse
+            return reuse(document_edits, document_id, actors.resolve(request, body.actor_id), body.job_id, body.indices, body.take_indices)
+
+        @router.post('/chat-edits/selection-preview')
+        def preview_selection(document_id: str, body: SelectionPreview, request: Request):
+            actor = actors.resolve(request, body.actor_id)
+            with service.factory() as db:
+                doc = service.document(db, document_id, actor)
+                from app.services.block_service import BlockError
+                from app.ai.provider import DocumentEditPlan
+                if doc.revision != body.expected_revision: raise BlockError('正文已变化，请先复用候选并核对冲突', 409)
+                source = [{key: getattr(b, key) for key in ('id', 'title', 'parent_id', 'order', 'version', 'content', 'instruction', 'dependencies', 'fragment')}
+                          for b in service.blocks(db, doc)]
+                return {'preview': document_edits._preview(source, document_edits._simulate(source, DocumentEditPlan(summary='所选修改', steps=body.steps)))}
+
+        @router.post("/chat-edits/restore-plan")
+        def restore_plan(document_id: str, body: DocumentRestorePlan, request: Request):
+            return document_edits.restore_preview(document_id, actors.resolve(request, body.actor_id), body.version)
+
+        @router.post("/chat-edits/restore")
+        def restore_document(document_id: str, body: DocumentRestoreApply, request: Request):
+            return document_edits.restore_apply(document_id, actors.resolve(request, body.actor_id),
+                                                 body.expected_revision, body.version)
+
+        @router.post("/chat-edits/plan")
+        async def plan_chat_edit(document_id: str, body: ChatEditPlan, request: Request):
+            return await document_edits.plan(document_id, actors.resolve(request, body.actor_id),
+                                             body.instruction, body.target_ids, body.selected_text,
+                                             body.screenshot_anchor, body.conversation_context)
+
+        @router.post("/chat-edits/apply")
+        def apply_chat_edit(document_id: str, body: ChatEditApply, request: Request):
+            return document_edits.apply(document_id, actors.resolve(request, body.actor_id),
+                                        body.expected_revision, body.steps, body.alternative_id, body.job_id)
+
+        @router.post("/chat-edits/rebase")
+        def rebase_chat_edit(document_id: str, body: ChatRebase, request: Request):
+            return document_edits.rebase(document_id, actors.resolve(request, body.actor_id), body.steps)
+
+        @router.post("/chat-edits/bulk-plan")
+        async def plan_bulk_edit(document_id: str, body: ChatBulkPlan, request: Request):
+            return await document_edits.plan_bulk(document_id, actors.resolve(request, body.actor_id),
+                                                  body.instruction)
 
     @router.put("/blocks/{block_id}")
     def save(document_id: str, block_id: str, body: Save, request: Request):

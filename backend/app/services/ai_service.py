@@ -2,9 +2,11 @@
 import asyncio
 import logging
 import json
+import time
 from app.models import Block, AgentRun
 from app.database.models import SpecVersion
 from app.ai.provider import BlockPlan, BlockResult, DocumentReview, DocumentRevision, DocumentRevisionBlock
+from app.agents.progress import bind_agent_progress, report_agent_progress
 from .block_service import BlockError, uid, record
 
 logger = logging.getLogger(__name__)
@@ -83,6 +85,7 @@ def compact_document_context(
         "document_id": context["document_id"], "base_revision": context["base_revision"],
         "title": context.get("title", ""), "background": context.get("background", ""),
         "global_rules": context.get("global_rules", ""),
+        'confirmed_knowledge': context.get('confirmed_knowledge', {}),
         "review": compact_review.model_dump(mode="json"),
         "blocks": [candidates[block_id] for block_id in target_ids if block_id in candidates],
         "document_map": document_map,
@@ -129,71 +132,49 @@ class AIService:
         return True
 
     async def publish_block_stream(self, run_id: str, content: str) -> bool:
-        """Publish validated Markdown one complete sentence/line at a time."""
+        """Publish a bounded number of previews without artificial typing delays."""
         chunks = sentence_chunks(content)
+        batch = max(16, (len(chunks) + 7) // 8)
         rendered = ""
-        for index, chunk in enumerate(chunks):
-            rendered += chunk
+        for offset in range(0, max(1, len(chunks)), batch):
+            rendered += "".join(chunks[offset:offset + batch])
+            completed = min(offset + batch, len(chunks))
             with self.blocks.write() as db:
                 run = db.get(AgentRun, run_id)
                 if not run or run.status != "running":
                     return False
                 run.result = {
-                    "stream_content": rendered,
-                    "stream_sentence_count": index + 1,
-                    "stream_complete": index + 1 == len(chunks),
-                    "progress_stage": "streaming",
-                    "current_block_id": run.block_id,
-                    "completed": index + 1,
-                    "total": len(chunks),
-                    "progress_unit": "sentence",
+                    **(run.result or {}), "stream_content": rendered,
+                    "stream_sentence_count": completed, "stream_complete": completed == len(chunks),
+                    "progress_stage": "streaming", "current_block_id": run.block_id,
+                    "completed": completed, "total": len(chunks), "progress_unit": "sentence",
                 }
-            if index + 1 < len(chunks):
-                await asyncio.sleep(0.12)
+            await asyncio.sleep(0)
         return True
 
     async def publish_document_stream(self, run_id: str, output: DocumentRevision) -> bool:
-        """Expose a whole-document repair as independent Block sentence streams."""
+        """Write one preview per repaired chapter, yielding for cancellation."""
         rendered: dict[str, str] = {}
         completed = 0
-        total = sum(len(sentence_chunks(item.content)) for item in output.blocks)
         block_ids = [item.block_id for item in output.blocks]
         for block_index, item in enumerate(output.blocks):
-            chunks = sentence_chunks(item.content)
-            self.update_progress(
-                run_id,
-                progress_stage="streaming",
-                current_block_id=item.block_id,
-                active_block_ids=block_ids,
-                completed_block_ids=block_ids[:block_index],
-                completed=block_index,
-                total=len(block_ids),
-                progress_unit="block",
-            )
-            for chunk in chunks:
-                rendered[item.block_id] = rendered.get(item.block_id, "") + chunk
-                completed += 1
-                with self.blocks.write() as db:
-                    run = db.get(AgentRun, run_id)
-                    if not run or run.status != "running":
-                        return False
-                    run.result = {
-                        "stream_blocks": dict(rendered),
-                        "stream_sentence_count": completed,
-                        "stream_complete": completed == total,
-                        "progress_stage": "streaming",
-                        "current_block_id": item.block_id,
-                        "active_block_ids": block_ids,
-                        "completed_block_ids": block_ids[:block_index],
-                        "completed": block_index,
-                        "total": len(output.blocks),
-                        "progress_unit": "block",
-                    }
-                if completed < total:
-                    await asyncio.sleep(0.12)
+            rendered[item.block_id] = item.content
+            completed += len(sentence_chunks(item.content))
+            with self.blocks.write() as db:
+                run = db.get(AgentRun, run_id)
+                if not run or run.status != "running":
+                    return False
+                run.result = {
+                    **(run.result or {}), "stream_blocks": dict(rendered),
+                    "stream_sentence_count": completed, "stream_complete": block_index + 1 == len(block_ids),
+                    "progress_stage": "streaming", "current_block_id": item.block_id,
+                    "active_block_ids": block_ids, "completed_block_ids": block_ids[:block_index + 1],
+                    "completed": block_index + 1, "total": len(block_ids), "progress_unit": "block",
+                }
+            await asyncio.sleep(0)
         return True
 
-    def enqueue_document_review(self, document_id, actor, request_id, expected_revision):
+    def enqueue_document_review(self, document_id, actor, request_id, expected_revision, prepare_submission=False, scope="full"):
         with self.blocks.write() as db:
             doc = self.blocks.document(db, document_id, actor)
             existing = db.query(AgentRun).filter_by(document_id=doc.id, request_id=request_id).one_or_none()
@@ -215,13 +196,29 @@ class AIService:
             if not any(b.content.strip() for b in blocks):
                 raise BlockError("请先编写 PRD 正文再审核全文")
             context = {"document_id": doc.id, "base_revision": doc.revision, "title": doc.title,
+                       "prepare_submission": prepare_submission and scope == "full", "review_scope": scope,
                        "background": doc.background, "global_rules": doc.global_rules,
                        "blocks": [{key: getattr(b, key) for key in
-                                   ("id", "title", "parent_id", "order", "version", "content", "dependencies")}
+                                   ("id", "title", "parent_id", "order", "version", "content", "dependencies",
+                                    "instruction", "fragment_version", "status")}
                                   for b in blocks]}
+            if scope == "affected":
+                from app.services.document_workbench import affected_scope
+                previous = db.query(AgentRun).filter_by(document_id=doc.id, type="document_review", status="completed").order_by(AgentRun.created_at.desc()).all()
+                baseline = next((r for r in previous if (r.input_snapshot or {}).get("review_scope") != "affected"), None)
+                if baseline is None:
+                    raise BlockError("尚无全文审核基线，请先手动审核一次全文", 422)
+                _, affected = affected_scope(context["blocks"], baseline.dependency_versions,
+                                             baseline.context_revision != doc.context_revision)
+                if not affected:
+                    raise BlockError("自上次全文审核后没有发现正文或规则变动", 422)
+                context["affected_block_ids"] = sorted(affected)
+                context["baseline_review_id"] = baseline.id
             if len(json.dumps(context, ensure_ascii=False)) > 300000:
                 raise BlockError("全文超过单次审核容量（30 万字符），请精简后重试；未截断正文", 422)
             block_ids = [block.id for block in blocks]
+            from app.services.document_decisions import knowledge_context
+            context['confirmed_knowledge'] = knowledge_context(db, doc, context['blocks'], consume=True)
             run = AgentRun(id=uid("run"), document_id=doc.id, type="document_review", status="queued",
                            base_version=doc.revision, input_snapshot=context,
                            dependency_versions={b.id: b.version for b in blocks},
@@ -277,6 +274,8 @@ class AIService:
             if len(json.dumps(context, ensure_ascii=False)) > 300000:
                 raise BlockError("全文超过单次修订容量（30 万字符），请分块解决", 422)
             target_ids = []
+            from app.services.document_decisions import knowledge_context
+            context['confirmed_knowledge'] = knowledge_context(db, doc, context['blocks'], consume=True)
             for issue in review.result.get("issues", []):
                 for block_id in issue.get("block_ids", []):
                     if block_id in versions and block_id not in target_ids:
@@ -444,9 +443,12 @@ class AIService:
                     }
                 context.update(block_id=b.id, base_version=b.version, title=b.title, instruction=b.instruction,
                                content=b.content, feedback=feedback, line_range=line_range,
+                               current_spec_fragment=b.fragment or {},
                                upstream_summaries=[{"block_id": u.id, "summary": u.summary} for u in upstream],
                                requirement_id_range=[min(b.order * 9 + 1, 991), min(b.order * 9 + 9, 999)])
                 b.status = "generating"
+            from app.services.document_decisions import knowledge_context
+            context['confirmed_knowledge'] = knowledge_context(db, doc, [record(b) for b in self.blocks.blocks(db, doc) if not block_id or b.id == block_id], consume=True)
             run = AgentRun(id=uid("run"), document_id=doc.id, block_id=block_id, type=kind, status="queued",
                            base_version=base_version, input_snapshot=context, dependency_versions=deps,
                            context_revision=doc.context_revision, request_id=request_id, actor_id=actor, apply_status="pending")
@@ -475,6 +477,7 @@ class AIService:
         # verification Skill calls. Two bounded rounds avoid an expensive retry
         # cascade while still allowing one evidence-backed correction cycle.
         for round_number in range(1, MAX_SKILL_RESOLUTION_ROUNDS + 1):
+            report_agent_progress("workflow_step", f"正在进入第 {round_number} 轮全文修订…")
             self.update_progress(run_id, progress_stage="revising", resolution_round=round_number,
                                  completed=0, total=len(target_ids), progress_unit="block",
                                  current_block_id=target_ids[0] if target_ids else None,
@@ -487,32 +490,57 @@ class AIService:
                 "Document revision context compacted: run=%s round=%s full_chars=%s compact_chars=%s",
                 run_id, round_number, full_size, compact_size,
             )
+            revision_started = time.perf_counter()
             revision = DocumentRevision.model_validate(await self.provider.revise_document(revision_context))
-            last_summary = revision.summary
+            if revision.decision_conflicts: raise BlockError('修订与已确认决定冲突：' + '；'.join(revision.decision_conflicts), 422)
+            logger.info("Document auto-resolution timing: run=%s round=%s phase=revision seconds=%.2f",
+                        run_id, round_number, time.perf_counter() - revision_started)
+            revised_ids = []
             for item in revision.blocks:
                 if item.block_id not in candidates:
                     continue
+                if item.content == candidates[item.block_id]["content"]:
+                    continue
                 candidates[item.block_id]["content"] = item.content
                 fragments[item.block_id] = item
-            revised_ids = [item.block_id for item in revision.blocks if item.block_id in candidates]
+                revised_ids.append(item.block_id)
+            if not revised_ids:
+                if round_number == 1:
+                    raise BlockError("自动修订未产生正文改动，原审核意见仍保留；请查看审核建议或手动处理")
+                report_agent_progress("workflow_step", "本轮没有新的正文改动，保留上一轮复审意见。")
+                break
+            last_summary = revision.summary
+            if not context.get("verify_after_revision", False):
+                report_agent_progress("workflow_step", "修订已完成，等待手动审核；未启动自动复审。")
+                review = None
+                break
+            report_agent_progress("workflow_step", f"第 {round_number} 轮修订已生成，正在复审冲突与遗漏…")
             self.update_progress(run_id, progress_stage="verifying", resolution_round=round_number,
                                  completed=len(revised_ids), total=max(len(target_ids), len(revised_ids)),
                                  progress_unit="block", current_block_id=revised_ids[-1] if revised_ids else None,
                                  active_block_ids=revised_ids or target_ids)
-            verification_targets = revised_ids or target_ids
+            # Keep the other chapters implicated by the review as full prose;
+            # a short summary can hide a contradiction during verification.
+            verification_targets = list(dict.fromkeys(target_ids + revised_ids))
             verification_context = compact_document_context(
                 context, candidates, review, verification_targets
             )
             verification_context.update(
                 auto_resolution_verification=True, resolution_round=round_number
             )
+            verification_started = time.perf_counter()
             review = DocumentReview.model_validate(await self.provider.review_document(verification_context))
+            logger.info("Document auto-resolution timing: run=%s round=%s phase=verification seconds=%.2f",
+                        run_id, round_number, time.perf_counter() - verification_started)
             valid_ids = set(candidates)
             review = review.model_copy(update={
                 "document_id": context["document_id"], "base_revision": context["base_revision"],
                 "issues": [issue.model_copy(update={"block_ids": [key for key in issue.block_ids if key in valid_ids]})
                            for issue in review.issues],
             })
+            # Warnings remain visible in the verified report. Repeating the
+            # entire plan/write/review chain for them dominated latency and
+            # often chased a new stylistic warning instead of a regression.
             blockers = [issue for issue in review.issues if issue.severity == "blocker"]
             if not blockers:
                 break
@@ -534,6 +562,32 @@ class AIService:
         return DocumentRevision(document_id=context["document_id"], base_revision=context["base_revision"],
                                 summary=last_summary, blocks=changed_blocks), review
 
+    async def prepare_review_fragments(self, context):
+        """Explicit next-stage review synchronizes only stale structured content."""
+        targets = [b for b in context["blocks"] if b["content"].strip()
+                   and (b.get("fragment_version") != b["version"] or b.get("status") == "outdated")]
+        limit = asyncio.Semaphore(2)
+
+        async def extract(block):
+            async with limit:
+                report_agent_progress("workflow_step", f"正在审核并同步「{block['title']}」的验收与需求结构…")
+                result = BlockResult.model_validate(await self.provider.review_block({
+                    "block_id": block["id"], "base_version": block["version"],
+                    "title": block["title"], "content": block["content"],
+                    "instruction": block.get("instruction", ""), "feedback": "保持正文不变，提取当前版本的需求和验收结构。",
+                    "background": context["background"], "global_rules": context["global_rules"],
+                    'confirmed_knowledge': context.get('confirmed_knowledge', {}), 'prepare_submission': True,
+                    "upstream": [{"id": b["id"], "title": b["title"], "summary": block_reference_summary(b)}
+                                 for b in context["blocks"] if b["id"] in block.get("dependencies", [])],
+                }))
+                if result.block_id != block["id"] or result.base_version != block["version"] or result.content != block["content"]:
+                    raise BlockError("审核返回的正文或版本不一致，未应用结构结果", 422)
+                return result
+
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(extract(block)) for block in targets]
+        return [task.result() for task in tasks]
+
     async def execute(self, run_id):
         try:
             async with self.limit:
@@ -543,19 +597,58 @@ class AIService:
                         return
                     run.status = "running"
                     kind = run.type
-                    context = {key: value for key, value in run.input_snapshot.items() if key != "initial_run_id"}
+                    context = {key: value for key, value in run.input_snapshot.items()
+                               if key not in {"initial_run_id", "_execution_telemetry"}}
+                started = time.perf_counter()
                 verification = None
-                if kind == "document_revision":
-                    output, verification = await self.resolve_document(run_id, context)
-                else:
-                    method = getattr(self.provider, {"plan": "plan_outline", "generate": "generate_block",
-                              "revise": "revise_block", "review": "review_block",
-                              "document_review": "review_document"}[kind])
-                    if kind == "document_review":
-                        self.update_progress(run_id, progress_stage="reviewing")
-                    output = await method(context)
-                    contract = DocumentReview if kind == "document_review" else BlockPlan if kind == "plan" else BlockResult
-                    output = contract.model_validate(output)
+                prepared_fragments = []
+                activity_steps: list[str] = []
+                timing_events = []
+
+                def report_progress(stage: str, message: str) -> None:
+                    if stage == 'operation_timing':
+                        with self.blocks.write() as db:
+                            current = db.get(AgentRun, run_id)
+                            if current:
+                                saved = dict(current.input_snapshot or {})
+                                saved['operation_timings'] = (saved.get('operation_timings', []) + [json.loads(message)])[-100:]
+                                current.input_snapshot = saved
+                        return
+                    if stage == "skills_selected":
+                        count = len([name for name in message.partition("：")[2].split("、") if name])
+                        message = f"已载入当前步骤所需的 {count} 个 Skill，正在启动 Agent…"
+                    elif stage not in {
+                        "workflow_step", "skill_active", "skill_completed", "skill_failed",
+                        "model_completed", "model_waiting",
+                    }:
+                        return
+                    if message == (activity_steps[-1] if activity_steps else None):
+                        return
+                    activity_steps.append(message)
+                    del activity_steps[:-5]
+                    elapsed = round(time.perf_counter() - started, 2)
+                    timing_events.append({"message": message, "elapsed_seconds": elapsed})
+                    del timing_events[:-40]
+                    self.update_progress(run_id, activity_message=message, activity_steps=list(activity_steps),
+                                         elapsed_seconds=elapsed, timing_events=list(timing_events))
+
+                with bind_agent_progress(report_progress):
+                    if kind == "document_revision":
+                        output, verification = await self.resolve_document(run_id, context)
+                    else:
+                        method = getattr(self.provider, {"plan": "plan_outline", "generate": "generate_block",
+                                  "revise": "revise_block", "review": "review_block",
+                                  "document_review": "review_document"}[kind])
+                        if kind == "document_review":
+                            self.update_progress(run_id, progress_stage="reviewing")
+                            if context.get("prepare_submission"):
+                                prepared_fragments = await self.prepare_review_fragments(context)
+                        output = await method(context)
+                        contract = DocumentReview if kind == "document_review" else BlockPlan if kind == "plan" else BlockResult
+                        output = contract.model_validate(output)
+                        if getattr(output, 'decision_conflicts', []): raise BlockError('与已确认决定冲突：' + '；'.join(output.decision_conflicts), 422)
+                if kind in ("generate", "revise", "document_revision"):
+                    report_progress("workflow_step", "模型结果已校验，正在逐段写入 PRD 预览…")
                 if kind in ("generate", "revise"):
                     if not await self.publish_block_stream(run_id, output.content):
                         return
@@ -593,6 +686,15 @@ class AIService:
                         changed = (doc.context_revision != run.context_revision or
                                    {b.id: b.version for b in self.blocks.blocks(db, doc)} != run.dependency_versions)
                         run.apply_status = "conflict" if changed else "applied"
+                        if not changed:
+                            for item in prepared_fragments:
+                                block = self.blocks.block(db, doc, item.block_id)
+                                fragment = item.spec_fragment.model_dump(mode="json")
+                                supplied = {d["diagram_id"] for d in fragment.get("er_diagrams", [])}
+                                fragment["er_diagrams"].extend(d for d in (block.fragment or {}).get("er_diagrams", [])
+                                                              if d["diagram_id"] not in supplied)
+                                block.fragment, block.fragment_version = fragment, block.version
+                                block.summary, block.status = item.summary, "ready"
                     elif kind == "document_revision":
                         current_versions = {b.id: b.version for b in self.blocks.blocks(db, doc)}
                         changed = doc.context_revision != run.context_revision or current_versions != run.dependency_versions
@@ -623,36 +725,41 @@ class AIService:
                                 changed_ids.append(block.id)
                             for block_id in changed_ids:
                                 self.blocks.block(db, doc, block_id).status = "ready"
-                            source = db.get(AgentRun, context["review_run_id"])
-                            if source and source.status == "completed":
-                                source.apply_status = "resolved"
                             run.apply_status = "applied"
-                            current_blocks = self.blocks.blocks(db, doc)
-                            current_versions = {block.id: block.version for block in current_blocks}
-                            verification = verification.model_copy(update={
-                                "document_id": doc.id, "base_revision": doc.revision,
-                                "issues": [issue.model_copy(update={
-                                    "block_ids": [key for key in issue.block_ids if key in current_versions],
-                                    "evidence": [item for item in issue.evidence
-                                                 if item.block_id in current_versions and item.quote.strip()
-                                                 and item.quote.strip() in next((block.content for block in current_blocks
-                                                                               if block.id == item.block_id), "")],
-                                }) for issue in verification.issues],
-                            })
-                            verify_run = AgentRun(
-                                id=uid("run"), document_id=doc.id, type="document_review", status="completed",
-                                base_version=doc.revision,
-                                input_snapshot={"document_id": doc.id, "base_revision": doc.revision,
-                                                "title": doc.title, "background": doc.background,
-                                                "global_rules": doc.global_rules,
-                                                "blocks": [{key: getattr(block, key) for key in
-                                                           ("id", "title", "parent_id", "order", "version", "content", "dependencies")}
-                                                          for block in current_blocks]},
-                                dependency_versions=current_versions, context_revision=doc.context_revision,
-                                request_id=f"{run.request_id}:verify", actor_id=run.actor_id,
-                                apply_status="applied", result=verification.model_dump(mode="json"),
-                            )
-                            db.add(verify_run)
+                            if verification is not None:
+                                source = db.get(AgentRun, context["review_run_id"])
+                                remaining_issues = sum(
+                                    issue.severity in ("blocker", "warning") for issue in verification.issues
+                                )
+                                if source and source.status == "completed" and not remaining_issues:
+                                    source.apply_status = "resolved"
+                                run.apply_status = "applied"
+                                current_blocks = self.blocks.blocks(db, doc)
+                                current_versions = {block.id: block.version for block in current_blocks}
+                                verification = verification.model_copy(update={
+                                    "document_id": doc.id, "base_revision": doc.revision,
+                                    "issues": [issue.model_copy(update={
+                                        "block_ids": [key for key in issue.block_ids if key in current_versions],
+                                        "evidence": [item for item in issue.evidence
+                                                     if item.block_id in current_versions and item.quote.strip()
+                                                     and item.quote.strip() in next((block.content for block in current_blocks
+                                                                                   if block.id == item.block_id), "")],
+                                    }) for issue in verification.issues],
+                                })
+                                verify_run = AgentRun(
+                                    id=uid("run"), document_id=doc.id, type="document_review", status="completed",
+                                    base_version=doc.revision,
+                                    input_snapshot={"document_id": doc.id, "base_revision": doc.revision,
+                                                    "title": doc.title, "background": doc.background,
+                                                    "global_rules": doc.global_rules,
+                                                    "blocks": [{key: getattr(block, key) for key in
+                                                               ("id", "title", "parent_id", "order", "version", "content", "dependencies")}
+                                                              for block in current_blocks]},
+                                    dependency_versions=current_versions, context_revision=doc.context_revision,
+                                    request_id=f"{run.request_id}:verify", actor_id=run.actor_id,
+                                    apply_status="applied", result=verification.model_dump(mode="json"),
+                                )
+                                db.add(verify_run)
                     elif kind != "plan":
                         if output.block_id != run.block_id or output.base_version != run.base_version:
                             raise BlockError("AI 返回了错误的 Block 或基线版本")
@@ -675,6 +782,16 @@ class AIService:
                             self.blocks.replace_plan(db, doc, output, run.actor_id)
                             doc.plan_status, run.apply_status = "ready", "applied"
                     run.result = output.model_dump(mode="json")
+                    run.input_snapshot = {**run.input_snapshot, "_execution_telemetry": {
+                        "elapsed_seconds": round(time.perf_counter() - started, 2),
+                        "timing_events": timing_events, "activity_steps": activity_steps,
+                    }}
+                    if kind == "document_revision" and verification is not None:
+                        run.result["remaining_issues"] = sum(
+                            issue.severity in ("blocker", "warning") for issue in verification.issues
+                        )
+                    if kind == "document_revision" and verification is None:
+                        run.result["review_pending"] = True
                     run.status = "completed"
         except asyncio.CancelledError:
             self.fail(run_id, "作业已取消", "cancelled")

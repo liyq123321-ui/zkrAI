@@ -1,0 +1,12 @@
+{
+  "name": "planning-and-task-breakdown",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "path": "skills/planning-and-task-breakdown",
+  "git_tree": "3045f95a156dc71d7b5ac1e29ce795bb5cac2b71",
+  "tree_sha256": "8f0ff2a9838741cfa598ff42ade9264bd24bad8151a3e679991b375975ada3e2",
+  "scenarios": [
+    1,
+    10
+  ]
+}

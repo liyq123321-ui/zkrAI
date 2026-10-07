@@ -1,0 +1,10 @@
+{
+  "version": "unknown",
+  "source_tree": "8fdd24f2b93c198e4973f4008d694929a6082406",
+  "license": "Apache-2.0",
+  "name": "frontend-ui-engineering",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "tree_sha256": "8835a0810811e56b0e5fd282c4cc8bf11fa442e9ea90fde464a3a21bb7e56a16",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "source_path": "skills/frontend-ui-engineering"
+}

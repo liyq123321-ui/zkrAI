@@ -1,0 +1,10 @@
+{
+  "version": "unknown",
+  "source_tree": "3c412780068d7faf9f504a9fac10b8137fcd5faa",
+  "license": "Apache-2.0",
+  "name": "spec-driven-development",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "tree_sha256": "b8a66af6cea6fb8e703c22f53d88cb9db93e42387c384bec106b0e616d01b74c",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "source_path": "skills/spec-driven-development"
+}

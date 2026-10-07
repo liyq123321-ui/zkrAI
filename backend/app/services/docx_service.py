@@ -267,7 +267,7 @@ class DocxService:
                 word, block.content or "", {asset.id: asset for asset in assets_by_block.get(block.id, [])}
             )
             for asset in assets_by_block.get(block.id, []):
-                if asset.id not in referenced:
+                if asset.id not in referenced and (asset.metadata_json or {}).get("source") != "chat_generated":
                     self._append_asset(word, asset, asset.file_name)
             self._append_diagrams(word, block)
 

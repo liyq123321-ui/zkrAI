@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -6,8 +7,10 @@ from app.ai.codex_provider import (
     CodexProvider,
     authoring_skills,
     build_operation_instructions,
+    group_independent_revision_actions,
     normalize_revision_plan,
     normalize_revision_result,
+    revision_skill_route,
 )
 from app.ai.provider import (
     BlockResult,
@@ -20,6 +23,7 @@ from app.ai.provider import (
     SpecFragment,
 )
 from app.services.ai_service import compact_document_context
+from app.agents.progress import bind_agent_progress
 
 
 def test_block_generation_uses_native_docx_authoring_rules():
@@ -30,6 +34,7 @@ def test_block_generation_uses_native_docx_authoring_rules():
     assert "visible `#`, `##`, `**`" in instructions
     assert "DOCX image relationship" in instructions
     assert "internal interchange format" in instructions
+    assert "user's latest editing instruction" in instructions
 
 
 def test_document_revision_uses_docx_rules_but_read_only_review_does_not():
@@ -44,6 +49,57 @@ def test_document_revision_uses_docx_rules_but_read_only_review_does_not():
 def test_diagram_skill_is_routed_only_when_the_block_contains_visual_evidence():
     assert "drawio-skill" not in authoring_skills({"title": "项目背景"})
     assert "drawio-skill" in authoring_skills({"title": "核心数据模型与实体关系"})
+
+
+def test_local_revision_skill_routes_match_the_edited_material():
+    base = {"content": "第一段\n第二段", "line_range": {"start_line": 2, "end_line": 2}}
+    assert revision_skill_route({**base, "feedback": "只润色这段，不改变含义"}) == (
+        "text_style", ("create-prd",),
+    )
+    assert revision_skill_route({**base, "feedback": "这段的权限需求增加验收条件"})[0] == "requirement"
+    assert revision_skill_route({**base, "feedback": "把这段的上限改为20人"})[0] == "requirement"
+    assert revision_skill_route({**base, "feedback": "只修改这张图的图注说明"})[0] == "text_local"
+    assert revision_skill_route({
+        **base, "content": "```mermaid\nflowchart LR\nA-->B\n```",
+        "feedback": "把这张流程图的标签改清楚并美化",
+    }) == ("visual_mermaid", ("mermaid-skill", "design-system", "diagram-design"))
+    assert revision_skill_route({
+        "content": "说明\n```mermaid\nA-->B\n```",
+        "line_range": {"start_line": 3, "end_line": 3}, "feedback": "把选中标签改清楚",
+    })[0] == "visual_mermaid"
+    assert revision_skill_route({
+        **base, "content": "![配图](/assets/example.png)", "feedback": "修改这张配图的颜色",
+    }) == ("visual_asset", ())
+    assert revision_skill_route({**base, "feedback": "全文所有章节都重新审核"}) == ("full", ())
+    assert revision_skill_route({
+        "content": "原有图示说明", "feedback": "产品概念设计里的信息结构图和产品结构图请重新生成",
+    }) == ("visual_mermaid", ("mermaid-skill", "design-system"))
+
+
+@pytest.mark.asyncio
+async def test_local_text_revision_uses_one_skill_pass():
+    provider = CodexProvider.__new__(CodexProvider)
+    provider.runner = RecordingRunner()
+    await provider.revise_block({
+        "block_id": "block-1", "base_version": 1, "content": "原文",
+        "feedback": "只润色这段，不改变含义", "line_range": {"start_line": 1, "end_line": 1},
+    })
+    assert len(provider.runner.calls) == 1
+    assert provider.runner.calls[0][2] == ("create-prd",)
+
+
+@pytest.mark.asyncio
+async def test_generation_reports_real_skill_pass_boundaries():
+    provider = CodexProvider.__new__(CodexProvider)
+    provider.runner = RecordingRunner()
+    progress = []
+    with bind_agent_progress(lambda stage, message: progress.append((stage, message))):
+        await provider.generate_block({"block_id": "block-1", "base_version": 1, "content": ""})
+    steps = [message for stage, message in progress if stage == "workflow_step"]
+    assert steps == [
+        "正在生成章节初稿…",
+        "生成章节初稿已完成，正在进入下一阶段。",
+    ]
 
 
 class RecordingRunner:
@@ -100,7 +156,7 @@ class RecordingRunner:
 
 
 @pytest.mark.asyncio
-async def test_block_generation_runs_separate_authoring_and_quality_skill_passes():
+async def test_block_generation_does_not_append_an_automatic_quality_review():
     provider = object.__new__(CodexProvider)
     provider.runner = RecordingRunner()
 
@@ -111,10 +167,9 @@ async def test_block_generation_runs_separate_authoring_and_quality_skill_passes
     assert result.content == "合格正文"
     assert [call[2] for call in provider.runner.calls] == [
         ("create-prd", "deliver-acceptance-criteria", "drawio-skill"),
-        ("requirement-registry-skill", "prd-consistency-skill", "prd-critique", "traceability-skill"),
     ]
     assert "$create-prd" in provider.runner.calls[0][0]
-    assert "$traceability-skill" in provider.runner.calls[1][0]
+    assert len(provider.runner.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -156,6 +211,119 @@ async def test_automatic_revision_uses_a_bounded_skill_plan_then_one_write_pass(
     assert "原文" not in provider.runner.calls[0][0]
     assert "原文" in provider.runner.calls[1][0]
     assert "revision_plan" in provider.runner.calls[1][0]
+
+
+@pytest.mark.asyncio
+async def test_automatic_revision_repairs_only_missing_planned_blocks():
+    class PartialRunner(RecordingRunner):
+        async def run(self, prompt, contract, cwd, **kwargs):
+            if contract is DocumentRevisionPlan:
+                self.calls.append((prompt, contract, kwargs.get("bundled_skills", ())))
+                return DocumentRevisionPlan(document_id="doc-1", base_revision=1, summary="计划", actions=[
+                    DocumentRevisionAction(block_id=block_id, base_version=1, issue_numbers=[1],
+                                           instruction="统一两处说明", preserve=[], requirement_ids=[])
+                    for block_id in ("block-1", "block-2")
+                ])
+            if contract is DocumentRevision:
+                self.calls.append((prompt, contract, kwargs.get("bundled_skills", ())))
+                payload = json.loads(prompt.split("<business_data>\n", 1)[1].split("\n</business_data>", 1)[0])
+                block_id = payload["revision_plan"]["actions"][0]["block_id"]
+                return DocumentRevision(document_id="doc-1", base_revision=1, summary="已修订", blocks=[
+                    DocumentRevisionBlock(block_id=block_id, base_version=1, content=f"{block_id} 已修订",
+                                          summary="完成", spec_fragment=SpecFragment())
+                ])
+            return await super().run(prompt, contract, cwd, **kwargs)
+
+    provider = object.__new__(CodexProvider)
+    provider.runner = PartialRunner()
+    context = {
+        "document_id": "doc-1", "base_revision": 1, "title": "PRD",
+        "review": {"document_id": "doc-1", "base_revision": 1, "summary": "两处不一致", "issues": [
+            {"severity": "warning", "block_ids": ["block-1", "block-2"],
+             "description": "说明不一致", "suggestion": "统一说明"},
+        ]},
+        "blocks": [{"id": block_id, "version": 1, "title": block_id, "content": "原文"}
+                   for block_id in ("block-1", "block-2")],
+        "document_map": [{"id": block_id, "title": block_id, "summary": "原文"}
+                         for block_id in ("block-1", "block-2")],
+    }
+    revision = await provider.revise_document(context)
+    assert [block.block_id for block in revision.blocks] == ["block-1", "block-2"]
+    assert len(provider.runner.calls) == 3
+    repair_payload = json.loads(
+        provider.runner.calls[2][0].split("<business_data>\n", 1)[1].split("\n</business_data>", 1)[0]
+    )
+    assert [block["id"] for block in repair_payload["blocks"]] == ["block-2"]
+    assert [action["block_id"] for action in repair_payload["revision_plan"]["actions"]] == ["block-2"]
+
+
+def test_revision_groups_keep_shared_issues_and_dependencies_together():
+    actions = [DocumentRevisionAction(
+        block_id=block_id, base_version=1, issue_numbers=numbers,
+        instruction="修订", preserve=[], requirement_ids=requirements,
+    ) for block_id, numbers, requirements in (
+        ("A", [1], []), ("B", [1], []), ("C", [2], ["FR-001"]),
+        ("D", [3], ["FR-001"]), ("E", [4], []),
+    )]
+    document_map = [{"id": block_id, "parent_id": None, "dependencies": []}
+                    for block_id in ("A", "B", "C", "D", "E")]
+    groups = group_independent_revision_actions(actions, document_map)
+    assert [[action.block_id for action in group] for group in groups] == [["A", "B"], ["C", "D"], ["E"]]
+    document_map[-1]["parent_id"] = "D"
+    groups = group_independent_revision_actions(actions, document_map)
+    assert [[action.block_id for action in group] for group in groups] == [["A", "B"], ["C", "D", "E"]]
+
+
+@pytest.mark.asyncio
+async def test_independent_revision_groups_run_in_parallel_with_a_two_agent_limit():
+    class ParallelRunner:
+        def __init__(self):
+            self.active = 0
+            self.peak = 0
+            self.calls = []
+
+        async def run(self, prompt, contract, _cwd, *, bundled_skills=(), **_kwargs):
+            self.calls.append((contract, bundled_skills))
+            if contract is DocumentRevisionPlan:
+                return DocumentRevisionPlan(document_id="doc-1", base_revision=1, summary="计划", actions=[
+                    DocumentRevisionAction(block_id=f"block-{number}", base_version=1,
+                                           issue_numbers=[number], instruction="修订", preserve=[], requirement_ids=[])
+                    for number in (1, 2, 3)
+                ])
+            payload = json.loads(prompt.split("<business_data>\n", 1)[1].split("\n</business_data>", 1)[0])
+            assert len(payload["blocks"]) == len(payload["revision_plan"]["actions"]) == 1
+            assert len(payload["review"]["issues"]) == len(payload["review_issue_numbers"]) == 1
+            assert payload["review_issue_numbers"] == payload["revision_plan"]["actions"][0]["issue_numbers"]
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            try:
+                await asyncio.sleep(0.03)
+            finally:
+                self.active -= 1
+            block_id = payload["blocks"][0]["id"]
+            return DocumentRevision(document_id="doc-1", base_revision=1, summary=block_id, blocks=[
+                DocumentRevisionBlock(block_id=block_id, base_version=1, content=f"{block_id} 已修订",
+                                      summary="完成", spec_fragment=SpecFragment()),
+            ])
+
+    provider = object.__new__(CodexProvider)
+    provider.runner = ParallelRunner()
+    context = {
+        "document_id": "doc-1", "base_revision": 1, "title": "PRD",
+        "review": {"document_id": "doc-1", "base_revision": 1, "summary": "三个独立问题", "issues": [
+            {"severity": "warning", "block_ids": [f"block-{number}"],
+             "description": f"问题 {number}", "suggestion": "修订"}
+            for number in (1, 2, 3)
+        ]},
+        "blocks": [{"id": f"block-{number}", "version": 1, "title": str(number), "content": "原文"}
+                   for number in (1, 2, 3)],
+        "document_map": [{"id": f"block-{number}", "parent_id": None, "dependencies": [], "summary": "原文"}
+                         for number in (1, 2, 3)],
+    }
+    revision = await provider.revise_document(context)
+    assert provider.runner.peak == 2
+    assert [block.block_id for block in revision.blocks] == ["block-1", "block-2", "block-3"]
+    assert len(provider.runner.calls) == 4  # one plan, three isolated write passes
 
 
 @pytest.mark.asyncio

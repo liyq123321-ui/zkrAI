@@ -150,6 +150,9 @@ class GatewayConfig:
     settings: GatewaySettings
     agents: dict[str, AgentPolicy]
     skills: tuple[SkillSpec, ...]
+    capability_routing: Mapping[str, Any] = field(default_factory=dict)
+    skill_packages: tuple[Mapping[str, Any], ...] = ()
+    skill_sources: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     @property
     def tools(self) -> tuple[SkillSpec, ...]:
@@ -342,7 +345,25 @@ def load_gateway_config(
         if spec is not None:
             skills.append(spec)
 
-    return GatewayConfig(settings=settings, agents=agents, skills=tuple(skills))
+    routing = gateway_raw.get("capability_routing")
+    sources = skills_raw.get("skill_sources")
+    packages = skills_raw.get("skill_packages")
+    return GatewayConfig(
+        settings=settings,
+        agents=agents,
+        skills=tuple(skills),
+        capability_routing=dict(routing) if isinstance(routing, Mapping) else {},
+        skill_sources={
+            str(name): dict(source)
+            for name, source in (sources.items() if isinstance(sources, Mapping) else ())
+            if isinstance(source, Mapping)
+        },
+        skill_packages=tuple(
+            dict(package)
+            for package in (packages if isinstance(packages, list) else ())
+            if isinstance(package, Mapping)
+        ),
+    )
 
 
 def config_dir_hint() -> str:

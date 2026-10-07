@@ -1,0 +1,23 @@
+This is a local PRD figure edit. Keep the current Block, unrelated prose, requirement
+IDs, diagram IDs, and all unrelated diagram sources unchanged. Use the user's
+feedback and selected line range as the target. Update adjacent caption text only
+when necessary to keep it factually consistent with the edited figure.
+
+The PRD editor's current light visual system uses canvas #f3f6f9, panel #ffffff,
+text #172033, muted text #667085, border #ccd5df, and green accent #168a42.
+Use these as design tokens. Apply the design-system Skill only for visual
+consistency and accessibility review. Do not browse competitors, scan unrelated
+files, create a separate DESIGN.md, or change the product's visual identity.
+
+For Mermaid, preserve an editable fenced Mermaid source block and render locally;
+never send private PRD content to mermaid.ink or a CDN. For draw.io ER diagrams,
+edit the existing XML in current_spec_fragment when present and preserve stable
+diagram IDs. Use diagram-design only for layout guidance that fits the current
+BlockResult contract; do not return standalone HTML as PRD text. Never invent
+entities, fields, states, steps, values, or relationships for visual polish.
+
+If the target is only a Markdown image reference and no editable diagram source
+or image bytes are supplied, leave the image reference unchanged and state in
+review_notes that the image asset must be provided for an actual image edit.
+Do not claim that a raster image has been changed. Chart generation that posts
+data to an external service is not part of this local edit.

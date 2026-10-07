@@ -5,6 +5,24 @@
 
 skills:
   # ------------------------------ 内置自检 ------------------------------
+  - id: "route_capability"
+    kind: "tool"
+    name: "route_capability"
+    description: "按本次 capability 调用的资源、凭据、算力与门禁元数据返回 LOCAL/REMOTE/ORCH 路由决定；不执行目标操作。"
+    input_schema:
+      type: "object"
+      properties:
+        capability: { type: "string", description: "本次要调用的 capability/tool 名称" }
+        resource_scope: { type: "string", enum: ["local_repo", "local_file", "localhost", "web", "saas", "database", "production"] }
+        credential_class: { type: "string", enum: ["none", "user_token", "paid_api", "production_secret"] }
+        compute_class: { type: "string", enum: ["light", "medium", "heavy"] }
+        governance: { type: "string", enum: ["none", "audit", "quota", "approval"] }
+        latency_sensitivity: { type: "string", enum: ["low", "normal", "high"] }
+        control_type: { type: "string", enum: ["worker", "human_gate", "dispatcher", "release_gate"] }
+      required: ["capability", "resource_scope", "credential_class", "compute_class", "governance", "latency_sensitivity", "control_type"]
+      additionalProperties: false
+    adapter: "builtin"
+
   - id: "gateway_ping"
     kind: "tool"
     name: "gateway_ping"
@@ -95,6 +113,14 @@ skills:
       scopes: ["individual", "collab", "enterprise"]
       max_chars: 64000
 
+  - id: "gateway-skill-packages"
+    kind: "resource"
+    name: "gateway-skill-packages"
+    uri_template: "skill://{packageId}"
+    description: "读取已安装且校验通过的 Agent Skill 指令；不会运行包内脚本。"
+    mime_type: "text/markdown"
+    adapter: "skill-package"
+
   # ------------------------------ 级联外部 MCP ------------------------------
   - id: "code-search"
     kind: "tool"
@@ -143,3 +169,100 @@ skills:
       {% if stage %}当前阶段：{{stage}}{% endif %}
       PRD:
       {{prd}}
+
+# 附件 22 个场景中可核实的现成 Agent Skill。这里只记录来源和包路径；
+# LOCAL/REMOTE/ORCH 由上方 route_capability 按每次调用的元数据决定。
+# 运行 backend/scripts/install_gateway_skills.py 后，包会进入
+# backend/skills/gateway_packages/<id>/；脚本不会激活或执行上游脚本。
+skill_sources:
+  addy:
+    url: https://github.com/addyosmani/agent-skills.git
+    commit: bcab6a1b8503100e8618c3b4e32cc78de43de769
+    license_path: LICENSE
+  obra:
+    url: https://github.com/obra/superpowers.git
+    commit: 5bf4e78011075bcfc0dc295f0724994cd123ee71
+    license_path: LICENSE
+  anthropics:
+    url: https://github.com/anthropics/skills.git
+    commit: 34040c9c568585f6929bedeaad110ad08f079624
+    license_path: per_skill
+  ecc:
+    url: https://github.com/affaan-m/everything-claude-code.git
+    commit: bf70150eb2df8070024e5bdf08e4aa08959e2735
+    license_path: LICENSE
+  alirez:
+    url: https://github.com/alirezarezvani/claude-skills.git
+    commit: 19392f7a08264ed00486a251f5b2098321771f94
+    license_path: LICENSE
+  laurigates:
+    url: https://github.com/laurigates/claude-plugins.git
+    commit: de7cc9ab4fb3ca877f99a294bc9dcef180b2a7df
+    license_path: LICENSE
+  qoder:
+    url: https://github.com/QoderAI/better-harness.git
+    commit: a0dd528b0d41f29338b07afd63d0e60fff0387d7
+    license_path: LICENSE
+  deerflow:
+    url: https://github.com/bytedance/deer-flow.git
+    commit: 434d9647d75b8f2141f8d156f2f6d59c50ab2067
+    license_path: LICENSE
+
+skill_packages:
+  # source/path 必须指向该提交中真实存在且含 SKILL.md 的目录。
+  - { id: spec-driven-development, source: addy, path: skills/spec-driven-development, scenarios: [1, 5, 13, 19] }
+  - { id: planning-and-task-breakdown, source: addy, path: skills/planning-and-task-breakdown, scenarios: [1, 10] }
+  - { id: api-and-interface-design, source: addy, path: skills/api-and-interface-design, scenarios: [2, 5] }
+  - { id: source-driven-development, source: addy, path: skills/source-driven-development, scenarios: [2, 22] }
+  - { id: idea-refine, source: addy, path: skills/idea-refine, scenarios: [3] }
+  - { id: code-review-and-quality, source: addy, path: skills/code-review-and-quality, scenarios: [7, 15] }
+  - { id: doubt-driven-development, source: addy, path: skills/doubt-driven-development, scenarios: [7, 17, 19] }
+  - { id: code-simplification, source: addy, path: skills/code-simplification, scenarios: [8, 22] }
+  - { id: git-workflow-and-versioning, source: addy, path: skills/git-workflow-and-versioning, scenarios: [9] }
+  - { id: ci-cd-and-automation, source: addy, path: skills/ci-cd-and-automation, scenarios: [9] }
+  - { id: frontend-ui-engineering, source: addy, path: skills/frontend-ui-engineering, scenarios: [11, 12] }
+  - { id: browser-testing-with-devtools, source: addy, path: skills/browser-testing-with-devtools, scenarios: [13] }
+  - { id: observability-and-instrumentation, source: addy, path: skills/observability-and-instrumentation, scenarios: [16] }
+  - { id: documentation-and-adrs, source: addy, path: skills/documentation-and-adrs, scenarios: [9, 17] }
+  - { id: interview-me, source: addy, path: skills/interview-me, scenarios: [19] }
+  - { id: incremental-implementation, source: addy, path: skills/incremental-implementation, scenarios: [20, 22] }
+  - { id: using-agent-skills, source: addy, path: skills/using-agent-skills, scenarios: [21] }
+  - { id: brainstorming, source: obra, path: skills/brainstorming, scenarios: [1, 17, 19] }
+  - { id: receiving-code-review, source: obra, path: skills/receiving-code-review, scenarios: [7, 15, 18] }
+  - { id: requesting-code-review, source: obra, path: skills/requesting-code-review, scenarios: [7, 15] }
+  - { id: verification-before-completion, source: obra, path: skills/verification-before-completion, scenarios: [8, 13, 18] }
+  - { id: writing-plans, source: obra, path: skills/writing-plans, scenarios: [10, 17] }
+  - { id: dispatching-parallel-agents, source: obra, path: skills/dispatching-parallel-agents, scenarios: [19, 20] }
+  - { id: subagent-driven-development, source: obra, path: skills/subagent-driven-development, scenarios: [20] }
+  - { id: using-superpowers, source: obra, path: skills/using-superpowers, scenarios: [21] }
+  - { id: brand-guidelines, source: anthropics, path: skills/brand-guidelines, scenarios: [12] }
+  - { id: canvas-design, source: anthropics, path: skills/canvas-design, scenarios: [6] }
+  - { id: frontend-design, source: anthropics, path: skills/frontend-design, scenarios: [6, 11] }
+  - { id: skill-creator, source: anthropics, path: skills/skill-creator, scenarios: [21] }
+  - { id: theme-factory, source: anthropics, path: skills/theme-factory, scenarios: [6, 12, 14] }
+  - { id: web-artifacts-builder, source: anthropics, path: skills/web-artifacts-builder, scenarios: [6, 11, 12] }
+  - { id: webapp-testing, source: anthropics, path: skills/webapp-testing, scenarios: [13] }
+  - { id: architecture-decision-records, source: ecc, path: skills/architecture-decision-records, scenarios: [2, 10, 17] }
+  - { id: article-writing, source: ecc, path: skills/article-writing, scenarios: [3] }
+  - { id: living-docs-governance, source: ecc, path: skills/living-docs-governance, scenarios: [3, 8, 9, 20] }
+  - { id: deep-research, source: ecc, path: skills/deep-research, scenarios: [4] }
+  - { id: market-research, source: ecc, path: skills/market-research, scenarios: [4] }
+  - { id: codebase-onboarding, source: ecc, path: skills/codebase-onboarding, scenarios: [4] }
+  - { id: api-design, source: ecc, path: skills/api-design, scenarios: [5] }
+  - { id: frontend-patterns, source: ecc, path: skills/frontend-patterns, scenarios: [11] }
+  - { id: design-system, source: ecc, path: skills/design-system, scenarios: [12] }
+  - { id: security-review, source: ecc, path: skills/security-review, scenarios: [7, 15] }
+  - { id: frontend-slides, source: ecc, path: skills/frontend-slides, scenarios: [14] }
+  - { id: e2e-testing, source: ecc, path: skills/e2e-testing, scenarios: [18] }
+  - { id: md-document, source: alirez, path: markdown-html/skills/md-document, scenarios: [1, 3, 6, 9, 16, 18] }
+  - { id: md-review, source: alirez, path: markdown-html/skills/md-review, scenarios: [8, 13] }
+  - { id: md-slides, source: alirez, path: markdown-html/skills/md-slides, scenarios: [5, 14] }
+  - { id: human-gate, source: alirez, path: engineering/human-gate/skills/human-gate, scenarios: [19] }
+  - { id: agent-harness, source: alirez, path: engineering/agent-harness/skills/agent-harness, scenarios: [21] }
+  - { id: skillopt-sleep, source: alirez, path: engineering/skillopt-sleep/skills/skillopt-sleep, scenarios: [21] }
+  - { id: c-level-agents, source: alirez, path: c-level-agents/skills/c-level-agents, scenarios: [17] }
+  - { id: changelog-review, source: laurigates, path: project-plugin/skills/changelog-review, scenarios: [9, 15, 18] }
+  - { id: better-harness, source: qoder, path: skills/better-harness, scenarios: [21] }
+  - { id: deerflow-deep-research, source: deerflow, path: skills/public/deep-research, scenarios: [4] }
+  - { id: deerflow-consulting-analysis, source: deerflow, path: skills/public/consulting-analysis, scenarios: [14, 16] }
+  - { id: deerflow-ppt-generation, source: deerflow, path: skills/public/ppt-generation, scenarios: [14] }

@@ -79,8 +79,8 @@ URL 填 `http://127.0.0.1:8088/mcp`，Auth 头填 `Bearer dev-token-codex`。
 
 两个 YAML 是单一事实来源，环境变量可覆盖：
 
-- `backend/app/mcp_gateway/config/gateway.yaml` — 服务元数据、鉴权模式、限流、审计、**agent 注册与白名单**
-- `backend/app/mcp_gateway/config/skills.yaml` — 技能清单（tool / resource / prompt + 适配器绑定）
+- `backend/app/mcp_gateway/config/gateway.yaml` — 服务元数据、鉴权模式、限流、审计、**agent 注册与白名单**，以及 capability 调用路由规则
+- `backend/app/mcp_gateway/config/skills.yaml` — MCP 技能清单（tool / resource / prompt + 适配器绑定）、外部 Agent Skill 来源与包清单
 
 环境变量：
 
@@ -137,6 +137,37 @@ URL 填 `http://127.0.0.1:8088/mcp`，Auth 头填 `Bearer dev-token-codex`。
 
 级联（external-mcp）工具对外命名为 `{skill_id}.{upstream_tool}`（如 `code-search.search_repo`），
 白名单写 `code-search.*` 即可放行。
+
+### 外部 Agent Skill 包与单次调用分流
+
+附件《MCP Gateway Skill 分流完整表》的 22 个场景同时列有真正的 Agent Skill、
+软件项目、标准和自建方法。`skill_packages` 只收录已在上游固定提交中核实存在
+`SKILL.md` 且许可证允许本地保留的 56 个包，按 `scenarios` 关联场景；其余条目没有冒充已安装包。
+Anthropic 的 `docx`、`pptx`、`xlsx` 包带有禁止在其服务外保留副本的许可条款，
+因此未加入安装清单。
+这些 Agent Skill 是工作流指令包，与上方 MCP `skills` 的 tool/resource/prompt 注册项不同。
+
+`gateway.yaml` 中的 `capability_routing.rules` 按每次调用的元数据顺序决定：
+人工门禁、调度、发布门禁与审批走 `ORCH`；远端资源、凭据和重算力走 `REMOTE`；
+本地仓库、文件及 localhost 走 `LOCAL`。调用者需要提供 `resource_scope`、
+`credential_class`、`compute_class`、`governance`、`latency_sensitivity` 和
+`control_type`；缺失或非法值返回 `ORCH`，避免猜测。`route_capability` 工具只给
+`codex-main` 开放，返回路由和命中的规则，**它只做决策，不代理执行，也不替代
+ORCH 的人工批准或发布门禁**。外部 Skill 包本身没有固定的 LOCAL/REMOTE 位置。
+
+安装脚本默认仅离线检查清单，必须显式指定 `--install` 才会联网下载：
+
+```powershell
+cd backend
+.venv\Scripts\python.exe scripts\install_gateway_skills.py
+.venv\Scripts\python.exe scripts\install_gateway_skills.py --install
+```
+
+脚本按 `skill_sources` 的固定 Git commit 拉取、检查 `SKILL.md` 和许可证、拒绝符号链接，
+把包与来源/校验记录放在 `backend/skills/gateway_packages/<id>/`。已存在且校验通过的包会跳过；
+校验不一致的包会报错，不覆盖。脚本不运行下载包的脚本，也不自动加入结构化 Agent
+运行时的可信 Skill 白名单。安装后，`codex-main` 可通过 MCP `resources/list`、
+`resources/read` 读取 `skill://<id>`；读取时再次核对来源和目录校验值。
 
 ---
 

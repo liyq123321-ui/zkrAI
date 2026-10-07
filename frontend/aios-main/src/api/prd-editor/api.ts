@@ -3,5 +3,9 @@ import type { Snapshot } from './types';
 export const documentPath = (id: string) => `/prd-documents/${encodeURIComponent(id)}`;
 export const openDocument = (sessionId: string) => apiClient.request<Snapshot>('/prd-documents', { method: 'POST', body: { session_id: sessionId, auto_generate: true } });
 export const getDocument = (id: string) => apiClient.request<Snapshot>(documentPath(id));
+export interface DocumentVersion { id: string; version: number; source: string; created_at: string }
+export interface DocumentVersionDetail extends DocumentVersion { snapshot: Pick<Snapshot, 'document' | 'blocks'> }
+export const getDocumentVersions = (id: string) => apiClient.request<DocumentVersion[]>(documentPath(id) + '/versions');
+export const getDocumentVersion = (id: string, version: number) => apiClient.request<DocumentVersionDetail>(documentPath(id) + `/versions/${version}`);
 export const mutate = <T = Snapshot>(id: string, path: string, body: object, method = 'POST') =>
   apiClient.request<T>(documentPath(id) + path, { method, body });

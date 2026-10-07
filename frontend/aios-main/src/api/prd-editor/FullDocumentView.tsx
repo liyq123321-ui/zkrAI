@@ -53,8 +53,8 @@ export function FullDocumentReport({ snapshot, loading, resolving = false, repor
 }) {
   return <>
     {reviewError && <div className="prd-review-failure" role="alert"><strong>本次全文审核失败</strong><span>{reviewError}</span><small>请再次点击“审核全文”重试；旧审核结果已隐藏。</small></div>}
-    {report?.result && <section className="prd-full-report" aria-label="全文审核意见"><header className="prd-full-report-header"><div><h3>全文审核意见</h3><small>审核基线 · 文档 v{report.base_version}</small></div><button className="prd-primary" onClick={onResolve} disabled={resolving || loading || report.stale || report.apply_status === 'conflict' || !report.result.issues?.some(issue => issue.severity !== 'info')}>{resolving ? '自动解决并复审中…' : '自动解决审核问题'}</button></header>
-      {(report.stale || report.apply_status === 'conflict') && <p className="prd-conflict">正文或背景已变化，以下意见基于旧版本，请重新审核全文。</p>}
+    {report?.result && <section className="prd-full-report" aria-label="全文审核意见"><header className="prd-full-report-header"><div><h3>全文审核意见</h3><small>审核基线 · 内容修订 {report.base_version}</small></div><button className="prd-primary" onClick={onResolve} disabled={resolving || loading || report.stale || report.apply_status === 'conflict' || !report.result.issues?.some(issue => issue.severity !== 'info')}>{resolving ? '正在修订，完成后待手动审核…' : '自动解决审核问题'}</button></header>
+      {(report.stale || report.apply_status === 'conflict') && <p className="prd-conflict">正文或背景已变化，以下意见待复核。你可以继续编辑，准备好后手动审核。</p>}
       <p>{report.result.summary}</p>
       {report.result.issues?.length === 0 && <p>本次审核未发现需列出的问题。</p>}
       {report.result.issues?.map((issue, index) => <article key={index}>
@@ -75,7 +75,7 @@ export function FullDocumentView({ snapshot, changed, active, loading, resolving
   deferReport?: boolean;
 }) {
   return <>
-    {changed && <div className="prd-conflict">正文或背景已更新，上次全文审核基线已过期。可直接重新审核，也可先刷新全文。<button onClick={onRefresh} disabled={loading}>刷新全文</button></div>}
+    {changed && <div className="prd-conflict">正文已更新，审核留待手动触发或进入下一阶段前进行。<button onClick={onRefresh} disabled={loading}>刷新全文</button></div>}
     <div className="prd-toolbar"><button className="prd-primary" onClick={onReview} disabled={active || loading || !snapshot.blocks.some(b => b.content.trim())}>{active ? '审核全文中…' : '审核全文'}</button><button onClick={onRefresh} disabled={loading}>刷新全文</button></div>
     {!deferReport && <FullDocumentReport snapshot={snapshot} loading={loading} resolving={resolving} report={report} reviewError={reviewError} onSelect={onSelect} onOpenIssue={onOpenIssue} onResolve={onResolve} />}
   </>;

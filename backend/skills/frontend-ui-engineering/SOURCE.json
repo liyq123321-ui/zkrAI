@@ -1,0 +1,12 @@
+{
+  "name": "frontend-ui-engineering",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "path": "skills/frontend-ui-engineering",
+  "git_tree": "8fdd24f2b93c198e4973f4008d694929a6082406",
+  "tree_sha256": "37716900a596b739e9cfd22a2d003ea80f1df956c75c87a561fb686b705b0fc8",
+  "scenarios": [
+    11,
+    12
+  ]
+}

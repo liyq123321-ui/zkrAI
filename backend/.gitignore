@@ -1,5 +1,8 @@
 __pycache__/
 .test-tmp-*/
+.pytest-tmp-*/
+.pytest_cache/
+data/*.log
 *.pyc
 *.pyo
 .venv/

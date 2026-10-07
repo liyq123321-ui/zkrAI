@@ -1,0 +1,11 @@
+{
+  "name": "chart-visualization",
+  "version": "1.0.0",
+  "source": "https://github.com/bytedance/deer-flow",
+  "source_path": "skills/public/chart-visualization",
+  "commit": "8a3a309d1ce8bac8418251be29d4e4297a20c5eb",
+  "source_tree": "26e960fae134c9fdddeeeac3a65987d10ca69d77",
+  "license": "Apache-2.0",
+  "tree_sha256": "0bdb5955dad0c020354d540a2f23abd2502e64c2551a39faf2b085233145cc91",
+  "origin": "deerflow"
+}

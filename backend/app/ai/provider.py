@@ -27,6 +27,7 @@ class BlockPlan(BaseModel):
 
 
 class BlockResult(BaseModel):
+    decision_conflicts: list[str] = Field(default_factory=list, max_length=30)
     model_config = ConfigDict(extra="forbid")
     block_id: str
     base_version: int
@@ -83,6 +84,7 @@ class DocumentRevisionAction(BaseModel):
 
 
 class DocumentRevisionPlan(BaseModel):
+    decision_conflicts: list[str] = Field(default_factory=list, max_length=30)
     model_config = ConfigDict(extra="forbid")
     document_id: str
     base_revision: int
@@ -91,11 +93,71 @@ class DocumentRevisionPlan(BaseModel):
 
 
 class DocumentRevision(BaseModel):
+    decision_conflicts: list[str] = Field(default_factory=list, max_length=30)
     model_config = ConfigDict(extra="forbid")
     document_id: str
     base_revision: int
     summary: str = Field(min_length=1, max_length=6000)
     blocks: list[DocumentRevisionBlock] = Field(max_length=100)
+
+
+class DocumentEditStep(BaseModel):
+    """A small, exact operation proposed by the chat Agent."""
+
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["replace_text", "move_text", "table_set", "table_add_row", "table_delete_row",
+                    "table_add_column", "table_delete_column", "table_sort", "move_block",
+                    "mermaid_insert", "mermaid_replace", "er_upsert", "bulk_replace",
+                    "image_insert", "image_replace"]
+    block_id: str
+    old_text: str = ""
+    new_text: str = ""
+    target_text: str = ""
+    table_index: int = Field(default=0, ge=0)
+    row: int = Field(default=0, ge=0)
+    row_match: str = ""
+    column: str = ""
+    value: str = ""
+    values: list[str] = Field(default_factory=list)
+    descending: bool = False
+    target_block_id: str = ""
+    position: Literal["before", "after", "child_of"] = "after"
+    diagram_index: int = Field(default=0, ge=0)
+    diagram_source: str = Field(default="", max_length=30000)
+    diagram_id: str = ""
+    diagram_title: str = ""
+    after_section: str = ""
+    drawio_xml: str = Field(default="", max_length=1_048_576)
+    match_start: int = Field(default=0, ge=0)
+    match_end: int = Field(default=0, ge=0)
+    image_index: int = Field(default=0, ge=0)
+    image_alt: str = Field(default="", max_length=240)
+    image_prompt: str = Field(default="", max_length=4000)
+    image_svg: str = Field(default="", max_length=100_000)
+    image_mime: str = ""
+    image_base64: str = Field(default="", max_length=16_800_000)
+
+
+class DocumentEditPlan(BaseModel):
+    decision_conflicts: list[str] = Field(default_factory=list, max_length=30)
+    model_config = ConfigDict(extra="forbid")
+    summary: str = Field(min_length=1, max_length=1000)
+    steps: list[DocumentEditStep] = Field(min_length=1, max_length=500)
+    impact_notes: list[str] = Field(default_factory=list, max_length=12)
+
+
+class BulkEditRule(BaseModel):
+    decision_conflicts: list[str] = Field(default_factory=list, max_length=30)
+    """A natural-language rule that the server applies only to eligible text spans."""
+
+    model_config = ConfigDict(extra="forbid")
+    find: str = Field(min_length=1, max_length=200)
+    replace: str = Field(max_length=200)
+    scope: Literal["tables", "prose", "all"] = "all"
+    exclude_quotes: bool = True
+    excluded_block_titles: list[str] = Field(default_factory=list, max_length=30)
+    excluded_texts: list[str] = Field(default_factory=list, max_length=30)
+    summary: str = Field(min_length=1, max_length=500)
 
 
 class AIProvider(ABC):

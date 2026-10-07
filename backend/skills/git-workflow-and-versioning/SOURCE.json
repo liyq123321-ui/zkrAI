@@ -1,0 +1,11 @@
+{
+  "name": "git-workflow-and-versioning",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "path": "skills/git-workflow-and-versioning",
+  "git_tree": "92d87ae1fe98e6b67403bace2ef01264f9664468",
+  "tree_sha256": "5467252b75697b1258d36a170c7fd9328aa85171d1cc9921f45fd30aac3d7e31",
+  "scenarios": [
+    9
+  ]
+}

@@ -49,6 +49,36 @@ mock_upstream: false
 
 admin_token_env: MCP_GATEWAY_ADMIN_TOKEN
 
+# 按每一次 capability 调用决策；Skill 包本身不绑定部署位置。
+# route_capability 仅返回路由决定，不代替 LOCAL/REMOTE/ORCH 的实际执行门禁。
+capability_routing:
+  default_route: ORCH  # 元数据不足时交给编排层，不猜测资源位置
+  rules:
+    - id: control-gate
+      route: ORCH
+      when:
+        control_type: [human_gate, dispatcher, release_gate]
+    - id: approval-gate
+      route: ORCH
+      when:
+        governance: [approval]
+    - id: remote-resource
+      route: REMOTE
+      when:
+        resource_scope: [web, saas, database, production]
+    - id: remote-credential
+      route: REMOTE
+      when:
+        credential_class: [user_token, paid_api, production_secret]
+    - id: heavy-compute
+      route: REMOTE
+      when:
+        compute_class: [heavy]
+    - id: local-resource
+      route: LOCAL
+      when:
+        resource_scope: [local_repo, local_file, localhost]
+
 agents:
   - id: "codex-main"
     roles: ["dev"]
@@ -56,10 +86,12 @@ agents:
     allowed_tools:
       - "gateway_ping"
       - "gateway_whoami"
+      - "route_capability"
       - "generate_image"
       - "search_knowledge"
       - "code-search.*"
     allowed_resources:
+      - "skill://*"
       - "spaces://individual/knowledge/*"
       - "spaces://collab/knowledge/*"
     allowed_prompts:

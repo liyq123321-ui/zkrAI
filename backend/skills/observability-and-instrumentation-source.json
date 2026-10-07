@@ -1,0 +1,10 @@
+{
+  "version": "unknown",
+  "source_tree": "1e8f1c0144e2b8f7859f5870329a31f8abc58193",
+  "license": "Apache-2.0",
+  "name": "observability-and-instrumentation",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "tree_sha256": "202629ff8db691e6613fe967e3b825d345321079b91cfeb05dd43852077aabc9",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "source_path": "skills/observability-and-instrumentation"
+}

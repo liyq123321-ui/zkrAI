@@ -1,0 +1,11 @@
+{
+  "name": "observability-and-instrumentation",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "path": "skills/observability-and-instrumentation",
+  "git_tree": "1e8f1c0144e2b8f7859f5870329a31f8abc58193",
+  "tree_sha256": "edfa5a7da6cb2715ba63844973783a81c256fb3e31c6ffe137365381c2409a01",
+  "scenarios": [
+    16
+  ]
+}

@@ -10,6 +10,7 @@ from app.mcp_gateway.adapters.builtin import BuiltinAdapter
 from app.mcp_gateway.adapters.external_mcp import ExternalMcpAdapter
 from app.mcp_gateway.adapters.http_json import HttpJsonAdapter
 from app.mcp_gateway.adapters.rag_knowledge import RagKnowledgeAdapter
+from app.mcp_gateway.adapters.skill_package import SkillPackageAdapter
 from app.mcp_gateway.config import SkillSpec
 
 LOGGER = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class AdapterRegistry:
             BuiltinAdapter.name: BuiltinAdapter(ctx),
             HttpJsonAdapter.name: HttpJsonAdapter(ctx),
             RagKnowledgeAdapter.name: RagKnowledgeAdapter(ctx),
+            SkillPackageAdapter.name: SkillPackageAdapter(ctx),
             ExternalMcpAdapter.name: ExternalMcpAdapter(ctx),
         }
 

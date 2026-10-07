@@ -1,0 +1,10 @@
+{
+  "version": "unknown",
+  "source_tree": "3045f95a156dc71d7b5ac1e29ce795bb5cac2b71",
+  "license": "Apache-2.0",
+  "name": "planning-and-task-breakdown",
+  "source": "https://github.com/addyosmani/agent-skills.git",
+  "tree_sha256": "acd66d60fcbfd31eb65a2a9ac832933ddbf711f639459a924ae1435d60187538",
+  "commit": "bcab6a1b8503100e8618c3b4e32cc78de43de769",
+  "source_path": "skills/planning-and-task-breakdown"
+}

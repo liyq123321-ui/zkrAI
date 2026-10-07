@@ -5,11 +5,12 @@ import pytest
 from fastapi.testclient import TestClient
 from app.database.database import create_engine_for_url, init_database, make_session_factory
 from app.database.models import Project, SpecVersion, SpecReview
-from app.models import Block, AgentRun
+from app.models import Block, AgentRun, DocumentVersion
 from app.services.block_service import BlockService, BlockError
 from app.services.ai_service import AIService
 from app.services.prd_templates import parse_outline, validate_plan
-from app.ai.provider import BlockPlan, BlockResult, SpecFragment, DocumentReview, DocumentReviewIssue
+from app.ai.provider import (BlockPlan, BlockResult, SpecFragment, DocumentReview, DocumentReviewIssue,
+                             DocumentRevision, DocumentRevisionBlock)
 from tests.helpers.factories import make_valid_spec
 from main import create_app
 
@@ -34,6 +35,17 @@ def prepared(service, outline='# Upstream\n# Target\n# Sibling'):
 
 def manual(service, doc, block, content, **extra):
     return service.save(doc, block['id'], 'owner', block['version'], {'content': content, **extra})
+
+
+def seed_current_review(service, snap):
+    """Synthetic review evidence for submission fixtures only."""
+    with service.write() as db:
+        db.add(AgentRun(id='fixture-current-review', document_id=snap['document']['id'], type='document_review',
+            status='completed', apply_status='applied', actor_id='owner', request_id='fixture-current-review',
+            base_version=snap['document']['revision'], context_revision=snap['document']['context_revision'],
+            dependency_versions={b['id']: b['version'] for b in snap['blocks']}, input_snapshot={},
+            result={'document_id': snap['document']['id'], 'base_revision': snap['document']['revision'],
+                    'summary': 'Synthetic current review', 'issues': []}))
 
 
 class DelayedProvider:
@@ -281,6 +293,7 @@ async def test_block_review_and_snapshot_matches_downstream(service):
     ai.apply(doc, run['id'], 'owner', b['version'])
     snap = service.snapshot(doc, 'owner')
     assert snap['blocks'][0]['version'] == b['version']
+    seed_current_review(service, snap)
     submitted = service.submit(doc, 'owner', snap['document']['revision'])
     # The submit result carries the project so the HTTP layer can start the
     # HTML prototype without a second lookup (see test_prd_submit_prototype).
@@ -343,7 +356,37 @@ def test_http_identity_validation_and_routes(service, test_settings):
         assert invalid.status_code == 422
         assert client.get(f'/prd-documents/{doc}').status_code == 200
         assert client.get(f'/prd-documents/{doc}/blocks/{b["id"]}/history').status_code == 200
+        versions = client.get(f'/prd-documents/{doc}/versions')
+        assert versions.status_code == 200
+        assert client.get(f'/prd-documents/{doc}/versions/{versions.json()[0]["version"]}').status_code == 200
         assert client.get('/prd-documents/templates').status_code == 200
+
+
+def test_document_versions_capture_whole_document_after_each_save(service):
+    snap = prepared(service)
+    doc = snap['document']['id']
+    before = service.document_versions(doc, 'owner')
+    assert before and before[0]['version'] == len(before)
+    changed = manual(service, doc, snap['blocks'][0], '新的全文内容')
+    versions = service.document_versions(doc, 'owner')
+    assert versions[0]['version'] == before[0]['version'] + 1
+    assert versions[0]['created_at']
+    latest = service.document_version(doc, versions[0]['version'], 'owner')
+    assert latest['snapshot']['blocks'][0]['content'] == '新的全文内容'
+    assert len(latest['snapshot']['blocks']) == len(changed['blocks'])
+    assert service.document_version(doc, before[0]['version'], 'owner')['snapshot']['blocks'][0]['content'] == ''
+
+
+def test_document_versions_rebuild_existing_block_history(service):
+    snap = prepared(service)
+    doc = snap['document']['id']
+    manual(service, doc, snap['blocks'][0], '历史修改')
+    with service.factory() as db:
+        db.query(DocumentVersion).filter_by(document_id=doc).delete()
+        db.commit()
+    versions = service.document_versions(doc, 'owner')
+    assert len(versions) >= 2
+    assert service.document_version(doc, versions[0]['version'], 'owner')['snapshot']['blocks'][0]['content'] == '历史修改'
 
 
 @pytest.mark.asyncio
@@ -442,6 +485,7 @@ def test_canonical_legacy_import_preserves_hierarchy_and_structured_fields(servi
     snap = service.open('s', 'owner')
     assert snap['blocks'][1]['parent_id'] == snap['blocks'][0]['id']
     assert snap['blocks'][1]['fragment']['background_and_goals'] == payload['background_and_goals']
+    seed_current_review(service, snap)
     result = service.submit(snap['document']['id'], 'owner', snap['document']['revision'])
     with service.factory() as db:
         spec = db.get(SpecVersion, result['spec_version_id'])
@@ -603,6 +647,50 @@ async def test_whole_review_reads_all_blocks_without_modifying_prd(service):
     assert service.snapshot(doc, 'owner')['runs'][-1]['stale'] is False
     manual(service, doc, before['blocks'][0], 'Changed after review')
     assert service.snapshot(doc, 'owner')['runs'][-1]['stale'] is True
+
+
+@pytest.mark.asyncio
+async def test_auto_resolution_keeps_original_warning_pending_manual_review(service):
+    snap = prepared(service)
+    doc = snap['document']['id']
+    block = snap['blocks'][0]
+    snap = manual(service, doc, block, '原始需求')
+
+    class Provider:
+        def __init__(self): self.revisions = 0
+
+        async def review_document(self, context):
+            return DocumentReview(document_id=doc, base_revision=context['base_revision'],
+                summary='仍需处理', issues=[DocumentReviewIssue(severity='warning',
+                    block_ids=[block['id']], description='验收规则仍不明确', suggestion='补全验收规则')])
+
+        async def revise_document(self, context):
+            self.revisions += 1
+            target = context['blocks'][0]
+            return DocumentRevision(document_id=doc, base_revision=context['base_revision'],
+                summary='已尝试修订', blocks=[DocumentRevisionBlock(
+                    block_id=target['id'], base_version=target['version'],
+                    content='补充后的需求' if self.revisions == 1 else target['content'],
+                    summary='修订摘要', spec_fragment=SpecFragment())])
+
+    provider = Provider()
+    ai = AIService(service, provider)
+    review = ai.enqueue_document_review(doc, 'owner', 'review-remaining', snap['document']['revision'])
+    await ai.tasks[review['id']]
+    current = service.snapshot(doc, 'owner')
+    revision = ai.enqueue_document_revision(doc, 'owner', review['id'], 'resolve-remaining',
+                                             current['document']['revision'])
+    await ai.tasks[revision['id']]
+    after = service.snapshot(doc, 'owner')
+    by_id = {run['id']: run for run in after['runs']}
+    assert provider.revisions == 1
+    assert by_id[revision['id']]['status'] == 'completed'
+    assert by_id[revision['id']]['result']['review_pending'] is True
+    assert by_id[review['id']]['apply_status'] != 'resolved'
+    assert after['runs'][-1]['type'] == 'document_revision'
+    assert len(by_id[review['id']]['result']['issues']) == 1
+    assert by_id[review['id']]['stale'] is True
+    assert next(item for item in after['blocks'] if item['id'] == block['id'])['content'] == '补充后的需求'
 
 
 @pytest.mark.asyncio

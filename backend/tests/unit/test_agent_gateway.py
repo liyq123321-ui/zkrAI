@@ -19,6 +19,7 @@ from app.agents.codex import (
     append_skill_profiles,
     build_node_prompt,
     build_strict_output_schema,
+    install_bundled_skills,
 )
 from app.config import Settings
 from app.domain.types import (
@@ -626,6 +627,27 @@ def test_structured_runner_reports_sanitized_jsonl_lifecycle_progress(
     assert "private" not in repr(progress)
 
 
+def test_structured_runner_reports_trusted_skill_file_activity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    progress: list[tuple[str, str]] = []
+    import app.agents.codex as codex_module
+
+    monkeypatch.setattr(codex_module, "report_agent_progress", lambda stage, message: progress.append((stage, message)))
+    runner = CodexStructuredRunner(_settings(tmp_path, tmp_path / "unused-codex"))
+    command = "Get-Content C:\\runtime\\skills\\prd-consistency-skill\\SKILL.md"
+    for event_type in ("item.started", "item.completed"):
+        runner._report_jsonl_progress(json.dumps({
+            "type": event_type, "item": {"type": "command_execution", "command": command},
+        }).encode("utf-8"))
+    runner._report_jsonl_progress(json.dumps({
+        "type": "item.started",
+        "item": {"type": "command_execution", "command": "Get-Content C:\\runtime\\skills\\unknown\\SKILL.md"},
+    }).encode("utf-8"))
+
+    assert ("skill_active", "正在调用 prd-consistency-skill：读取 Skill 规则…") in progress
+    assert ("skill_completed", "已读取 prd-consistency-skill，正在应用规则…") in progress
+    assert not any("unknown" in message for _, message in progress)
+
+
 def test_structured_runner_stops_a_silent_process_at_inactivity_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -838,7 +860,7 @@ async def test_prd_nodes_require_evidence_driven_drawio_behavior(tmp_path, valid
     assert "partialRectangle child cell" in generation_prompt
     assert "same absolute width and height as its tableRow" in generation_prompt
     assert "$drawio-skill" in rewrite_prompt
-    assert "preserve its `diagram_id` and `drawio_xml`" in rewrite_prompt
+    assert "Preserve an existing diagram's `diagram_id` and `drawio_xml` exactly" in rewrite_prompt
     assert "empty tableRow" in rewrite_prompt
     assert "partialRectangle child cell" in rewrite_prompt
     assert "same absolute width and height as its tableRow" in rewrite_prompt
@@ -852,6 +874,39 @@ def test_checked_in_bundled_skill_manifests_match_their_content():
         manifest = json.loads((BUNDLED_SKILL_ROOT / f"{name}-source.json").read_text(encoding="utf-8"))
         assert manifest["name"] == name
         assert manifest["tree_sha256"] == _bundled_skill_digest(BUNDLED_SKILL_ROOT / name), name
+
+
+def test_all_project_skills_can_be_loaded_into_an_isolated_runtime(tmp_path: Path):
+    install_bundled_skills(tmp_path, tuple(sorted(_TRUSTED_BUNDLED_SKILLS)))
+    for name in _TRUSTED_BUNDLED_SKILLS:
+        skill = tmp_path / "skills" / name / "SKILL.md"
+        assert skill.is_file(), name
+        assert f"name: {name}" in skill.read_text(encoding="utf-8"), name
+
+
+@pytest.mark.asyncio
+async def test_spec_breakdown_nodes_receive_planning_skill(tmp_path):
+    class RecordingRunner:
+        def __init__(self):
+            self.calls = []
+
+        async def run(self, prompt, output_type, cwd, **kwargs):
+            self.calls.append((prompt, kwargs.get("bundled_skills", ())))
+            return object()
+
+    runner = RecordingRunner()
+    gateway = CodexAgentGateway(
+        runner=runner,
+        settings=_settings(tmp_path, tmp_path / "unused-codex"),
+    )
+
+    await gateway._run_node("pm_decompose", {}, object)
+    await gateway._run_node("reviewer_breakdown", {}, object)
+
+    for prompt, skills in runner.calls:
+        assert skills == ("planning-and-task-breakdown",)
+        assert "$planning-and-task-breakdown" in prompt
+        assert "supplied SDLC rules take precedence" in prompt
 
 
 def test_structured_runner_rejects_tampered_bundled_skill(

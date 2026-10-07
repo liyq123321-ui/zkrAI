@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Index, Integer, JSON, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, text
 
 from .database import Base
 
@@ -43,6 +43,32 @@ class Message(Base):
     role = Column(String)
     content = Column(Text)
     created_at = Column(DateTime(timezone=True), default=utc_now)
+
+
+class WorkspaceChatMessage(Base):
+    """User-visible Project Agent conversation, scoped to a project session."""
+
+    __tablename__ = "workspace_chat_messages"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    role = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    detail = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class WorkspaceChatImage(Base):
+    """Private screenshot attached to one project conversation message."""
+
+    __tablename__ = "workspace_chat_images"
+
+    id = Column(String, primary_key=True)
+    session_id = Column(String, nullable=False, index=True)
+    message_id = Column(String, index=True)
+    mime_type = Column(String, nullable=False)
+    content = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class Epic(Base):
@@ -281,6 +307,25 @@ class PrdPrototype(Base):
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class PrdPresentation(Base):
+    """Editable PPTX derived from one frozen PRD version and one audience."""
+
+    __tablename__ = "prd_presentations"
+    __table_args__ = (
+        UniqueConstraint("spec_version_id", "audience", name="uq_prd_presentation_version_audience"),
+    )
+
+    id = Column(String, primary_key=True)
+    project_id = Column(String, nullable=False, index=True)
+    spec_version_id = Column(String, nullable=False, index=True)
+    audience = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    plan = Column(JSON, nullable=False)
+    pptx = Column(LargeBinary, nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class WorkItem(Base):

@@ -1,0 +1,10 @@
+{
+  "name": "officecli-skill",
+  "version": "1.0.152",
+  "source": "https://github.com/iOfficeAI/OfficeCLI",
+  "source_path": "skills/officecli-skill",
+  "commit": "v1.0.152",
+  "source_tree": "release-download",
+  "license": "unknown",
+  "tree_sha256": "12ff4ba11da1adae47a669a726c87e42e9a167018dbea5c26d99dbf1ff8ce53c"
+}

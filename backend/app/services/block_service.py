@@ -4,9 +4,9 @@ import json
 from datetime import UTC, datetime
 from contextlib import contextmanager
 from uuid import uuid4
-from sqlalchemy import text, update
+from sqlalchemy import func, text, update
 from app.database.models import Project, SpecVersion, SpecReview, AgentSession, AgentCall, AuditEvent, WorkItem
-from app.models import Document, Block, BlockVersion, BlockComment, AgentRun, DocumentAsset
+from app.models import Document, DocumentVersion, Block, BlockVersion, BlockComment, AgentRun, DocumentAsset
 from app.ai.provider import BlockPlan, PlanNode, SpecFragment, DocumentReview
 from app.domain.types import ProjectSpecPayload
 from app.services.prd_templates import TEMPLATES, parse_outline, validate_plan
@@ -45,6 +45,16 @@ class BlockService:
                 db.execute(text("BEGIN IMMEDIATE"))
             try:
                 yield db
+                changes = db.info.pop("prd_version_changes", {})
+                if changes:
+                    db.flush()
+                    for document_id, source in changes.items():
+                        doc = db.get(Document, document_id)
+                        latest = db.query(func.max(DocumentVersion.version)).filter_by(document_id=document_id).scalar() or 0
+                        db.add(DocumentVersion(id=uid("docversion"), document_id=document_id,
+                                               version=latest + 1, source=source,
+                                               snapshot={"document": record(doc),
+                                                         "blocks": [record(block) for block in self.blocks(db, doc)]}))
                 db.commit()
             except BaseException:
                 db.rollback()
@@ -75,9 +85,39 @@ class BlockService:
         return db.query(Block).filter_by(document_id=doc.id).order_by(Block.order).all()
 
     def history(self, db, block, source, actor, run_id=None):
+        if block.document_id not in db.info.setdefault("prd_version_checked", set()):
+            self._backfill_document_versions(db, db.get(Document, block.document_id))
+            db.info["prd_version_checked"].add(block.document_id)
         db.add(BlockVersion(id=uid("version"), document_id=block.document_id, block_id=block.id,
                             version=block.version, snapshot=record(block), source=source,
                             actor_id=actor, run_id=run_id))
+        db.info.setdefault("prd_version_changes", {})[block.document_id] = source
+
+    def _backfill_document_versions(self, db, doc):
+        if db.query(DocumentVersion.id).filter_by(document_id=doc.id).first():
+            return
+        old = (db.query(BlockVersion).filter_by(document_id=doc.id)
+               .order_by(BlockVersion.created_at, BlockVersion.id).all())
+        if not old:
+            return
+        current, pending, group_key, number = {}, None, None, 0
+
+        def store_version(last):
+            nonlocal number
+            number += 1
+            db.add(DocumentVersion(id=uid("docversion"), document_id=doc.id,
+                                   version=number, source=last.source, created_at=last.created_at,
+                                   snapshot={"document": record(doc),
+                                             "blocks": sorted(current.values(), key=lambda item: item["order"])}))
+
+        for row in old:
+            key = "initial" if row.version == 1 and row.source in {"outline", "import"} else f"run:{row.run_id}" if row.run_id else row.id
+            if pending is not None and key != group_key:
+                store_version(pending)
+            current[row.block_id] = row.snapshot
+            pending, group_key = row, key
+        if pending is not None:
+            store_version(pending)
 
     def replace_plan(self, db, doc, plan, actor):
         try:
@@ -194,7 +234,8 @@ class BlockService:
             assets = db.query(DocumentAsset).filter_by(document_id=doc.id).order_by(
                 DocumentAsset.created_at, DocumentAsset.id
             ).all()
-            return {"document": record(doc), "blocks": [record(b) for b in blocks],
+            latest_version = db.query(func.max(DocumentVersion.version)).filter_by(document_id=doc.id).scalar()
+            return {"document": {**record(doc), "latest_version": latest_version}, "blocks": [record(b) for b in blocks],
                     "assets": [{
                         "id": asset.id, "document_id": asset.document_id, "block_id": asset.block_id,
                         "type": asset.type, "file_name": asset.file_name, "mime_type": asset.mime_type,
@@ -204,6 +245,9 @@ class BlockService:
                     } for asset in assets],
                     "comments": [record(c) for c in db.query(BlockComment).filter_by(document_id=doc.id).all()],
                     "runs": [{**{k: v for k, v in record(r).items() if k != "input_snapshot"},
+                              "review_scope": (r.input_snapshot or {}).get("review_scope", "full"),
+                              "result": ({**r.result, **(r.input_snapshot or {}).get("_execution_telemetry", {})}
+                                         if r.result is not None else None),
                               **({"stale": r.context_revision != doc.context_revision or r.dependency_versions != versions}
                                  if r.type == "document_review" else {})} for r in runs]}
 
@@ -259,9 +303,10 @@ class BlockService:
         if "fragment" not in values:
             block.fragment = {"er_diagrams": preserved} if preserved else None
             block.fragment_version = None
-            block.summary = block.content[:2000]
         else:
             block.fragment_version = next_version
+        if "content" in values:
+            block.summary = block.content[:2000]
         db.flush()
         self.history(db, block, source, actor, run_id)
         self.invalidate(db, doc, [block.id])
@@ -301,6 +346,24 @@ class BlockService:
             doc = self.document(db, document_id, actor)
             self.block(db, doc, block_id)
             return [record(v) for v in db.query(BlockVersion).filter_by(block_id=block_id).order_by(BlockVersion.version.desc())]
+
+    def document_versions(self, document_id, actor):
+        with self.write() as db:
+            doc = self.document(db, document_id, actor)
+            self._backfill_document_versions(db, doc)
+            db.flush()
+            rows = db.query(DocumentVersion).filter_by(document_id=doc.id).order_by(DocumentVersion.version.desc()).all()
+            return [{key: value for key, value in record(row).items() if key != "snapshot"} for row in rows]
+
+    def document_version(self, document_id, version, actor):
+        with self.write() as db:
+            doc = self.document(db, document_id, actor)
+            self._backfill_document_versions(db, doc)
+            db.flush()
+            row = db.query(DocumentVersion).filter_by(document_id=doc.id, version=version).one_or_none()
+            if row is None:
+                raise BlockError("全文版本不存在", 404)
+            return record(row)
 
     def restore(self, document_id, block_id, actor, version, expected_version):
         with self.write() as db:
@@ -370,6 +433,8 @@ class BlockService:
             .all()
         )
         for review in reviews:
+            if (review.input_snapshot or {}).get("review_scope") == "affected":
+                continue
             if (review.apply_status != "applied"
                     or review.context_revision != doc.context_revision
                     or review.dependency_versions != versions
@@ -405,6 +470,8 @@ class BlockService:
                 raise BlockError("请等待或取消当前 AI 作业")
             blocks = self.blocks(db, doc)
             containers = {b.parent_id for b in blocks if b.parent_id}
+            if self._clean_document_review(db, doc, blocks) is None:
+                raise BlockError("进入下一阶段前，请先手动审核当前版本并处理待解决意见")
             body_blocks = [b for b in blocks if b.content.strip() or b.id not in containers]
             missing = [b.title for b in body_blocks if not b.content.strip() or b.status == "outdated" or b.fragment_version != b.version]
             if missing:
