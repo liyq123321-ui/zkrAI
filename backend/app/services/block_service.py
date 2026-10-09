@@ -1,14 +1,22 @@
 """Transactional block editing on the existing SQLite database."""
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from contextlib import contextmanager
 from uuid import uuid4
 from sqlalchemy import func, text, update
 from app.database.models import Project, SpecVersion, SpecReview, AgentSession, AgentCall, AuditEvent, WorkItem
 from app.models import Document, DocumentVersion, Block, BlockVersion, BlockComment, AgentRun, DocumentAsset
-from app.ai.provider import BlockPlan, PlanNode, SpecFragment, DocumentReview
+from app.ai.provider import BlockTree, PlanNode, SpecFragment, DocumentReview
 from app.domain.types import ProjectSpecPayload
+from app.services.imported_prd_layout import (
+    assess_imported_hierarchy,
+    split_by_heading_map,
+    split_imported_markdown,
+)
+from app.services import imported_prd_store
+from app.services.prd_source_import import extract_docx_images
 from app.services.prd_templates import TEMPLATES, parse_outline, validate_plan
 from app.services.project_title import concise_project_title
 from app.services.spec_review import run_rule_review
@@ -143,7 +151,7 @@ class BlockService:
             self.history(db, block, "outline", actor)
         doc.revision += 1
 
-    def open(self, session_id, actor):
+    def open(self, session_id, actor, defer_outline=False):
         with self.write() as db:
             project = db.query(Project).filter_by(session_id=session_id).one_or_none()
             if project is None:
@@ -163,14 +171,15 @@ class BlockService:
                 doc = Document(id=uid("prd"), project_id=project.id, session_id=session_id,
                                title=project_title,
                                background=json.dumps(project.brief, ensure_ascii=False), global_rules="以已确认需求为准；不虚构业务事实、批准或完成状态。",
-                               template="alibaba", plan_status="pending", revision=1, context_revision=1,
+                               template="unselected" if defer_outline and not project.current_spec_version_id else "alibaba",
+                               plan_status="pending", revision=1, context_revision=1,
                                created_by=actor, source_spec_version_id=project.current_spec_version_id)
                 db.add(doc)
                 db.flush()
                 spec = db.get(SpecVersion, project.current_spec_version_id) if project.current_spec_version_id else None
                 if spec:
                     self.import_spec(db, doc, spec, actor)
-                else:
+                elif not defer_outline:
                     self.replace_plan(db, doc, parse_outline(TEMPLATES["alibaba"]["outline"]), actor)
             elif doc.title == final_objective or len(doc.title) > 40:
                 doc.title = project_title
@@ -224,6 +233,142 @@ class BlockService:
         doc.plan_status = "ready"
         doc.template = "existing"
 
+    def import_source(self, document_id, actor, expected_revision, replace=False, headings=None, assets=None):
+        """Adopt the PRD that was imported at intake as the document text.
+
+        The imported text becomes the document verbatim — no template outline,
+        no Agent run — so the project starts from the file the user already
+        wrote instead of a regenerated rewrite of it. When the file carries no
+        usable headings, ``headings`` may hold an Agent-chosen map of which
+        existing lines are section titles; the wording is still never rewritten.
+
+        ``replace`` allows overwriting a draft that already holds content. It is
+        refused for a frozen PRD, and the previous text stays readable through
+        the document version history even when nothing is deleted by hand.
+
+        ``assets`` (a DocumentAssetService) lets the images of the original file
+        come back: the import left a token where each one was, and this step
+        stores the bytes and swaps in an ``asset://`` reference.
+        """
+
+        with self.write() as db:
+            doc = self.document(db, document_id, actor)
+            if doc.revision != expected_revision:
+                raise BlockError("文档已改变，请刷新后重试")
+            if db.query(AgentRun).filter_by(document_id=doc.id).filter(AgentRun.status.in_(["queued", "running"])).count():
+                raise BlockError("请先取消运行中的 AI 作业")
+            project = db.get(Project, doc.project_id)
+            brief = dict(project.brief or {}) if project is not None else {}
+            source = brief.get("source_prd")
+            content = str(source.get("content") or "") if isinstance(source, dict) else ""
+            if not content.strip():
+                raise BlockError("这个项目没有导入的原始 PRD 文件，无法直接使用原始文件", 422)
+            if doc.submitted_spec_id:
+                raise BlockError("PRD 已冻结，不能用原始文件覆盖")
+            existing = self.blocks(db, doc)
+            if not replace and any(item.content or item.version > 1 for item in existing):
+                raise BlockError("文档已有内容或编辑历史，不能再用原始文件覆盖；请保留当前草稿")
+            if not replace and db.query(BlockComment).filter_by(document_id=doc.id).count():
+                raise BlockError("文档已有批注，不能替换为原始文件")
+            if replace:
+                # Anchored to the Blocks that are about to disappear, so they
+                # would be unreachable dangling rows after the swap.
+                db.query(BlockComment).filter_by(document_id=doc.id).delete()
+            if assets is not None and existing:
+                assets.discard_blocks(db, doc.id, {item.id for item in existing})
+            for item in existing:
+                db.query(BlockVersion).filter_by(block_id=item.id).delete()
+                db.delete(item)
+            imported_images = self._imported_images(source, assets)
+            written_paths: list = []
+            parents = []
+            layout = (split_by_heading_map(content, headings) if headings
+                      else split_imported_markdown(content))
+            try:
+                for order, (depth, title, body) in enumerate(layout):
+                    while parents and parents[-1][0] >= depth:
+                        parents.pop()
+                    block = Block(id=uid("block"), document_id=doc.id, title=title, order=order,
+                                  parent_id=parents[-1][1] if parents else None,
+                                  status="ready" if body.strip() else "pending",
+                                  version=1, content=body, summary=body[:2000],
+                                  instruction="来自导入的原始 PRD 文件，保留原文；可直接编辑或交 Agent 修改。",
+                                  dependencies=[], fragment=None)
+                    db.add(block)
+                    db.flush()
+                    restored = self._restore_images(
+                        db, doc, block, imported_images, actor, assets, written_paths
+                    )
+                    if restored != block.content:
+                        block.content = restored
+                        block.summary = restored[:2000]
+                        block.status = "ready" if restored.strip() else "pending"
+                        db.flush()
+                    self.history(db, block, "import", actor)
+                    parents.append((depth, block.id))
+            except BaseException:
+                for path in written_paths:
+                    path.unlink(missing_ok=True)
+                raise
+            if isinstance(source, dict):
+                # Persisted so every later snapshot can report whether the file
+                # carried its own hierarchy without re-scanning 300k characters
+                # on each poll.
+                assessment = assess_imported_hierarchy(content)
+                if headings:
+                    assessment["clear"] = True
+                    assessment["organized"] = True
+                brief["source_prd"] = {**source, "hierarchy": assessment}
+                project.brief = brief
+            doc.plan_status = "ready"
+            doc.template = "existing"
+            doc.revision += 1
+        return self.snapshot(document_id, actor)
+
+    @staticmethod
+    def _imported_images(source, assets) -> dict[str, dict]:
+        """The images of the stored original file, keyed by their token.
+
+        Returns nothing when the caller has no asset service, the project kept
+        no file, or the file is gone — in which case the tokens simply stay in
+        the text and no image is lost that was not already lost.
+        """
+
+        if assets is None or not isinstance(source, dict):
+            return {}
+        raw = imported_prd_store.load(str(source.get("import_id") or ""))
+        if not raw:
+            return {}
+        try:
+            return {str(item["token"]): item for item in extract_docx_images(raw)}
+        except ValueError:
+            return {}
+
+    @staticmethod
+    def _restore_images(db, doc, block, imported_images, actor, assets, written_paths) -> str:
+        """Store the block's images and swap each token for its reference."""
+
+        content = block.content or ""
+        if not imported_images or "[[FF_IMPORTED_IMAGE_" not in content:
+            return content
+        for token in re.findall(r"\[\[FF_IMPORTED_IMAGE_\d+\]\]", content):
+            image = imported_images.get(token)
+            if image is None:
+                continue
+            asset = assets.store_asset(
+                db,
+                document_id=doc.id,
+                block_id=block.id,
+                actor=actor,
+                file_name=str(image["file_name"]),
+                mime_type=str(image["mime_type"]),
+                content=image["content"],
+                metadata={"source": "imported_prd"},
+                created_paths=written_paths,
+            )
+            content = content.replace(token, f"![{asset.file_name}](asset://{asset.id})")
+        return content
+
     def snapshot(self, document_id, actor):
         with self.factory() as db:
             doc = self.document(db, document_id, actor)
@@ -235,7 +380,19 @@ class BlockService:
                 DocumentAsset.created_at, DocumentAsset.id
             ).all()
             latest_version = db.query(func.max(DocumentVersion.version)).filter_by(document_id=doc.id).scalar()
-            return {"document": {**record(doc), "latest_version": latest_version}, "blocks": [record(b) for b in blocks],
+            project = db.get(Project, doc.project_id)
+            brief = project.brief if project is not None and isinstance(project.brief, dict) else {}
+            source = brief.get("source_prd") if isinstance(brief, dict) else None
+            # Only the identity of the intake file is exposed here; the body can
+            # hold 300k characters and this snapshot is polled continuously.
+            source_prd = ({
+                "filename": str(source.get("filename") or ""),
+                "title": str(source.get("title") or ""),
+                "characters": len(str(source.get("content") or "")),
+                "hierarchy": source.get("hierarchy") if isinstance(source.get("hierarchy"), dict) else None,
+            } if isinstance(source, dict) and str(source.get("content") or "").strip() else None)
+            return {"document": {**record(doc), "latest_version": latest_version, "source_prd": source_prd},
+                    "blocks": [record(b) for b in blocks],
                     "assets": [{
                         "id": asset.id, "document_id": asset.document_id, "block_id": asset.block_id,
                         "type": asset.type, "file_name": asset.file_name, "mime_type": asset.mime_type,
@@ -322,7 +479,7 @@ class BlockService:
                                   instruction=b.instruction, dependencies=values.get("dependencies", b.dependencies) if b.id == block_id else b.dependencies)
                          for b in self.blocks(db, doc)]
                 try:
-                    validate_plan(BlockPlan(blocks=nodes))
+                    validate_plan(BlockTree(blocks=nodes))
                 except ValueError as error:
                     raise BlockError(str(error), 422) from error
             self.save_in_transaction(db, doc, block, expected_version, values, actor)
@@ -409,6 +566,26 @@ class BlockService:
             comment.resolved = resolved
             doc.revision += 1
         return self.snapshot(document_id, actor)
+
+    def prototype_source(self, document_id, actor):
+        """Draft markdown/revision used to build an HTML prototype before freeze."""
+        with self.factory() as db:
+            doc = self.document(db, document_id, actor)
+            blocks = self.blocks(db, doc)
+            return {
+                "document_id": doc.id,
+                "project_id": doc.project_id,
+                "revision": doc.revision,
+                "markdown": self.markdown(blocks),
+            }
+
+    def document_revision(self, document_id):
+        """Revision of a document without an actor check (derived, read-only aid)."""
+        with self.factory() as db:
+            doc = db.get(Document, document_id)
+            if doc is None:
+                raise BlockError("文档不存在", 404)
+            return doc.revision
 
     def markdown(self, blocks):
         by_parent = {}

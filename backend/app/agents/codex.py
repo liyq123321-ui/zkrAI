@@ -243,11 +243,13 @@ class CodexStructuredRunner:
         bundled_skills: tuple[str, ...] = (),
         use_magic_mcp: bool = False,
         image_paths: tuple[Path, ...] = (),
+        max_attempts: int = 3,
     ) -> ModelT:
         repair_prompt = prompt
         last_error: ValidationError | OutputConsistencyError | None = None
 
-        for attempt in range(3):
+        attempts = max(1, max_attempts)
+        for attempt in range(attempts):
             self._persist_runtime_event(
                 {
                     "type": "attempt.started",
@@ -284,7 +286,7 @@ class CodexStructuredRunner:
                         "findings": findings,
                     }
                 )
-                if attempt == 2:
+                if attempt == attempts - 1:
                     break
                 repair_prompt = (
                     f"{prompt}\n\nThe previous response failed validation. Return a complete corrected JSON response. "
@@ -684,6 +686,11 @@ class CodexAgentGateway:
 
         return await self._run_node("pm_recommend_lifecycle", payload, LifecycleAssessment)
 
+    async def structure_imported_prd(self, payload: dict[str, object]):
+        from app.domain.imported_layout import ImportedHeadingPlan
+
+        return await self._run_node("pm_structure_prd", payload, ImportedHeadingPlan)
+
     async def analyze_brief(self, payload: dict[str, object]) -> ClarificationAnalysis:
         return await self._run_node("pm_analyze", payload, ClarificationAnalysis)
 
@@ -771,6 +778,7 @@ class CodexAgentGateway:
         use_magic_mcp = node_name == "pm_generate_prototype" and not direct_prototype
         operation_by_node = {
             "pm_recommend_lifecycle": "recommend_lifecycle",
+            "pm_structure_prd": "structure_imported_prd",
             "pm_analyze": "analyze_brief",
             "pm_generate_spec": "generate_spec",
             "pm_generate_prototype": "generate_prd_prototype",

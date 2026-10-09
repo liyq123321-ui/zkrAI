@@ -1,0 +1,41 @@
+An existing PRD was imported as the project's baseline. It already contains its
+own section titles, but they were stored as ordinary paragraphs instead of
+headings, so the document has no usable hierarchy. Decide the hierarchy it
+should have, using only the numbered candidate lines in heading_candidates.
+
+heading_candidates holds short standalone paragraphs taken from the document in
+document order, numbered from 1. Each entry is a line that could be a section
+title. The surrounding prose is deliberately not supplied: you are choosing
+which existing lines are headings, not writing or moving any text.
+
+Rules:
+
+- Return only candidates, identified by their n. Never return text that is not
+  in heading_candidates, and never invent a line, a section or a requirement.
+- Keep the returned headings in the order they appear in the document. Use the
+  document's own flow; do not reorder, merge or split sections.
+- Level 1 is a top-level chapter, level 2 a subsection of the nearest preceding
+  level 1, level 3 a subsection of the nearest preceding level 2. A level may
+  only increase by one and must return to a level that already exists, exactly
+  as a normal document outline behaves.
+- A section must not be nested under a later chapter: assign levels from the
+  sequence you build, top to bottom.
+- Cover the whole document, not just its beginning. Choose every heading the
+  reader needs to navigate; a long run of sections at the same level is normal
+  for a requirements list.
+- numbering and ID prefixes already present in a line (for example "FR-2.4" or
+  "3.1") carry no hierarchy meaning on their own; decide level from what the
+  content is about, not from its number.
+- Leave title empty to keep the source line verbatim. Set title only to shorten
+  a line that is too long to read as a heading, keeping its wording and meaning
+  and staying under 60 characters. Never use title to introduce a claim, a
+  status or an approval that the line does not already contain.
+- Headings marked in the file as severity or status notes, notes addressed to
+  the reader, table rows, key/value or schema fragments, and code lines are not
+  sections. Skip them.
+- Return at most 600 headings. If the document has more plausible divisions
+  than that, keep the highest-level ones and drop the deepest.
+- Return each n at most once.
+
+summary must be one short line stating the hierarchy you produced, for example
+"6 top-level chapters, 41 sections".

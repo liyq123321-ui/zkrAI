@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import logging
+import re
 from typing import Literal
 from urllib.parse import quote
 from fastapi import APIRouter, BackgroundTasks, Request
@@ -40,6 +41,7 @@ async def _generate_prd_prototype(prototypes, project_id: str) -> None:
 class Open(Input):
     session_id: str
     auto_generate: bool = False
+    defer_outline: bool = False
 
 
 class Outline(Input):
@@ -52,6 +54,11 @@ class ImportFile(Input):
     filename: str = Field(max_length=255)
     content_base64: str = Field(max_length=11_200_000)
     expected_revision: int = Field(ge=1)
+
+
+class SourceAdopt(Input):
+    expected_revision: int = Field(ge=1)
+    replace: bool = False
 
 
 class Plan(Input):
@@ -86,7 +93,7 @@ class DocxImport(Input):
     expected_revision: int = Field(ge=1)
 
 
-def build_router(service, ai, actors, assets=None, docx=None, prototypes=None):
+def build_router(service, ai, actors, assets=None, docx=None, prototypes=None, hierarchy=None):
     router = APIRouter(prefix="/prd-documents", tags=["prd-documents"])
 
     @router.get("/templates")
@@ -96,7 +103,7 @@ def build_router(service, ai, actors, assets=None, docx=None, prototypes=None):
     @router.post("")
     async def open_document(body: Open, request: Request):
         actor = actors.resolve(request, body.actor_id)
-        snapshot = service.open(body.session_id, actor)
+        snapshot = service.open(body.session_id, actor, defer_outline=body.defer_outline and not body.auto_generate)
         if body.auto_generate:
             service_id = snapshot["document"]["id"]
             ai.start_initial(service_id, actor)
@@ -119,6 +126,25 @@ def build_router(service, ai, actors, assets=None, docx=None, prototypes=None):
     def outline(document_id: str, body: Outline, request: Request):
         return service.import_outline(document_id, actors.resolve(request, body.actor_id), body.template, body.outline, body.expected_revision)
 
+    @router.post("/{document_id}/import-source")
+    def import_source(document_id: str, body: SourceAdopt, request: Request):
+        """Adopt the PRD imported at intake as the document text, verbatim."""
+        return service.import_source(
+            document_id,
+            actors.resolve(request, body.actor_id),
+            body.expected_revision,
+            body.replace,
+            assets=assets,
+        )
+
+    if hierarchy is not None:
+        @router.post("/{document_id}/structure-source")
+        async def structure_source(document_id: str, body: SourceAdopt, request: Request):
+            """Let one Agent call decide the hierarchy the imported file lost."""
+            return await hierarchy.structure(
+                document_id, actors.resolve(request, body.actor_id), body.expected_revision
+            )
+
     @router.post("/{document_id}/import")
     def import_file(document_id: str, body: ImportFile, request: Request):
         actor = actors.resolve(request, body.actor_id)
@@ -137,8 +163,26 @@ def build_router(service, ai, actors, assets=None, docx=None, prototypes=None):
                     raise ValueError("PDF 没有可提取文字，请粘贴大纲或上传文字型 PDF")
             elif body.filename.lower().endswith(('.md', '.txt')):
                 outline = raw.decode('utf-8-sig')
+            elif body.filename.lower().endswith('.docx'):
+                from docx import Document as WordDocument
+                source = WordDocument(io.BytesIO(raw))
+                headings = []
+                paragraphs = []
+                for paragraph in source.paragraphs:
+                    title = paragraph.text.strip()
+                    if not title:
+                        continue
+                    paragraphs.append(title)
+                    style = paragraph.style
+                    style_name = ((style.style_id or '') + ' ' + (style.name or '')).lower() if style else ''
+                    match = re.search(r'(?:heading|标题)\s*([1-6])', style_name)
+                    if match:
+                        headings.append('#' * int(match.group(1)) + ' ' + title)
+                outline = '\n'.join(headings or paragraphs)
+                if not outline.strip():
+                    raise ValueError('DOCX 没有可提取文字，请上传含目录标题的文件')
             else:
-                raise ValueError("支持 Markdown、TXT 或文字型 PDF")
+                raise ValueError("支持 DOCX、Markdown、TXT 或文字型 PDF")
         except Exception as error:
             raise BlockError("导入失败：" + str(error)[:300], 422) from error
         # A PDF contains prose as well as headings. Return its extracted text for

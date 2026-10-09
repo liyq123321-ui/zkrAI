@@ -27,17 +27,18 @@ export function BlockTree({ blocks, selected, checked, onSelect, onCheck }: {
     return <ul>{blocks.filter(b => b.parent_id === parent).map(b => <li key={b.id}>
       <div ref={selected === b.id ? selectedItemRef : undefined} data-block-id={b.id} className={selected === b.id ? 'is-selected' : ''}>
         <input type="checkbox" aria-label={`选择 ${b.title}`} checked={checked.has(b.id)} onChange={() => onCheck(b.id)} />
-        <button onClick={() => onSelect(b.id)}><span className={`prd-dot is-${b.status}`} /><span>{b.title}</span><small>{statusNames[b.status]}</small></button>
+        {/* 选中态下再点一次即取消选中；取消后回到「无章节被查看」的状态。
+            注意：这里只改变「在看哪一章」，不改变命令的执行范围——范围只由勾选框（和指令中点名的章节）决定。 */}
+        <button aria-pressed={selected === b.id} onClick={() => onSelect(selected === b.id ? '' : b.id)}><span className={`prd-dot is-${b.status}`} /><span>{b.title}</span><small>{statusNames[b.status]}</small></button>
       </div>{branch(b.id)}</li>)}</ul>;
   }
   return <nav aria-label="Block 目录" className="prd-tree">{branch(null)}</nav>;
 }
 
-export function BlockPlanMap({ blocks, selected, onSelect, interactive = true, maxDepth, sourceLinked = false }: {
-  blocks: Block[]; selected: string; onSelect: (id: string) => void; interactive?: boolean; maxDepth?: number; sourceLinked?: boolean;
+export function BlockPlanMap({ blocks, selected, onSelect, interactive = true, sourceLinked = false }: {
+  blocks: Block[]; selected: string; onSelect: (id: string) => void; interactive?: boolean; sourceLinked?: boolean;
 }) {
-  function branch(parent: string | null, depth = 0) {
-    if (maxDepth !== undefined && depth >= maxDepth) return null;
+  function branch(parent: string | null) {
     const children = blocks.filter(b => b.parent_id === parent);
     if (!children.length) return null;
     return <div className="prd-map-children">{children.map(b => {
@@ -48,7 +49,7 @@ export function BlockPlanMap({ blocks, selected, onSelect, interactive = true, m
         {interactive
           ? <button className={`prd-map-node ${selected === b.id ? 'is-selected' : ''}`} onClick={() => onSelect(b.id)} title={title}>{content}</button>
           : <div className={`prd-map-node ${selected === b.id ? 'is-selected' : ''}`} title={title}>{content}</div>}
-        {branch(b.id, depth + 1)}
+        {branch(b.id)}
       </div>;
     })}</div>;
   }

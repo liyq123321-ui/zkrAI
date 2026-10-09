@@ -66,6 +66,7 @@ export function importPrdSource(
     method: 'POST',
     body: { filename, content_base64: contentBase64 },
     signal,
+    timeoutMs: 120_000,
   });
 }
 
@@ -143,7 +144,11 @@ export async function loadWorkspaceChatImage(sessionId: string, imageId: string,
 
 export type PrdPresentationAudience = 'team' | 'external';
 
-export async function generateAndDownloadPrdPresentation(
+/** 冻结版 PPT 的在线预览页（新标签页打开，页内提供下载）。 */
+export const prdPresentationPreviewUrl = (sessionId: string, audience: PrdPresentationAudience) =>
+  `${appConfig.apiBaseUrl}/sessions/${encodeURIComponent(sessionId)}/presentations/${audience}/preview`;
+
+export async function generatePrdPresentation(
   sessionId: string, actorId: string, audience: PrdPresentationAudience, expectedSpecId?: string | null,
 ): Promise<void> {
   const path = `/sessions/${encodeURIComponent(sessionId)}/presentations/${audience}`;
@@ -151,19 +156,6 @@ export async function generateAndDownloadPrdPresentation(
   await apiClient.request(path + query, {
     method: 'POST', timeoutMs: 30 * 60 * 1000,
   });
-  const token = getToken();
-  const response = await fetch(`${appConfig.apiBaseUrl}${path}/file?actor_id=${encodeURIComponent(actorId)}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!response.ok) throw new Error('PPT 已生成，但下载失败，请重试。');
-  const url = URL.createObjectURL(await response.blob());
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `prd-${audience}.pptx`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  globalThis.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export const listWorkspaceChatMessages = (sessionId: string, actorId: string, signal?: AbortSignal) =>

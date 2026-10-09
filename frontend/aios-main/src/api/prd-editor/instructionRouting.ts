@@ -39,8 +39,8 @@ export function isPrdRevisionInstruction(message: string, prdOpen: boolean): boo
 }
 
 /** An explicitly named child is the target; its named parent only locates it. */
-export function prdRevisionTargets<T extends { id: string; title: string; parent_id: string | null }>(
-  blocks: T[], instruction: string, focusedBlockId?: string | null, selectedBlockId?: string | null,
+export function namedPrdTargets<T extends { id: string; title: string; parent_id: string | null }>(
+  blocks: T[], instruction: string,
 ): T[] {
   const named = blocks.filter(block => block.title && instruction.includes(block.title));
   const byId = new Map(blocks.map(block => [block.id, block]));
@@ -52,10 +52,36 @@ export function prdRevisionTargets<T extends { id: string; title: string; parent
     }
     return false;
   }));
-  if (specific.length) return specific.sort((left, right) => instruction.indexOf(left.title) - instruction.indexOf(right.title));
-  const fallback = blocks.find(block => block.id === focusedBlockId)
-    ?? blocks.find(block => block.id === selectedBlockId);
-  return fallback ? [fallback] : [];
+  return specific.sort((left, right) => instruction.indexOf(left.title) - instruction.indexOf(right.title));
+}
+
+export type PrdScopeSource = 'named' | 'checked' | 'focused' | 'document';
+
+export interface PrdEditScope<T> {
+  targets: T[];
+  source: PrdScopeSource;
+}
+
+/**
+ * Which chapters one chat command may change. Priority, highest first:
+ * an explicitly named chapter → the chapters ticked in the outline → the block whose text the user
+ * selected → the whole document (the Agent locates the chapters itself).
+ *
+ * ⚠️ **Clicking a chapter in the outline is not an input here.** Clicking only highlights and scrolls
+ * that chapter into view; it must never silently become the execution scope of the next command.
+ * Only an explicit act — naming the chapter, ticking its checkbox, or selecting its text — defines the scope.
+ */
+export function prdEditScope<T extends { id: string; title: string; parent_id: string | null }>(
+  blocks: T[], instruction: string, checkedIds: Iterable<string>, focusedBlockId?: string | null,
+): PrdEditScope<T> {
+  const named = namedPrdTargets(blocks, instruction);
+  if (named.length) return { targets: named, source: 'named' };
+  const ticked = new Set(checkedIds);
+  const checked = blocks.filter(block => ticked.has(block.id));
+  if (checked.length) return { targets: checked, source: 'checked' };
+  const focused = focusedBlockId ? blocks.find(block => block.id === focusedBlockId) : undefined;
+  if (focused) return { targets: [focused], source: 'focused' };
+  return { targets: [], source: 'document' };
 }
 
 export interface ScreenshotAnchor {

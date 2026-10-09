@@ -39,6 +39,9 @@ class Plan(Input):
 
 class JobPlan(Plan):
     kind: Literal["answers", "alternative", "anchor", "update", "chat", "bulk"]
+    # 「目录里点击章节」只是查看，不划定范围。命令的范围只来自三处，优先级从高到低：
+    # 指令里写明的章节名 → `target_ids`（目录中勾选的章节）→ `scope="document"`（默认，交给 Agent 到全文目录里挑）。
+    scope: Literal["chapters", "document"] = "chapters"
     request_id: str = Field(min_length=1, max_length=100)
     expected_revision: int = Field(ge=1)
     selected_text: str = Field(default="", max_length=2000)

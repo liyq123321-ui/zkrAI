@@ -11,6 +11,15 @@ export interface Document {
   template: string; plan_status: string; revision: number; context_revision: number;
   latest_version?: number | null;
   submitted_revision?: number | null; submitted_spec_id?: string | null;
+  /** Identity of the PRD imported at intake; the body stays on the server. */
+  source_prd?: {
+    filename: string; title: string; characters: number;
+    /** Whether the file carried its own headings, and what the Agent made of it. */
+    hierarchy?: {
+      clear: boolean; headings: number; characters: number;
+      candidates: number; organized?: boolean;
+    } | null;
+  } | null;
 }
 export interface DocumentAsset {
   id: string; document_id: string; block_id: string | null; type: 'image'; file_name: string;

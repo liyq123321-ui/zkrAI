@@ -56,6 +56,12 @@ class RoutingAgentGateway:
             lambda gateway: gateway.recommend_lifecycle(payload),
         )
 
+    async def structure_imported_prd(self, payload):
+        return await self._call(
+            "structure_imported_prd", payload,
+            lambda gateway: gateway.structure_imported_prd(payload),
+        )
+
     async def analyze_brief(self, payload):
         return await self._call(
             "analyze_brief", payload, lambda gateway: gateway.analyze_brief(payload)

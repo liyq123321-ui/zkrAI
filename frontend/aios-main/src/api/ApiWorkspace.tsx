@@ -1,13 +1,15 @@
 import { RecoveryNotice, useDraftRecovery } from './prd-editor/draftRecovery';
-import { FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, lazy, Suspense, UIEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertCircle,
+  ArrowUp,
   Bot,
   CheckCircle2,
   ChevronDown,
   CircleUser,
   ClipboardList,
+  Clock,
   ExternalLink,
   FileText,
   FolderPlus,
@@ -70,6 +72,8 @@ import { emptyResources, projectSpec, projectTitle, useWorkspaceProjects, type R
 import { auditTitle, displayLabel, displayTime, progressDescription } from './presentation';
 import { PrdReviewPanel } from './PrdReviewPanel';
 import { getLatestPrd } from './prd';
+import { getDraftPrototype, generateDraftPrototype, openDocument, getDraftPresentation, generateDraftPresentation, draftPresentationPreviewUrl } from './prd-editor/api';
+import { isNearBottom } from './scrollPin';
 import { appConfig } from './config';
 import {
   createSession,
@@ -79,7 +83,8 @@ import {
   getAgentBackend,
   getCommandJob,
   getSessionState,
-  generateAndDownloadPrdPresentation,
+  generatePrdPresentation,
+  prdPresentationPreviewUrl,
   importPrdSource,
   isCommandJobAccepted,
   listAgentRuntime,
@@ -237,6 +242,27 @@ function errorText(error: unknown): string {
   return `${normalized.code}：${normalized.message}`;
 }
 
+/**
+ * A failure that means "the backend was not ready for this yet" rather than
+ * "this instruction is wrong". These are held in the queue and replayed
+ * instead of being surfaced as an error bubble.
+ */
+function isDeferrableFailure(reason: unknown): boolean {
+  const normalized = normalizeNetworkError(reason);
+  return normalized.retryable
+    || ['AGENT_UNAVAILABLE', 'COMMAND_IN_DOUBT', 'NETWORK_ERROR', 'REQUEST_TIMEOUT', 'WORKFLOW_ERROR'].includes(normalized.code);
+}
+
+async function rebuildQueuedImages(item: PendingInstruction): Promise<Array<{ file: File; preview: string }>> {
+  return Promise.all(item.images.map(async (image) => {
+    const blob = await (await fetch(image.preview)).blob();
+    return {
+      file: new File([blob], image.name || 'screenshot.png', { type: image.type || blob.type || 'image/png' }),
+      preview: image.preview,
+    };
+  }));
+}
+
 function throwIfObservationCancelled(signal: AbortSignal): void {
   if (!signal.aborted) return;
   throw new ApiError({
@@ -309,6 +335,23 @@ function StatusBadge({ state }: { state: SessionStateDto }) {
 /** Transient banner used by the top-level toolbar (PRD / prototype entry points). */
 type PrototypeNotice = { tone: 'info' | 'warn' | 'error'; text: string };
 
+/**
+ * A user instruction held back while the backend is still busy with the
+ * previous turn. Screenshots are kept as data URLs because the original File
+ * cannot outlive a page reload.
+ */
+type PendingInstruction = {
+  id: string;
+  text: string;
+  images: Array<{ name: string; type: string; preview: string }>;
+  createdAt: number;
+  /**
+   * The chat already echoes this text (it was appended before the first
+   * attempt failed), so replay must not append a second user bubble.
+   */
+  silentUserEcho?: boolean;
+};
+
 export function ApiWorkspace() {
   const [health, setHealth] = useState<'checking' | 'ok' | 'error'>('checking');
   const {
@@ -371,18 +414,39 @@ export function ApiWorkspace() {
   const [clipboardResult, setClipboardResult] = useState<string | null>(null);
   const [prototypeNotice, setPrototypeNotice] = useState<PrototypeNotice | null>(null);
   const [prototypeBusy, setPrototypeBusy] = useState(false);
+  const [prototypePrompt, setPrototypePrompt] = useState<{ documentId: string; revision: number } | null>(null);
   const [presentationBusy, setPresentationBusy] = useState(false);
+  const [presentationPrompt, setPresentationPrompt] = useState<{ documentId: string; revision: number; audience: PrdPresentationAudience } | null>(null);
   const pendingCommandIds = useRef(new Map<string, string>());
   const commandObservations = useRef(new Map<string, { close: () => void; completion: Promise<SessionStateDto> }>());
   const decompositionLifecycles = useRef(new Set<AbortController>());
   const reconciledDecompositionJobs = useRef(new Set<string>());
   const reconcilingDecompositionJobs = useRef(new Set<string>());
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Whether the conversation is pinned to the bottom. Background sync (polled
+   * PRD progress / runtime summaries) changes state ~every second; blindly
+   * scrolling then yanks the view back down while the user is reading history.
+   * Only auto-scroll while the user is already at the bottom.
+   */
+  const chatPinnedRef = useRef(true);
   const chatWriteQueues = useRef(new Map<string, Promise<void>>());
   const unsavedChatMessages = useRef(new Map<string, Map<string, ChatMessage>>());
   const recordedPrdRuns = useRef(new Set<string>());
   const prdEditorRef = useRef<PRDEditorHandle | null>(null);
+  const prdChatDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const prdProgressClearTimerRef = useRef<number | null>(null);
+  // Instructions typed while the backend is still executing the previous turn.
+  // They queue above the composer instead of racing the running job, which is
+  // what used to bounce back as a NETWORK_ERROR bubble.
+  const [pendingInstructions, setPendingInstructions] = useState<PendingInstruction[]>([]);
+  const [pendingQueueLoadedKey, setPendingQueueLoadedKey] = useState('');
+  const [queueTick, setQueueTick] = useState(0);
+  const [queuePrompt, setQueuePrompt] = useState<PendingInstruction | null>(null);
+  const [queueInterruptBusy, setQueueInterruptBusy] = useState(false);
+  const [queueNotice, setQueueNotice] = useState('');
+  const flushingInstruction = useRef(false);
+  const queueRetryTimer = useRef<number | null>(null);
 
   const decompositionJobKey = (sessionId: string) =>
     `firstflight.decomposition-job.${sessionId}`;
@@ -607,11 +671,47 @@ export function ApiWorkspace() {
     (option) => option.provider === agentBackend,
   ) ?? DEFAULT_AGENT_BACKENDS[0];
   const prdProgressActive = prdAgentProgress?.status === 'queued' || prdAgentProgress?.status === 'running';
+  /**
+   * Single source of truth for "the agent is occupied". Previously only the
+   * local `busy` flag gated the composer, so a running PRD generation left the
+   * input enabled and the next instruction was fired into an occupied
+   * single-worker backend and rejected as NETWORK_ERROR.
+   *
+   * `activeRuntime.status` is deliberately NOT part of this: it is a persisted
+   * backend status polled from the DB, so a stale `running` row would block the
+   * composer forever. Genuinely occupied turns are covered by the local `busy`
+   * flag plus the polled PRD progress, and anything that still races the
+   * backend is absorbed by the deferral path in `submitChat`.
+   */
+  const agentBusy = busy
+    || projectsLoading
+    || lifecycleLoading
+    || observingDecomposition
+    || prdProgressActive;
+  const agentBusyReason = busy
+    ? workflowProgress || '正在执行上一条指令'
+    : prdProgressActive
+      ? `正在生成 PRD${prdAgentProgress?.currentBlockTitle ? `：${prdAgentProgress.currentBlockTitle}` : ''}`
+      : observingDecomposition
+        ? '正在拆分工作项'
+        : lifecycleLoading
+          ? '正在准备 SDLC 路线选择'
+          : '正在加载项目';
+
+  // Opening or switching a conversation should start at the latest turn.
+  useEffect(() => {
+    chatPinnedRef.current = true;
+  }, [activeSessionId]);
+
+  /** Stay pinned only while the reader is already near the bottom. */
+  function handleChatScroll(event: UIEvent<HTMLDivElement>) {
+    chatPinnedRef.current = isNearBottom(event.currentTarget);
+  }
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       const scroll = chatScrollRef.current;
-      if (scroll) scroll.scrollTop = scroll.scrollHeight;
+      if (scroll && chatPinnedRef.current) scroll.scrollTop = scroll.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
   }, [
@@ -883,6 +983,7 @@ export function ApiWorkspace() {
     setImportedPrd(null);
     setError(null);
     try {
+      if (file.size > 24 * 1024 * 1024) throw new Error('PRD 文件不能超过 24 MB，请压缩图片或拆分附件后重试。');
       const contentBase64 = await fileAsBase64(file);
       const imported = await importPrdSource(file.name, contentBase64);
       setImportedPrd(imported);
@@ -1489,7 +1590,13 @@ export function ApiWorkspace() {
           : `已将修改指令交给「${title}」章节的 Agent。`,
           /\[prd-(?:action|job):/.test(title) ? '可从本条消息打开保存结果；生成中的候选会在完成后供你预览，正文不会自动应用。' : title.startsWith('待确认：') ? '请检查右侧预览；确认后这次指令的改动会合并为一个全文版本。' : '生成进度与结果会显示在右侧 PRD；如有未保存输入，先保存再修改。');
       } catch (reason) {
-        appendChatMessage(state.session_id, 'agent', '这条 PRD 修改指令未能执行', errorText(reason));
+        if (isDeferrableFailure(reason) && imageIds.length === 0) {
+          // The backend is still occupied by the previous turn. Hold the
+          // instruction instead of pushing a NETWORK_ERROR bubble back.
+          deferInstruction(message, [], reason, true);
+        } else {
+          appendChatMessage(state.session_id, 'agent', '这条 PRD 修改指令未能执行', errorText(reason));
+        }
       } finally {
         setWorkflowProgress(null);
         setBusy(false);
@@ -1549,38 +1656,195 @@ export function ApiWorkspace() {
     );
   }
 
+  const pendingQueueKey = activeSessionId
+    ? `firstflight.pending-instructions.${appConfig.apiBaseUrl}.${encodeURIComponent(ownerId)}.${activeSessionId}`
+    : '';
+
+  useEffect(() => {
+    if (!pendingQueueKey) {
+      setPendingQueueLoadedKey('');
+      return;
+    }
+    let stored: PendingInstruction[] = [];
+    try {
+      const raw = localStorage.getItem(pendingQueueKey);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) {
+        stored = parsed.filter((item): item is PendingInstruction => Boolean(item)
+          && typeof (item as PendingInstruction).id === 'string'
+          && typeof (item as PendingInstruction).text === 'string'
+          && Array.isArray((item as PendingInstruction).images));
+      }
+    } catch {
+      stored = [];
+    }
+    setPendingInstructions(stored);
+    setQueuePrompt(null);
+    setPendingQueueLoadedKey(pendingQueueKey);
+  }, [pendingQueueKey]);
+
+  useEffect(() => {
+    // Persist only after this session's queue has been read back, otherwise the
+    // empty initial state would wipe an unread stored queue.
+    if (!pendingQueueKey || pendingQueueLoadedKey !== pendingQueueKey) return;
+    try {
+      if (pendingInstructions.length) localStorage.setItem(pendingQueueKey, JSON.stringify(pendingInstructions));
+      else localStorage.removeItem(pendingQueueKey);
+    } catch {
+      /* 本机存储不可用时只影响刷新后的恢复。 */
+    }
+  }, [pendingQueueKey, pendingQueueLoadedKey, pendingInstructions]);
+
+  useEffect(() => {
+    if (!queueNotice) return undefined;
+    const timer = window.setTimeout(() => setQueueNotice(''), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [queueNotice]);
+
+  useEffect(() => () => {
+    if (queueRetryTimer.current !== null) window.clearTimeout(queueRetryTimer.current);
+  }, []);
+
+  function deferInstruction(
+    text: string,
+    images: Array<{ file: File; preview: string }>,
+    reason?: unknown,
+    silentUserEcho = false,
+  ) {
+    const item: PendingInstruction = {
+      id: crypto.randomUUID(),
+      text,
+      images: images.map((image) => ({ name: image.file.name, type: image.file.type, preview: image.preview })),
+      createdAt: Date.now(),
+      silentUserEcho: silentUserEcho || undefined,
+    };
+    setPendingInstructions((previous) => [...previous, item]);
+    setError(null);
+    setQueueNotice(reason
+      ? '后端仍在执行上一轮任务，这条指令已排入队列，任务结束后自动执行。'
+      : '当前任务执行中，这条指令已排入队列，任务结束后自动执行。');
+    return item;
+  }
+
+  function removeInstruction(id: string) {
+    setPendingInstructions((previous) => previous.filter((item) => item.id !== id));
+    setQueuePrompt((current) => (current?.id === id ? null : current));
+  }
+
+  function promoteInstruction(id: string) {
+    setPendingInstructions((previous) => {
+      const target = previous.find((item) => item.id === id);
+      return target ? [target, ...previous.filter((item) => item.id !== id)] : previous;
+    });
+  }
+
+  /** The only path that talks to the backend. Never called while agentBusy. */
+  async function dispatchInstruction(
+    text: string,
+    images: Array<{ file: File; preview: string }>,
+    options: { silentUserEcho?: boolean } = {},
+  ) {
+    let imageIds: string[] = [];
+    if (images.length && state) {
+      setBusy(true);
+      setWorkflowProgress('正在上传 PRD 截图…');
+      try {
+        for (const image of images) {
+          const uploaded = await uploadWorkspaceChatImage(state.session_id, ownerId, image.file.type, await fileAsBase64(image.file));
+          imageIds.push(uploaded.id);
+        }
+      } finally {
+        setBusy(false);
+        setWorkflowProgress(null);
+      }
+    }
+    if (!options.silentUserEcho) {
+      appendChatMessage(state?.session_id ?? null, 'user', text, undefined, undefined, imageIds);
+    }
+    await runGlobalInstruction(text, imageIds);
+  }
+
   async function submitChat(event: FormEvent) {
     event.preventDefault();
     const message = chatDraft.trim();
-    if (!message || busy || projectsLoading || health !== 'ok') return;
+    if (!message || health !== 'ok') return;
     if (chatImages.length && (!state || activeTab !== 'prd')) {
       setError('请先打开已有项目的 PRD，再发送截图修改指令。');
       return;
     }
-    let imageIds: string[] = [];
-    if (chatImages.length && state) {
-      setBusy(true);
-      setWorkflowProgress('正在上传 PRD 截图…');
-      try {
-        for (const image of chatImages) {
-          const uploaded = await uploadWorkspaceChatImage(state.session_id, ownerId, image.file.type, await fileAsBase64(image.file));
-          imageIds.push(uploaded.id);
-        }
-      } catch (reason) {
-        setError(errorText(reason));
-        setBusy(false);
-        setWorkflowProgress(null);
-        return;
-      }
-      setBusy(false);
-      setWorkflowProgress(null);
-    }
-    appendChatMessage(state?.session_id ?? null, 'user', message, undefined, undefined, imageIds);
+    const images = chatImages;
+    // The user just acted: always bring the newest turn into view.
+    chatPinnedRef.current = true;
     setChatDraft('');
     setChatImages([]);
     setChatMenuOpen(false);
     setAgentBackendMenuOpen(false);
-    await runGlobalInstruction(message, imageIds);
+    // FIFO. While a job runs — or while earlier instructions are still waiting —
+    // never race the single-worker backend; hold the instruction instead.
+    if (agentBusy || pendingInstructions.length > 0) {
+      deferInstruction(message, images);
+      return;
+    }
+    try {
+      await dispatchInstruction(message, images);
+    } catch (reason) {
+      if (isDeferrableFailure(reason)) {
+        deferInstruction(message, images, reason, true);
+      } else {
+        setError(errorText(reason));
+      }
+    }
+  }
+
+  /**
+   * Drains the queue one instruction at a time. A deferrable failure means the
+   * backend was still occupied, so the item goes back to the head and waits.
+   */
+  useEffect(() => {
+    if (!pendingQueueKey || pendingQueueLoadedKey !== pendingQueueKey) return;
+    if (!pendingInstructions.length || agentBusy || flushingInstruction.current) return;
+    const next = pendingInstructions[0];
+    flushingInstruction.current = true;
+    setPendingInstructions((previous) => previous.filter((item) => item.id !== next.id));
+    void (async () => {
+      let retryLater = false;
+      try {
+        await dispatchInstruction(next.text, await rebuildQueuedImages(next), { silentUserEcho: next.silentUserEcho });
+      } catch (reason) {
+        if (isDeferrableFailure(reason)) {
+          retryLater = true;
+          setPendingInstructions((previous) => [next, ...previous.filter((item) => item.id !== next.id)]);
+          if (queueRetryTimer.current !== null) window.clearTimeout(queueRetryTimer.current);
+          queueRetryTimer.current = window.setTimeout(() => {
+            queueRetryTimer.current = null;
+            setQueueTick((tick) => tick + 1);
+          }, 5_000);
+        } else {
+          appendChatMessage(state?.session_id ?? null, 'agent', '这条排队指令未能执行', errorText(reason));
+        }
+      } finally {
+        flushingInstruction.current = false;
+        if (!retryLater) setQueueTick((tick) => tick + 1);
+      }
+    })();
+  }, [agentBusy, pendingInstructions, pendingQueueKey, pendingQueueLoadedKey, queueTick]);
+
+  async function applyQueuedInstructionNow(item: PendingInstruction) {
+    setQueuePrompt(null);
+    setQueueInterruptBusy(true);
+    let cancelledRuns = 0;
+    try {
+      cancelledRuns = (await prdEditorRef.current?.cancelActiveRuns()) ?? 0;
+    } catch {
+      cancelledRuns = 0;
+    } finally {
+      setQueueInterruptBusy(false);
+    }
+    promoteInstruction(item.id);
+    setQueueNotice(cancelledRuns > 0
+      ? `已请求取消 ${cancelledRuns} 个正在执行的生成任务，取消生效后这条指令会自动发出。`
+      : '当前任务没有可用的取消入口，这条指令已排到队首，会在任务结束后立刻执行。');
+    setQueueTick((tick) => tick + 1);
   }
 
   async function addChatImages(files: File[]) {
@@ -1663,55 +1927,142 @@ export function ApiWorkspace() {
       setPrototypeNotice({ tone: 'warn', text: '请先选择一个任务。' });
       return;
     }
-    if (!state?.current_spec_version_id) {
-      setPrototypeNotice({
-        tone: 'warn',
-        text: '当前任务的 PRD 尚未定型；请先在 PRD 页点击「进入下一阶段」，系统随后会自动生成 HTML 原型。',
-      });
+    // 已定稿：沿用既有冻结版原型（进入下一阶段后自动生成的那条）。
+    if (state?.current_spec_version_id) {
+      setPrototypeBusy(true);
+      setPrototypeNotice(null);
+      try {
+        const document_ = await getLatestPrd(currentRootWorkItemId);
+        const prototype = document_.prototype ?? null;
+        if (prototype?.status === 'ready' && prototype.content_url) {
+          window.open(`${appConfig.apiBaseUrl}${prototype.content_url}`, '_blank', 'noopener,noreferrer');
+          return;
+        }
+        if (prototype?.status === 'failed') {
+          setPrototypeNotice({
+            tone: 'error',
+            text: `HTML 原型生成失败：${prototype.error_message || prototype.error_code || '未知原因'}`,
+          });
+          return;
+        }
+        setPrototypeNotice({ tone: 'info', text: 'HTML 原型还在生成中，请稍候再试。' });
+      } catch (reason) {
+        const error = normalizeNetworkError(reason);
+        setPrototypeNotice({
+          tone: 'error',
+          text: error.status === 404
+            ? '当前任务还没有可查看的 PRD 版本，无法打开 HTML 原型。请先在 PRD 页完成并提交 PRD。'
+            : `暂时无法读取 HTML 原型：${error.message}`,
+        });
+      } finally {
+        setPrototypeBusy(false);
+      }
       return;
     }
+    // 未定稿：不再硬性要求「进入下一阶段」；改为基于当前 PRD 草稿生成（草稿版）。
+    if (!state?.session_id) return;
     setPrototypeBusy(true);
     setPrototypeNotice(null);
     try {
-      const document_ = await getLatestPrd(currentRootWorkItemId);
-      const prototype = document_.prototype ?? null;
-      if (prototype?.status === 'ready' && prototype.content_url) {
-        window.open(`${appConfig.apiBaseUrl}${prototype.content_url}`, '_blank', 'noopener,noreferrer');
+      const snapshot = await openDocument(state.session_id, false);
+      const documentId = snapshot.document.id;
+      const existing = await getDraftPrototype(documentId);
+      if (existing.status === 'ready' && existing.content_url) {
+        window.open(`${appConfig.apiBaseUrl}${existing.content_url}`, '_blank', 'noopener,noreferrer');
         return;
       }
-      if (prototype?.status === 'failed') {
-        setPrototypeNotice({
-          tone: 'error',
-          text: `HTML 原型生成失败：${prototype.error_message || prototype.error_code || '未知原因'}`,
-        });
-        return;
-      }
-      setPrototypeNotice({ tone: 'info', text: 'HTML 原型还在生成中，请稍候再试。' });
+      setPrototypePrompt({ documentId, revision: snapshot.document.revision });
     } catch (reason) {
       const error = normalizeNetworkError(reason);
       setPrototypeNotice({
         tone: 'error',
         text: error.status === 404
-          ? '当前任务还没有可查看的 PRD 版本，无法打开 HTML 原型。请先在 PRD 页完成并提交 PRD。'
-          : `暂时无法读取 HTML 原型：${error.message}`,
+          ? '当前任务还没有可查看的 PRD 草稿，无法生成 HTML 原型。请先在 PRD 页生成正文。'
+          : `暂时无法读取 PRD 草稿：${error.message}`,
       });
     } finally {
       setPrototypeBusy(false);
     }
   }
 
+  /** 确认后基于当前 PRD 草稿生成 HTML 原型（与冻结版同一 Agent/skill 路线）。 */
+  async function confirmDraftPrototype() {
+    const prompt = prototypePrompt;
+    if (!prompt) return;
+    setPrototypeBusy(true);
+    setPrototypeNotice({ tone: 'info', text: `正在基于当前 PRD 草稿（第 ${prompt.revision} 版）生成 HTML 原型草稿…` });
+    try {
+      const result = await generateDraftPrototype(prompt.documentId);
+      setPrototypePrompt(null);
+      if (result.content_url) {
+        window.open(`${appConfig.apiBaseUrl}${result.content_url}`, '_blank', 'noopener,noreferrer');
+      }
+    } catch (reason) {
+      setPrototypeNotice({ tone: 'error', text: `HTML 原型草稿生成失败：${normalizeNetworkError(reason).message}` });
+    } finally {
+      setPrototypeBusy(false);
+    }
+  }
+
   async function createPrdPresentation(audience: PrdPresentationAudience) {
-    if (!state?.current_spec_version_id) {
-      setPrototypeNotice({ tone: 'warn', text: '请先在 PRD 页提交并冻结当前版本。' });
+    const label = audience === 'team' ? '团队' : '对外';
+    const phrase = audience === 'team' ? '团队讲解' : '对外介绍';
+    // 已定稿：走冻结版编排，随后在新标签页打开在线预览页（页内下载）。
+    if (state?.current_spec_version_id) {
+      setPresentationBusy(true);
+      setPrototypeNotice({ tone: 'info', text: `正在制作${phrase} PPT…` });
+      try {
+        await generatePrdPresentation(state.session_id, ownerId, audience, state.current_spec_version_id);
+        window.open(prdPresentationPreviewUrl(state.session_id, audience), '_blank', 'noopener,noreferrer');
+        setPrototypeNotice({ tone: 'info', text: `${label} PPT 已生成，已在新标签页打开预览页，可在其中下载可编辑 PPTX。` });
+      } catch (reason) {
+        setPrototypeNotice({ tone: 'error', text: `PPT 生成失败：${errorText(reason)}` });
+      } finally {
+        setPresentationBusy(false);
+      }
       return;
     }
+    // 未定稿：不再硬性要求「进入下一阶段」；改为基于当前 PRD 草稿生成（草稿版，走同一编排流程）。
+    if (!state?.session_id) return;
     setPresentationBusy(true);
-    setPrototypeNotice({ tone: 'info', text: audience === 'team' ? '正在制作团队讲解 PPT…' : '正在制作对外介绍 PPT…' });
+    setPrototypeNotice(null);
     try {
-      await generateAndDownloadPrdPresentation(state.session_id, ownerId, audience, state.current_spec_version_id);
-      setPrototypeNotice({ tone: 'info', text: '可编辑 PPTX 已下载；相同的冻结版本再次点击会直接下载。' });
+      const snapshot = await openDocument(state.session_id, false);
+      const documentId = snapshot.document.id;
+      const existing = await getDraftPresentation(documentId, audience);
+      if (existing.status === 'ready') {
+        window.open(draftPresentationPreviewUrl(documentId, audience), '_blank', 'noopener,noreferrer');
+        setPrototypeNotice({ tone: 'info', text: `已打开基于当前 PRD 草稿（第 ${existing.revision} 版）的${label} PPT 预览页，可在其中下载。` });
+        return;
+      }
+      setPresentationPrompt({ documentId, revision: snapshot.document.revision, audience });
     } catch (reason) {
-      setPrototypeNotice({ tone: 'error', text: `PPT 生成失败：${errorText(reason)}` });
+      const error = normalizeNetworkError(reason);
+      setPrototypeNotice({
+        tone: 'error',
+        text: error.status === 404
+          ? '当前任务还没有可查看的 PRD 草稿，无法生成 PPT。请先在 PRD 页生成正文。'
+          : `暂时无法读取 PRD 草稿：${error.message}`,
+      });
+    } finally {
+      setPresentationBusy(false);
+    }
+  }
+
+  /** 确认后基于当前 PRD 草稿生成团队/对外 PPT，并在新标签页打开在线预览页（页内下载）。 */
+  async function confirmDraftPresentation() {
+    const prompt = presentationPrompt;
+    if (!prompt) return;
+    const label = prompt.audience === 'team' ? '团队' : '对外';
+    setPresentationBusy(true);
+    setPrototypeNotice({ tone: 'info', text: `正在基于当前 PRD 草稿（第 ${prompt.revision} 版）生成${label} PPT…` });
+    try {
+      await generateDraftPresentation(prompt.documentId, prompt.audience);
+      setPresentationPrompt(null);
+      window.open(draftPresentationPreviewUrl(prompt.documentId, prompt.audience), '_blank', 'noopener,noreferrer');
+      setPrototypeNotice({ tone: 'info', text: `${label} PPT 已生成，已在新标签页打开预览页，可在其中下载；同一草稿修订号再次点击会直接打开预览页。` });
+    } catch (reason) {
+      setPrototypeNotice({ tone: 'error', text: `${label} PPT 生成失败：${errorText(reason)}` });
     } finally {
       setPresentationBusy(false);
     }
@@ -1739,6 +2090,7 @@ export function ApiWorkspace() {
     setPrototypeNotice(null);
     setPrdChatContext(null);
     setPrdEditReceipt(null);
+    setPresentationPrompt(null);
     setError(null);
   }
 
@@ -1890,7 +2242,7 @@ export function ApiWorkspace() {
             </span>
           </div>
 
-          <div ref={chatScrollRef} className="ff-chat-scroll" role="log" aria-label="Agent 对话与工作记录">
+          <div ref={chatScrollRef} className="ff-chat-scroll" role="log" aria-label="Agent 对话与工作记录" onScroll={handleChatScroll}>
             {activeSessionId && !chatHistoryLoaded[activeSessionId] && <p className="ff-chat-history-note">正在加载对话记录…</p>}
             {activeSessionId && chatHistoryErrors[activeSessionId] && <p className="ff-chat-history-note" role="alert">{chatHistoryErrors[activeSessionId]} <button type="button" onClick={() => void retryChatHistory()}>重试</button></p>}
             {visibleChatMessages.length === 0 && !state && (
@@ -1961,7 +2313,7 @@ export function ApiWorkspace() {
               </div>
             ))}
 
-            {lifecycleDecision && (
+            {lifecycleDecision && !lifecycleDecision.selected_model && (
               <div className="ff-message ff-message-agent ff-route-message">
                 <span className="ff-avatar">PM</span>
                 <div className="ff-message-content">
@@ -2025,14 +2377,36 @@ export function ApiWorkspace() {
               </div>
             )}
 
-            {activeRuntime && activeRuntime.status !== 'running' && !busy && (
-              <div className={`ff-agent-event ${activeRuntime.status === 'error' ? 'is-error' : ''}`}>
-                <span className="ff-event-check">{activeRuntime.status === 'error' ? <AlertCircle aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}</span>
-                <div>
-                  <strong>{activeRuntime.status === 'error' ? 'Agent 运行异常' : 'Agent 已完成本阶段处理'}</strong>
-                  <p>{runtimeOperationLabels[activeRuntime.current_operation] ?? activeRuntime.current_operation} · {activeRuntime.current_summary || `累计调用 ${activeRuntime.call_count} 次`}</p>
-                </div>
+            {activeRuntime?.status === 'error' && !busy && (
+              <div className="ff-agent-event is-error">
+                <span className="ff-event-check"><AlertCircle aria-hidden="true" /></span>
+                <div><strong>Agent 运行异常</strong><p>{runtimeOperationLabels[activeRuntime.current_operation] ?? activeRuntime.current_operation} · {activeRuntime.current_summary || `累计调用 ${activeRuntime.call_count} 次`}</p></div>
               </div>
+            )}
+
+            {((activeRuntime?.status === 'completed' && !busy) || (state && resources.events.length > 0)) && (
+              <details className="ff-agent-events-group">
+                <summary>
+                  <span className="ff-event-check"><CheckCircle2 aria-hidden="true" /></span>
+                  <strong>处理记录 · {(activeRuntime?.status === 'completed' && !busy ? 1 : 0) + (state ? Math.min(3, resources.events.length) : 0)} 条</strong>
+                  <ChevronDown size={14} aria-hidden="true" />
+                </summary>
+                {activeRuntime?.status === 'completed' && !busy && (
+                  <div className="ff-agent-event">
+                    <span className="ff-event-check"><CheckCircle2 aria-hidden="true" /></span>
+                    <div>
+                      <strong>Agent 已完成本阶段处理</strong>
+                      <p>{runtimeOperationLabels[activeRuntime.current_operation] ?? activeRuntime.current_operation} · {activeRuntime.current_summary || `累计调用 ${activeRuntime.call_count} 次`}</p>
+                    </div>
+                  </div>
+                )}
+                {state && resources.events.slice(-3).map((event) => (
+                  <div key={event.id} className="ff-agent-event">
+                    <span className="ff-event-check"><CheckCircle2 aria-hidden="true" /></span>
+                    <div><strong>{auditTitle(event)}</strong><p>{displayTime(event.created_at)} · {event.actor_id || '系统 Agent'}</p></div>
+                  </div>
+                ))}
+              </details>
             )}
 
             {error && (
@@ -2057,13 +2431,6 @@ export function ApiWorkspace() {
                 </div>
               </div>
             )}
-
-            {state && resources.events.slice(-3).map((event) => (
-              <div key={event.id} className="ff-agent-event">
-                <span className="ff-event-check"><CheckCircle2 aria-hidden="true" /></span>
-                <div><strong>{auditTitle(event)}</strong><p>{displayTime(event.created_at)} · {event.actor_id || '系统 Agent'}</p></div>
-              </div>
-            ))}
 
             {chatTool === 'newProject' && (
               <form onSubmit={onCreate} className="ff-form-card ff-chat-tool-card">
@@ -2091,7 +2458,9 @@ export function ApiWorkspace() {
                       />
                     </label>
                     {importingPrd && <span className="ff-prd-import-status"><Loader2 className="ff-spin" aria-hidden="true" />正在解析 PRD…</span>}
+                    <small>支持最多 30 万字符的提取文字；文件上限 24 MB，PDF 最多 50 页。</small>
                     {importedPrd && <span className="ff-prd-import-status is-ready"><CheckCircle2 aria-hidden="true" />已导入 {importedPrd.filename} · {importedPrd.content.length} 字</span>}
+                    {importedPrd && importedPrd.content.length > 100_000 && <small role="status">大文档已完整导入；创建后的 Agent 分析可能较慢，建议按章节核对生成结果，确认前不要视为全文审核通过。</small>}
                   </div>
                 )}
                 <Field label={projectSourceMode === 'import' ? '希望如何修订' : '为什么要做'} value={motivation} onChange={setMotivation} multiline />
@@ -2146,12 +2515,14 @@ export function ApiWorkspace() {
                 <button type="button" aria-label="移除截图" onClick={() => setChatImages(previous => previous.filter((_, position) => position !== index))}><X size={14} /></button>
               </div>)}
             </div>}
-            {activeTab === 'prd' && prdChatContext && <section className="ff-prd-chat-context" aria-label="当前 PRD 操作目标">
+            {activeTab === 'prd' && prdChatContext && <details ref={prdChatDetailsRef} className="ff-prd-chat-context ff-prd-chat-context-collapsible" aria-label="当前 PRD 操作目标">
+              <summary><strong>PRD 操作目标 · {prdChatContext.title}{prdChatContext.version ? ` · v${prdChatContext.version}` : ''}</strong><small>{prdChatContext.chapters.find(item => item.id === prdChatContext.selectedId)?.title ?? '当前章节'}{prdChatContext.discussion ? ` · ${prdChatContext.discussion.pinned ? '已固定' : '讨论中'}：${prdChatContext.discussion.label}` : ''}</small></summary>
+              <button type="button" className="ff-prd-chat-context-collapse" aria-label="折叠 PRD 操作目标" title="折叠 PRD 操作目标" onClick={() => { if (prdChatDetailsRef.current) prdChatDetailsRef.current.open = false; }}><ChevronDown size={16} aria-hidden="true" /></button>
               <strong>{prdChatContext.title}{prdChatContext.version ? ` · v${prdChatContext.version}` : ''}</strong>
               <label>当前章节<select aria-label="选择 Agent 修改目标" value={prdChatContext.selectedId} onChange={event => prdEditorRef.current?.focusChapter(event.target.value)}>
                 {prdChatContext.chapters.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
               </select></label>
-              <small>{prdChatContext.selection ? `已选：${prdChatContext.selection}` : '默认修改当前章节；指令中可指定其他位置。'}</small>
+              <small>{prdChatContext.selection ? `已选：${prdChatContext.selection}` : '默认按整篇全文执行；只有指令写明章节、在文档目录中勾选章节、或在此选择章节，才会限定修改范围。'}</small>
               {prdChatContext.discussion && <div aria-label="持续讨论对象"><strong>{prdChatContext.discussion.pinned ? '已固定 · ' : '讨论中 · '}{prdChatContext.discussion.label}</strong>
                 <small>来源章节版本 {prdChatContext.discussion.version} · 本机保留</small>
                 {prdChatContext.discussion.issue && <p role="alert">{prdChatContext.discussion.issue}</p>}
@@ -2160,7 +2531,7 @@ export function ApiWorkspace() {
               </div>}
               <label>本对象的编辑约束<input maxLength={800} placeholder="例如：不改金额，保留业务编号" value={prdChatContext.discussion?.constraints ?? ''} onChange={e => prdEditorRef.current?.updateDiscussion('constraints', e.target.value)} /></label>
               <button type="button" onClick={() => prdEditorRef.current?.chooseObject()}>选择表格单元格 / 图中对象</button>
-            </section>}
+            </details>}
             {activeTab === 'prd' && prdEditReceipt && <section className="ff-prd-chat-context" aria-label="PRD 修改回执">
               <strong>{prdEditReceipt.version ? `已保存 v${prdEditReceipt.version}` : '修改已保存'} · 待手动审核</strong>
               <div>{prdEditReceipt.chapters.map(item => <button key={item.id} type="button" onClick={() => prdEditorRef.current?.focusChapter(item.id)}>{item.title}</button>)}</div>
@@ -2168,7 +2539,27 @@ export function ApiWorkspace() {
               <button type="button" onClick={() => setPrdEditReceipt(null)}>收起回执</button>
             </section>}
             <RecoveryNotice recovery={chatRecovery} onRestore={v => setChatDraft(v.text)} />
-            {activeTab === 'prd' && <button type="button" onClick={() => prdEditorRef.current?.openTasks()}>查看 PRD 候选任务 / 打开保存的预览</button>}
+            {pendingInstructions.length > 0 && <section className="ff-pending-queue" aria-label="待执行指令队列">
+              <header>
+                <Clock size={14} aria-hidden="true" />
+                <strong>待执行 · {pendingInstructions.length} 条</strong>
+                <small>{agentBusy ? `当前：${agentBusyReason}` : '空闲，即将依次执行'}</small>
+              </header>
+              {queueNotice && <p className="ff-queue-notice" role="status">{queueNotice}</p>}
+              <ol>
+                {pendingInstructions.map((item, index) => <li key={item.id} className={index === 0 ? 'is-next' : undefined}>
+                  <span className="ff-queue-order" aria-hidden="true">{index + 1}</span>
+                  <span className="ff-queue-text" title={item.text}>{item.text}</span>
+                  {item.images.length > 0 && <ImagePlus size={13} aria-hidden="true" />}
+                  <button type="button" className="ff-queue-now" aria-label="立即生效" title="立即生效（可选择打断当前任务）" onClick={() => setQueuePrompt(item)}>
+                    <ArrowUp size={15} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="ff-queue-remove" aria-label="移除这条待执行指令" title="移除" onClick={() => removeInstruction(item.id)}>
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                </li>)}
+              </ol>
+            </section>}
             <form onSubmit={submitChat} className="ff-stream-composer">
               <div className="ff-chat-menu-wrap">
                 <button type="button" className={`ff-chat-menu-button ${chatMenuOpen ? 'is-open' : ''}`} onClick={() => setChatMenuOpen((open) => !open)} aria-label="展开常用功能" aria-expanded={chatMenuOpen}>
@@ -2186,7 +2577,7 @@ export function ApiWorkspace() {
               <textarea
                 aria-label="给 Project Agent 发送消息"
                 value={chatDraft}
-                disabled={busy || health !== 'ok'}
+                disabled={health !== 'ok'}
                 onChange={(event) => setChatDraft(event.target.value)}
                 onPaste={(event) => {
                   const files = Array.from(event.clipboardData.items)
@@ -2201,15 +2592,18 @@ export function ApiWorkspace() {
                   }
                 }}
                 placeholder={state ? activeTab === 'prd'
-                  ? '例如：把项目目标部分补充验收标准；也可下达其他项目指令…'
-                  : '输入全局指令、澄清答案或页面命令…'
+                  ? (agentBusy ? '当前任务执行中，发送后会排队自动执行…' : '例如：把项目目标部分补充验收标准；也可下达其他项目指令…')
+                  : (agentBusy ? '当前任务执行中，发送后会排队自动执行…' : '输入全局指令、澄清答案或页面命令…')
                   : '直接描述新项目，或从左侧菜单打开完整表单…'}
                 rows={1}
               />
-              <button type="button" className="ff-chat-image-button" aria-label="添加 PRD 截图" title="添加 PRD 截图" disabled={busy || health !== 'ok'} onClick={() => chatImageInputRef.current?.click()}>
-                <ImagePlus size={17} aria-hidden="true" />
-              </button>
-              <input ref={chatImageInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy || health !== 'ok'} onChange={event => {
+              <div className="ff-chat-quick-actions">
+                <button type="button" className="ff-chat-image-button" aria-label="添加 PRD 截图" title="添加 PRD 截图" disabled={health !== 'ok'} onClick={() => chatImageInputRef.current?.click()}>
+                  <ImagePlus size={17} aria-hidden="true" />
+                </button>
+                {activeTab === 'prd' && <button type="button" className="ff-prd-tasks-icon-button" aria-label="查看 PRD 候选任务" title="查看 PRD 候选任务与保存的预览" onClick={() => prdEditorRef.current?.openTasks()}><ClipboardList size={17} aria-hidden="true" /></button>}
+              </div>
+              <input ref={chatImageInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={health !== 'ok'} onChange={event => {
                   const files = Array.from(event.target.files ?? []);
                   event.target.value = '';
                   if (files.length) void addChatImages(files);
@@ -2258,18 +2652,14 @@ export function ApiWorkspace() {
                   </div>
                 )}
               </div>
-              <button type="submit" className="ff-chat-send-button" disabled={busy || !chatDraft.trim() || health !== 'ok'} aria-label="发送消息">
-                {busy ? <Loader2 className="ff-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
+              <button type="submit" className={`ff-chat-send-button${agentBusy ? ' is-queued' : ''}`} disabled={!chatDraft.trim() || health !== 'ok'} aria-label="发送消息" title={agentBusy ? '当前任务执行中，发送后会排队自动执行' : '发送消息'}>
+                {agentBusy ? <Clock aria-hidden="true" /> : <Send aria-hidden="true" />}
               </button>
             </form>
             {state && (
               <div className="ff-composer-actions ff-suggested-actions">
                 <button type="button" className="ff-secondary-button" onClick={openPrdEditor}>编写 PRD</button>
-                {sidebarActions.filter((action) => action !== 'message' && !(
-                  action === 'create_spec'
-                  && state.phase === 'SPECIFICATION'
-                  && !lifecycleDecision?.selected_model
-                )).map((action) => (
+                {sidebarActions.filter((action) => action !== 'message' && action !== 'create_spec').map((action) => (
                   <button type="button" key={action} disabled={busy} onClick={() => runAction(action)} className="ff-secondary-button">{actionLabels[action]}</button>
                 ))}
                 {state.legal_actions.includes('convert_to_work_item') && <button type="button" disabled={busy || observingDecomposition} onClick={() => void continueDecomposition()} className="ff-secondary-button">继续拆分子任务</button>}
@@ -2280,6 +2670,25 @@ export function ApiWorkspace() {
               {state && <button type="button" disabled={busy} onClick={startNewTask}>新任务</button>}
             </div>
           </footer>
+          {queuePrompt && <div className="ff-queue-dialog-backdrop" role="presentation" onClick={() => setQueuePrompt(null)}>
+            <div className="ff-queue-dialog" role="dialog" aria-modal="true" aria-label="立即生效确认" onClick={(event) => event.stopPropagation()}>
+              <h2>让这条指令立刻生效？</h2>
+              <p className="ff-queue-dialog-quote">{queuePrompt.text}</p>
+              <p className="ff-queue-dialog-state">{agentBusy ? `当前正在执行：${agentBusyReason}` : '当前没有正在执行的任务，可直接执行。'}</p>
+              <div className="ff-queue-dialog-actions">
+                <button type="button" className="ff-primary-button" disabled={queueInterruptBusy} onClick={() => void applyQueuedInstructionNow(queuePrompt)}>
+                  {queueInterruptBusy && <Loader2 className="ff-spin" aria-hidden="true" />}取消当前任务并立即执行
+                </button>
+                <button type="button" className="ff-secondary-button" disabled={queueInterruptBusy} onClick={() => {
+                  promoteInstruction(queuePrompt.id);
+                  setQueueNotice('已排到队首，当前任务结束后会立即执行。');
+                  setQueuePrompt(null);
+                  setQueueTick((tick) => tick + 1);
+                }}>不打断，排到队首</button>
+                <button type="button" className="ff-secondary-button" onClick={() => setQueuePrompt(null)}>关闭</button>
+              </div>
+            </div>
+          </div>}
         </aside>
       )}
 
@@ -2389,17 +2798,17 @@ export function ApiWorkspace() {
               className="ff-secondary-button"
               onClick={() => void openPrototype()}
               disabled={!currentProject || prototypeBusy}
-              title="在新标签页打开当前项目的 HTML 原型"
+              title="在新标签页打开当前项目的 HTML 原型；PRD 未定稿时可基于当前草稿生成（草稿版）"
             >
               {prototypeBusy
                 ? <Loader2 className="ff-spin" aria-hidden="true" />
                 : <ExternalLink aria-hidden="true" />}查看原型
             </button>
-            <button type="button" className="ff-secondary-button" disabled={!state?.current_spec_version_id || presentationBusy} onClick={() => void createPrdPresentation('team')} title="基于已冻结 PRD 制作团队讲解版 PPT">
+            <button type="button" className="ff-secondary-button" disabled={!currentProject || presentationBusy} onClick={() => void createPrdPresentation('team')} title="制作团队讲解版 PPT 并打开在线预览页（页内可下载）；PRD 未定稿时可基于当前草稿生成（草稿版）">
               {presentationBusy ? <Loader2 className="ff-spin" aria-hidden="true" /> : <Presentation aria-hidden="true" />}团队 PPT
             </button>
-            <button type="button" className="ff-secondary-button" disabled={!state?.current_spec_version_id || presentationBusy} onClick={() => void createPrdPresentation('external')} title="基于已冻结 PRD 制作对外介绍版 PPT">
-              <Presentation aria-hidden="true" />对外 PPT
+            <button type="button" className="ff-secondary-button" disabled={!currentProject || presentationBusy} onClick={() => void createPrdPresentation('external')} title="制作对外介绍版 PPT 并打开在线预览页（页内可下载）；PRD 未定稿时可基于当前草稿生成（草稿版）">
+              {presentationBusy ? <Loader2 className="ff-spin" aria-hidden="true" /> : <Presentation aria-hidden="true" />}对外 PPT
             </button>
             <button onClick={() => void refreshAllProjects()} disabled={busy || projectsLoading} className="ff-secondary-button">
               <RefreshCw className={projectsLoading ? 'ff-spin' : ''} aria-hidden="true" />刷新
@@ -2411,6 +2820,34 @@ export function ApiWorkspace() {
               <button type="button" aria-label="关闭提示" onClick={() => setPrototypeNotice(null)}>
                 <X aria-hidden="true" />
               </button>
+            </div>
+          )}
+          {prototypePrompt && (
+            <div className="ff-queue-dialog-backdrop" role="presentation" onClick={() => { if (!prototypeBusy) setPrototypePrompt(null); }}>
+              <div className="ff-queue-dialog" role="dialog" aria-modal="true" aria-label="基于当前 PRD 草稿生成原型" onClick={(event) => event.stopPropagation()}>
+                <h2>基于当前 PRD 草稿生成 HTML 原型？</h2>
+                <p className="ff-queue-dialog-state">当前任务的 PRD 尚未定稿（草稿第 {prototypePrompt.revision} 版）。确认后将立即基于这份草稿生成一版 HTML 原型草稿，用于提前预览；这不等于「进入下一阶段」，也不会改动 PRD 正文或版本。</p>
+                <div className="ff-queue-dialog-actions">
+                  <button type="button" className="ff-primary-button" disabled={prototypeBusy} onClick={() => void confirmDraftPrototype()}>
+                    {prototypeBusy && <Loader2 className="ff-spin" aria-hidden="true" />}确认生成原型草稿
+                  </button>
+                  <button type="button" className="ff-secondary-button" disabled={prototypeBusy} onClick={() => setPrototypePrompt(null)}>取消</button>
+                </div>
+              </div>
+            </div>
+          )}
+          {presentationPrompt && (
+            <div className="ff-queue-dialog-backdrop" role="presentation" onClick={() => { if (!presentationBusy) setPresentationPrompt(null); }}>
+              <div className="ff-queue-dialog" role="dialog" aria-modal="true" aria-label="基于当前 PRD 草稿生成 PPT" onClick={(event) => event.stopPropagation()}>
+                <h2>基于当前 PRD 草稿生成{presentationPrompt.audience === 'team' ? '团队' : '对外'} PPT？</h2>
+                <p className="ff-queue-dialog-state">当前任务的 PRD 尚未定稿（草稿第 {presentationPrompt.revision} 版）。确认后将走与正式版一致的编排流程，基于这份草稿生成一版可编辑 PPTX（首页会标注「草稿」），并在新标签页打开在线预览页，可在其中下载；这不等于「进入下一阶段」，也不会改动 PRD 正文或版本。</p>
+                <div className="ff-queue-dialog-actions">
+                  <button type="button" className="ff-primary-button" disabled={presentationBusy} onClick={() => void confirmDraftPresentation()}>
+                    {presentationBusy && <Loader2 className="ff-spin" aria-hidden="true" />}确认生成并预览
+                  </button>
+                  <button type="button" className="ff-secondary-button" disabled={presentationBusy} onClick={() => setPresentationPrompt(null)}>取消</button>
+                </div>
+              </div>
             </div>
           )}
           <div className="ff-top-level-canvas">

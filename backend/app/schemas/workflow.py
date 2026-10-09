@@ -20,6 +20,7 @@ _ASYNC_COMMAND_ID = re.compile(ASYNC_COMMAND_ID_PATTERN)
 AgentBackendName = Literal[
     "codex", "deepseek_harness", "deepseek", "glm", "kimi"
 ]
+MAX_IMPORTED_PRD_CHARACTERS = 400_000
 
 
 class ImportedPrdSource(BaseModel):
@@ -28,7 +29,11 @@ class ImportedPrdSource(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     media_type: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=100)
-    content: str = Field(min_length=1, max_length=100_000)
+    content: str = Field(min_length=1, max_length=MAX_IMPORTED_PRD_CHARACTERS)
+    # Pointer to the stored original file; empty for formats that carry no
+    # images. Lets the adopt step pull images back out without bloating the
+    # brief with megabytes of base64.
+    import_id: str = Field(default="", max_length=64)
 
 
 class PrdSourceImportRequest(BaseModel):

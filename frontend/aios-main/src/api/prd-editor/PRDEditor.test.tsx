@@ -137,16 +137,27 @@ describe('Block editor draft isolation', () => {
     expect(fetchMock.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/blocks/A/runs'))).toBe(false);
   });
 
-  it('uses the selected block when the chat instruction does not name a chapter', async () => {
+  it('treats an outline click as viewing only and defaults the command to the whole document', async () => {
+    // 讨论对象是按「文档 + 身份」持久化在本机的，别的用例选中过正文就会留下一条；
+    // 而「已存在的讨论对象」本身就是一种明确范围，会盖住这里要验的默认行为，所以先清干净。
+    localStorage.clear();
     const ref = createRef<PRDEditorHandle>();
     render(<PRDEditor ref={ref} sessionId="s" embedded />);
     await screen.findByLabelText('PRD 图文阅读');
     const tree = screen.getByRole('navigation', { name: 'Block 目录' });
     fireEvent.click(within(tree).getByRole('button', { name: /B/ }));
+    let message = '';
     await act(async () => {
-      expect(await ref.current!.requestRevision('请把这一部分写得更具体')).toBe('B');
+      message = await ref.current!.requestRevision('请把这一部分写得更具体');
     });
-    expect(fetchMock.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/blocks/B/runs'))).toBe(true);
+    // 点击只改变「在看哪一章」。这条指令既没点名章节也没勾选章节 → 按整篇全文提交，
+    // 而不是像过去那样把刚点过的 B 当成执行范围。
+    expect(fetchMock.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/blocks/B/runs'))).toBe(false);
+    const job = fetchMock.mock.calls.find(([url, options]) =>
+      new URL(String(url)).pathname.endsWith('/workbench/jobs') && options?.method === 'POST');
+    expect(job).toBeTruthy();
+    expect(JSON.parse(job![1]!.body as string)).toMatchObject({ kind: 'chat', target_ids: [], scope: 'document' });
+    expect(message).toContain('整篇');
   });
 
   it('preserves dirty drafts when AI or another client supplies a new version', () => {
@@ -157,25 +168,21 @@ describe('Block editor draft isolation', () => {
     await editor();
     expect(fetchMock.mock.calls.some(([, options]) => String(options?.body).includes('create_spec'))).toBe(false);
     expect(screen.getByRole('button', { name: '展开 PRD 思维导图' })).toBeTruthy();
-    expect(screen.getByLabelText('文档规划缩略图')).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Block 目录' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'PRD 思维导图与原文联动' })).toBeNull();
   });
-  it('moves the compact mind map down and keeps it attached to the directory', async () => {
+  it('sizes the directory to match the document canvas', async () => {
     const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
       const element = this as HTMLElement;
       if (element.classList.contains('prd-columns')) return { top: 40, height: 800 } as DOMRect;
       if (element.classList.contains('prd-rendered-document')) return { top: 240, height: 620 } as DOMRect;
-      if (element.classList.contains('prd-map-thumbnail')) return { top: 40, height: 116 } as DOMRect;
       return { top: 0, height: 0 } as DOMRect;
     });
     render(<PRDEditor sessionId="s" />);
     await screen.findByLabelText('PRD 图文阅读');
 
-    const thumbnail = screen.getByRole('button', { name: '展开 PRD 思维导图' });
     const directory = screen.getByRole('navigation', { name: 'Block 目录' }).closest<HTMLElement>('.prd-directory');
-    await waitFor(() => expect(thumbnail.style.marginTop).toBe('84px'));
-    expect(directory?.style.marginTop).toBe('0px');
-    expect(directory?.style.height).toBe('620px');
+    await waitFor(() => expect(directory?.style.height).toBe('620px'));
     rect.mockRestore();
   });
   it('expands the linked PRD mind map beside the source document', async () => {
@@ -450,6 +457,36 @@ it('follows the visible document Block without requiring a directory click', asy
   await waitFor(() => expect(screen.getByText('当前 Block · B')).toBeTruthy());
   const tree = screen.getByRole('navigation', { name: 'Block 目录' });
   expect(within(tree).getByRole('button', { name: /B/ }).parentElement?.classList.contains('is-selected')).toBe(true);
+});
+
+it('highlights the directory when the reading pane is clicked without moving the view', async () => {
+  const view = render(<PRDEditor sessionId="s" embedded />);
+  await screen.findByLabelText('PRD 图文阅读');
+  const tree = screen.getByRole('navigation', { name: 'Block 目录' });
+  const scroll = vi.fn(); HTMLElement.prototype.scrollIntoView = scroll;
+
+  fireEvent.click(view.container.querySelector('.prd-rendered-document [data-block-id="B"]')!);
+
+  await waitFor(() => expect(within(tree).getByRole('button', { name: /B/ }).parentElement?.classList.contains('is-selected')).toBe(true));
+  // 点正文只让目录跟着高亮，正文保持读者当前的浏览位置。
+  expect(scroll).not.toHaveBeenCalled();
+});
+
+it('clears the directory highlight on a second click without moving the reading pane', async () => {
+  const view = render(<PRDEditor sessionId="s" embedded />);
+  await screen.findByLabelText('PRD 图文阅读');
+  const tree = screen.getByRole('navigation', { name: 'Block 目录' });
+  const first = within(tree).getByRole('button', { name: /A/ });
+  await waitFor(() => expect(first.parentElement?.classList.contains('is-selected')).toBe(true));
+  const scroll = vi.fn(); HTMLElement.prototype.scrollIntoView = scroll;
+
+  fireEvent.click(first);
+
+  await waitFor(() => expect(tree.querySelectorAll('.is-selected').length).toBe(0));
+  // 只取消高亮：不滚动正文，也不回落到第一章。
+  expect(scroll).not.toHaveBeenCalled();
+  expect(screen.getByText('当前 Block · A')).toBeTruthy();
+  expect(view.container.querySelector('.prd-rendered-document [data-block-id="A"]')?.classList.contains('is-selected')).toBe(false);
 });
 
 it('adds a whole-document comment to all blocks and requests one holistic review', async () => {

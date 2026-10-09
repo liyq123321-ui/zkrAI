@@ -9,20 +9,24 @@
    owns its scrolling so long documents remain reachable. */
 .prd-page{width:100vw;height:100vh;min-width:0;overflow:auto;scrollbar-color:#50627a #172235}
 
-/* Keep the planning overview present without letting a deep tree dominate the
-   editor. The same tree is rendered at its natural size in the modal below. */
-.prd-page button.prd-map-thumbnail{position:relative;display:block;width:100%;height:116px;overflow:hidden;padding:0;border:0;border-radius:0 0 11px 11px;background:#111c2c;text-align:left}
-.prd-page button.prd-map-thumbnail:hover{border-color:transparent;background:#142236}
-.prd-map-thumbnail .prd-map{height:116px;min-height:0;max-height:none;overflow:hidden;align-items:center;padding:10px 18px;background-size:14px 14px;pointer-events:none}
-.prd-map-thumbnail .prd-map-root{position:static;align-self:center;margin:0;padding:8px 13px;border-radius:7px;font-size:10px}
-.prd-map-thumbnail .prd-map-children{gap:2px;padding-left:18px}
-.prd-map-thumbnail .prd-map-branch:before{left:-18px;width:18px}
-.prd-map-thumbnail .prd-map-children:before{left:7px;top:13px;bottom:13px}
-.prd-page .prd-map-thumbnail .prd-map-node{display:flex;width:108px;align-items:center;gap:5px;padding:3px 6px;border:1px solid #31465c;border-radius:5px;background:#192b40;color:#e5edf7;font-size:8px;line-height:1}
-.prd-map-thumbnail .prd-map-node>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.prd-map-thumbnail .prd-map-node small{display:none}
-.prd-map-thumbnail .prd-dot{width:5px;height:5px}
-.prd-map-thumbnail-hint{position:absolute;right:14px;bottom:11px;display:flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid #4c6f77;border-radius:8px;background:#132a31e8;color:#8de6d2;font-size:11px;box-shadow:0 4px 14px #07101b99}
+/* Mind map entry: one compact action replaces the oversized preview so the
+   directory owns the rail. The expanded tree still renders at full size. */
+.prd-page button.prd-mindmap-trigger{display:flex;align-items:center;gap:8px;width:calc(100% - 20px);margin:6px 10px 4px;padding:9px 12px;border:1px solid var(--p-border);border-radius:8px;background:#1b293d;color:#91f2dd;font-size:12px;font-weight:600;text-align:left;transition:border-color .15s ease,background .15s ease,box-shadow .15s ease}
+.prd-page button.prd-mindmap-trigger:hover:not(:disabled){border-color:#70e0ca;background:#263b4a;color:#c7fff2}
+.prd-mindmap-trigger>svg:first-child{flex-shrink:0;color:#70e0ca}
+.prd-mindmap-trigger>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prd-mindmap-trigger-arrow{flex-shrink:0;opacity:.65;transition:transform .15s ease,opacity .15s ease}
+.prd-page button.prd-mindmap-trigger:hover .prd-mindmap-trigger-arrow{transform:translateX(2px);opacity:1}
+/* Directory action buttons (dark theme): review + refresh sit above the
+   mind-map entry in the left rail. Secondary button uses a subtle teal edge
+   while the primary uses the accent color to stand out. */
+.prd-directory-actions{display:flex;gap:6px;padding:0 10px;margin:10px 0 0}
+.prd-page .prd-directory-action{flex:1;display:flex;align-items:center;justify-content:center;gap:5px;padding:7px 10px;border:1px solid #2a3d53;border-radius:7px;background:#132238;color:#9fb3c8;font-size:12px;font-weight:500;white-space:nowrap;transition:border-color .15s ease,background .15s ease,color .15s ease}
+.prd-page .prd-directory-action:hover:not(:disabled){border-color:#3b5873;background:#1a2d45;color:#c7d8e8}
+.prd-page .prd-directory-action:disabled{opacity:.45;cursor:not-allowed}
+.prd-page .prd-directory-action--primary{border-color:#2d8a6f;background:#2d8a6f;color:#e8fff7;font-weight:600}
+.prd-page .prd-directory-action--primary:hover:not(:disabled){border-color:#3aa786;background:#3aa786;color:#fff}
+.prd-page .prd-directory-action--primary:disabled{background:#234d42;border-color:#234d42;color:#7aafa0;opacity:.7}
 
 .prd-plan-modal{width:min(920px,calc(100vw - 40px));padding:0;overflow:hidden}
 .prd-plan-modal>header{margin:0;padding:16px 18px;border-bottom:1px solid var(--p-border)}
@@ -31,7 +35,7 @@
 .prd-plan-modal .prd-map{min-height:320px;max-height:min(68vh,620px);padding:28px 32px}
 .prd-plan-modal .prd-map-dependencies{padding:12px 18px}
 
-@media(max-width:700px){.prd-page button.prd-map-thumbnail,.prd-map-thumbnail .prd-map{height:96px}.prd-plan-modal{width:calc(100vw - 20px)}.prd-plan-modal .prd-map{min-height:260px;max-height:70vh;padding:20px}}
+@media(max-width:700px){.prd-plan-modal{width:calc(100vw - 20px)}.prd-plan-modal .prd-map{min-height:260px;max-height:70vh;padding:20px}}
 
 .prd-generation-status{margin-bottom:16px}
 .prd-generation-status>h3{display:flex;align-items:center;justify-content:space-between;margin:0 0 10px}
@@ -110,8 +114,8 @@
 .prd-map{background-color:#fbfdfc;background-image:radial-gradient(#aebdc344 1px,transparent 1px)}
 .prd-map-root{border-color:#117438;background:var(--p-accent);color:#fff}
 .prd-map-branch:before,.prd-map-children:before{background:#9dbbaa}
-.prd-page button.prd-map-node,.prd-page .prd-map-thumbnail .prd-map-node{border-color:#cbd9d1;background:#fff;color:#304257;box-shadow:0 1px 3px rgb(31 50 68 / 7%)}
-.prd-page button.is-selected,.prd-page .prd-map-thumbnail .prd-map-node.is-selected{border-color:#62a77a;background:#e9f6ee;color:#145d35}
+.prd-page button.prd-map-node{border-color:#cbd9d1;background:#fff;color:#304257;box-shadow:0 1px 3px rgb(31 50 68 / 7%)}
+.prd-page button.is-selected{border-color:#62a77a;background:#e9f6ee;color:#145d35}
 .prd-dot{background:#a4afbc}
 .prd-dot.is-ready{background:#22a55a}
 .prd-dot.is-generating{background:#3182ce;box-shadow:0 0 8px rgb(49 130 206 / 35%)}
@@ -147,9 +151,20 @@
 .prd-diff .is-add{background:#e7f7ed;color:#176b3a}
 .prd-diff .is-remove{background:#fff0f0;color:#a52d2d}
 .prd-history details{border-color:var(--p-border-soft)}
-.prd-page button.prd-map-thumbnail{background:#fbfdfc}
-.prd-page button.prd-map-thumbnail:hover{border-color:transparent;background:#f4f9f6;color:inherit}
-.prd-map-thumbnail-hint{border-color:#83b997;background:#fff;color:#14713e;box-shadow:0 4px 14px rgb(31 50 68 / 12%)}
+.prd-page button.prd-mindmap-trigger{border-color:var(--p-border-soft);background:#fff;color:#14713e;box-shadow:0 1px 2px rgb(31 50 68 / 5%)}
+.prd-page button.prd-mindmap-trigger:hover:not(:disabled){border-color:#91bda2;background:#f1f8f4;color:var(--p-accent-dark);box-shadow:0 2px 6px rgb(31 50 68 / 8%)}
+.prd-mindmap-trigger>svg:first-child{color:var(--p-accent)}
+.prd-mindmap-trigger-arrow{color:#9fb3a8}
+/* Directory action group: review + refresh buttons above the mind-map entry.
+   Keeps the same visual family as the mind-map trigger while visually grouping
+   two primary full-document actions in a compact two-button row. */
+.prd-directory-actions{display:flex;gap:6px;padding:0 10px;margin:8px 0 2px}
+.prd-page .prd-directory-action{flex:1;display:flex;align-items:center;justify-content:center;gap:5px;padding:7px 10px;border:1px solid var(--p-border-soft);border-radius:7px;background:#fff;color:#304257;font-size:12px;font-weight:500;white-space:nowrap;transition:border-color .15s ease,background .15s ease,color .15s ease,box-shadow .15s ease}
+.prd-page .prd-directory-action:hover:not(:disabled){border-color:#91bda2;background:#f1f8f4;color:var(--p-accent-dark);box-shadow:0 1px 4px rgb(31 50 68 / 8%)}
+.prd-page .prd-directory-action:disabled{opacity:.55;cursor:not-allowed}
+.prd-page .prd-directory-action--primary{border-color:var(--p-accent);background:var(--p-accent);color:#fff;font-weight:600}
+.prd-page .prd-directory-action--primary:hover:not(:disabled){border-color:var(--p-accent-dark);background:var(--p-accent-dark);color:#fff;box-shadow:0 2px 6px rgb(20 113 62 / 22%)}
+.prd-page .prd-directory-action--primary:disabled{background:#b8d4c2;border-color:#b8d4c2;color:#fff;opacity:.85}
 .prd-plan-modal>header{border-color:var(--p-border-soft);background:#f7f9fb}
 .prd-full-preview,.prd-full-report{border-color:var(--p-border);background:#fff}
 .prd-full-report-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}
@@ -181,18 +196,20 @@
 .prd-columns.is-full-document{height:auto;min-height:0;max-height:none;align-items:start;overflow:visible}
 .prd-columns.is-full-document .prd-main-editor{height:auto;min-height:0;overflow:visible}
 .prd-columns.is-full-document .prd-directory,
-.prd-columns.is-full-document .prd-right{height:calc(100vh - 24px);min-height:680px;max-height:none;overflow:auto}
-.prd-columns.is-full-document .prd-directory{position:sticky;top:12px;align-self:start;scroll-behavior:auto;overscroll-behavior:contain}
+.prd-columns.is-full-document .prd-right{height:calc(100vh - 24px);min-height:680px;max-height:none}
+.prd-columns.is-full-document .prd-right{overflow:auto}
+.prd-columns.is-full-document .prd-directory{position:sticky;top:12px;align-self:start;display:flex;flex-direction:column;overflow:hidden;scroll-behavior:auto;overscroll-behavior:contain}
+.prd-columns.is-full-document .prd-directory-tree-scroll{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:2px 0 8px}
 .prd-full-editor,.prd-full-preview{flex:0 0 auto;height:70vh;min-height:460px;max-height:760px}
 .prd-full-editor pre,.prd-full-editor textarea{height:100%;min-height:0}
 
 .prd-univer-host{position:relative;flex:1 1 0;min-height:460px;overflow:hidden;border:1px solid var(--p-border);border-radius:9px;background:#eef1f4;box-shadow:inset 0 1px 2px rgb(31 50 68 / 5%)}
 .prd-univer-canvas{position:absolute;inset:0;height:100%;width:100%}
 .prd-univer-host:focus-visible{outline:2px solid var(--p-accent);outline-offset:2px}
-.prd-columns.is-full-document .prd-univer-host{flex:none;height:calc(100vh - 32px);min-height:680px;max-height:none}
-.prd-page.is-embedded .prd-columns.is-full-document .prd-univer-host{height:calc(100vh - 112px);min-height:560px}
+.prd-columns.is-full-document .prd-univer-host{flex:none;height:calc(100vh - 96px);min-height:620px;max-height:none}
+.prd-page.is-embedded .prd-columns.is-full-document .prd-univer-host{height:calc(100vh - 176px);min-height:500px}
 .prd-page.is-embedded .prd-columns.is-full-document .prd-directory,
-.prd-page.is-embedded .prd-columns.is-full-document .prd-right{height:calc(100vh - 104px);min-height:560px}
+.prd-page.is-embedded .prd-columns.is-full-document .prd-right{height:calc(100vh - 168px);min-height:500px}
 
 /* Univer owns its inner canvas and toolbar; keep it in the light workbench theme. */
 .prd-univer-host .univer-app-container{background:#eef1f4}
@@ -202,11 +219,15 @@
 .prd-assets figure{display:grid;grid-template-columns:48px minmax(0,150px);align-items:center;gap:8px;margin:0;padding:5px 8px;border:1px solid var(--p-border-soft);border-radius:7px;background:#fff}
 .prd-assets img{width:48px;height:38px;object-fit:contain;border-radius:4px;background:#eef1f4}
 .prd-assets figcaption{overflow:hidden;color:#526174;font-size:11px;text-overflow:ellipsis;white-space:nowrap}
+.prd-asset-unavailable{display:inline-block;padding:6px 10px;border:1px dashed var(--p-border-soft,#dce3ea);border-radius:6px;background:#f8faf9;color:#8a97a6;font-size:12px}
+.prd-rendered-block-body .prd-asset-unavailable{display:block;max-width:100%;margin:16px auto;padding:24px 12px;text-align:center}
+.prd-assets .prd-asset-unavailable{display:flex;align-items:center;justify-content:center;width:48px;height:38px;padding:0;font-size:10px;line-height:1.2;overflow:hidden}
 
 @media(max-width:700px){
   .prd-columns.is-full-document .prd-directory,
   .prd-columns.is-full-document .prd-right{height:auto;max-height:none}
-  .prd-columns.is-full-document .prd-directory{position:static}
+  .prd-columns.is-full-document .prd-directory{position:static;display:block;overflow:visible}
+  .prd-columns.is-full-document .prd-directory-tree-scroll{overflow:visible;padding:0}
   .prd-full-editor,.prd-full-preview{height:70vh;min-height:420px;max-height:none}
   .prd-univer-host,.prd-columns.is-full-document .prd-univer-host{height:70vh;min-height:440px;max-height:none}
 }
@@ -232,13 +253,11 @@
 .prd-whole-comment{display:flex;align-items:center;gap:9px;margin:12px 0;padding:10px;border:1px solid var(--p-border-soft);border-radius:8px;background:#f8faf9;cursor:pointer}
 .prd-whole-comment>span{display:flex;flex-direction:column;gap:2px}.prd-whole-comment small{font-weight:400}.prd-line-range.is-disabled{opacity:.45}
 
-/* Linked PRD map: the compact preview sits immediately above the directory.
-   Expanding it replaces the left directory and the auxiliary right rail, while
+/* Linked PRD map: a compact trigger opens the map in place of the directory,
    leaving the Univer document as the source of truth on the right. */
 .prd-left-rail{min-width:0;align-self:start}
 .prd-left-rail>.prd-directory{width:100%}
 .prd-map-node-copy{min-width:0;overflow:hidden;overflow-wrap:anywhere}
-.prd-map-thumbnail .prd-map-node-copy{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .prd-columns.is-mindmap-open{grid-template-columns:minmax(420px,46vw) minmax(520px,1fr)}
 .prd-columns.is-mindmap-open .prd-left-rail{position:sticky;top:12px;height:calc(100vh - 24px);min-height:680px;overflow:hidden;border-right:1px solid var(--p-border);background:#f8faf9}
 .prd-mindmap-workspace{display:flex;flex-direction:column;height:100%;min-width:0;background:#fbfdfc}
@@ -256,7 +275,7 @@
 .prd-mindmap-workspace>.prd-map-dependencies{background:#fff}
 .prd-mindmap-workspace>footer{padding:10px 14px;border-top:1px solid var(--p-border-soft);background:#fff;color:var(--p-muted);font-size:11px;line-height:1.55}
 
-.prd-rendered-document{height:calc(100vh - 32px);min-height:680px;overflow:auto;padding:46px 64px;background:#fff;border:1px solid var(--p-border);border-radius:9px;box-shadow:0 8px 28px rgb(31 50 68 / 8%);color:#202832;scroll-behavior:smooth}
+.prd-rendered-document{height:calc(100vh - 96px);min-height:620px;overflow:auto;padding:46px 64px;background:#fff;border:1px solid var(--p-border);border-radius:9px;box-shadow:0 8px 28px rgb(31 50 68 / 8%);color:#202832;scroll-behavior:smooth}
 .prd-rendered-document>section{padding:14px 18px 22px;border:2px solid transparent;border-radius:9px;scroll-margin-top:22px}
 .prd-rendered-document>section.is-selected{border-color:#28a765;background:#fbfefc}
 .prd-rendered-document>section.is-ai-revising{position:relative;border-color:#2f80ed;background:#f5f9ff;box-shadow:0 0 0 4px rgb(47 128 237 / 12%)}
@@ -357,6 +376,22 @@
 .prd-version-text-diff details{margin:0 0 9px;border:1px solid #dce5df;border-radius:8px;overflow:hidden}
 .prd-version-text-diff summary{display:flex;justify-content:space-between;gap:8px;padding:12px;cursor:pointer}.prd-version-text-diff summary span{font-size:11px}
 .prd-version-text-diff details>p{padding:0 12px;color:#536574}.prd-version-text-diff .prd-diff{max-height:none;margin:0 12px 12px;background:#f6f8f7;color:#263548}
+
+/* 「对比上一版」：图文阅读里内联高亮与上一版的差异（沿用 .prd-diff 的浅色配色） */
+.prd-compare-toggle{display:inline-flex;align-items:center;gap:6px;padding:8px 11px;border:1px solid var(--p-border);border-radius:7px;background:var(--p-panel);font-size:12px;white-space:nowrap;cursor:pointer;user-select:none}
+.prd-compare-toggle:hover{border-color:#9dc9ae}
+.prd-compare-toggle:has(input:checked){border-color:var(--p-accent);background:#e9f6ee;color:var(--p-accent-dark);font-weight:600}
+.prd-compare-toggle input{margin:0;accent-color:var(--p-accent)}
+.prd-compare-toggle em{font-style:normal;color:var(--p-muted);font-size:11px}
+.prd-diff-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px;padding:9px 14px;border:1px solid #b8dcc4;background:#eef8f1;border-radius:8px;font-size:12px;color:#2c5a41}
+.prd-diff-banner strong{color:#12693c}
+.prd-diff-banner i{font-style:normal;padding:1px 6px;border-radius:4px}
+.prd-diff-banner i.is-removed{background:#fbe8e8;color:#a13137;text-decoration:line-through}
+.prd-diff-banner i.is-added{background:#dff3e4;color:#12693c}
+.ff-diff-removed{background:#fbe8e8;color:#a13137;text-decoration:line-through}
+.ff-diff-added{background:#dff3e4;color:#12693c;text-decoration:none;border-bottom:2px solid #3aa765;font-weight:600}
+.ff-diff-badge{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:10px;background:#dff3e4;color:#12693c;font-size:11px;font-weight:600;vertical-align:middle}
+.ff-diff-badge.is-rename{background:#fff4dd;color:#8a5a12}
 .prd-version-compare>footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 20px;border-top:1px solid #e2e9e5}
 .prd-version-compare>footer>span{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:#667085;font-size:11px}.prd-version-compare footer i{padding:3px 6px;border-radius:4px;font-style:normal}
 @media(max-width:700px){.prd-version-compare{height:94vh}.prd-version-picker{min-height:125px;padding:9px 6px}.prd-version-strip label{flex-basis:148px}.prd-version-directory-headings h3{font-size:10px}.prd-version-directory-cell{font-size:11px}.prd-version-directory-cell small{display:none}.prd-page .prd-version-directory-cell button{padding:2px 4px}.prd-version-compare>footer{align-items:flex-end;flex-wrap:wrap}}
@@ -400,3 +435,15 @@
 .prd-edit-receipt { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid #d7e2eb; background: #f1faf5; flex-shrink: 0; max-height: 130px; overflow: auto; }
 .prd-edit-receipt > span { font-size: 12px; }
 .prd-edit-receipt > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.prd-first-generation-modal{width:min(680px,100%)}
+.prd-first-template-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:16px 0}
+.prd-first-template-options label{display:flex;align-items:flex-start;gap:9px;min-height:76px;padding:12px;border:1px solid var(--p-border);border-radius:9px;cursor:pointer}
+.prd-first-template-options label.is-selected{border-color:#299c5e;background:#eef9f2}
+.prd-first-template-options input{margin:3px 0 0;accent-color:#168a4d}
+.prd-first-template-options strong,.prd-first-template-options small{display:block}
+.prd-first-template-options small{margin-top:5px;line-height:1.45}
+.prd-first-template-upload{display:grid;gap:10px;padding:12px;border:1px solid var(--p-border-soft);border-radius:9px;background:#f8faf9}
+.prd-first-template-upload input[type=file]{max-width:100%}
+.prd-first-template-upload small{line-height:1.5}
+.prd-first-template-error{margin-top:10px;color:#a62c2c;font-size:12px}
+@media(max-width:600px){.prd-first-template-options{grid-template-columns:1fr}}

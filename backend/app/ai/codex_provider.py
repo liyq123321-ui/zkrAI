@@ -44,6 +44,7 @@ DIAGRAM_EVIDENCE_TERMS = (
 logger = logging.getLogger(__name__)
 
 OPERATION_PROGRESS = {
+    "chat_target_select": "在全文目录中定位要修改的章节",
     "chat_edit_plan": "定位并规划 PRD 对话修改",
     "bulk_edit_rule": "解析批量修改规则和例外",
     "plan": "规划 PRD 章节结构",
@@ -421,6 +422,17 @@ def build_operation_instructions(
             "Do not create an action for an informational issue or an unsupported preference. Copy document_id "
             "and base_revision exactly."
         )
+    elif operation == "chat_target_select":
+        instructions += (
+            "Locate which chapters of the PRD a Chinese chat instruction will change. "
+            "Return only TargetSelection JSON. Choose block_ids from the supplied document_map, at most eight, "
+            "in the order the instruction mentions them, plus a short Chinese reason. "
+            "Every entry carries the chapter title, its order, its parent chapter title and a short excerpt: "
+            "match the instruction against all three, including text that only occurs inside a table or a body "
+            "paragraph of that chapter. Prefer the innermost chapter that owns the named text. "
+            "Never invent an id and never repeat one. Return an empty block_ids list when the instruction gives "
+            "no usable clue instead of guessing a chapter. Do not write content and do not plan the edit itself."
+        )
     elif operation == "chat_edit_plan":
         instructions += (
             "Convert the user's PRD chat instruction into the smallest exact edit steps. "
@@ -624,6 +636,10 @@ class CodexProvider(AIProvider):
 
     async def plan_outline(self, context):
         return await self._call("plan", context, BlockPlan, skills=("create-prd",))
+
+    async def select_chat_targets(self, context):
+        from app.ai.provider import TargetSelection
+        return await self._call("chat_target_select", context, TargetSelection, skills=())
 
     async def plan_chat_edit(self, context):
         from app.ai.provider import DocumentEditPlan

@@ -165,7 +165,17 @@ class DocumentJobs:
                         result = await self.workbench.edits.plan(document_id, actor, payload['instruction'], payload['target_ids'], knowledge=payload['_knowledge'], strict_targets=True)
                         result['linkage_receipt'] = payload['_receipt']
                     elif payload["kind"] == "chat":
-                        result = await self.workbench.edits.plan(document_id, actor, payload["instruction"], payload["target_ids"],
+                        target_ids = payload["target_ids"]
+                        if not target_ids and payload.get("scope") == "document":
+                            # 用户没勾选章节、指令里也没写章节名 —— 默认面向整篇全文：
+                            # 先让 Agent 读整篇目录挑出这次要改的章节，再规划具体修改。
+                            progress("stage", "未指定章节，正在读取整篇目录并定位要修改的章节")
+                            located = time.monotonic()
+                            target_ids, reason = await self.workbench.edits.select_targets(
+                                document_id, actor, payload["instruction"], knowledge=payload['_knowledge'])
+                            progress("stage", f"已定位 {len(target_ids)} 个章节{('：' + reason) if reason else ''}；"
+                                              f"耗时 {round(time.monotonic() - located, 1)} 秒，正在生成修改方案")
+                        result = await self.workbench.edits.plan(document_id, actor, payload["instruction"], target_ids,
                             payload.get("selected_text", ""), payload.get("screenshot_anchor", ""), payload.get("conversation_context", ""), payload.get("object_target"), knowledge=payload['_knowledge'])
                     elif payload["kind"] == "bulk":
                         result = await self.workbench.edits.plan_bulk(document_id, actor, payload["instruction"], knowledge=payload['_knowledge'])

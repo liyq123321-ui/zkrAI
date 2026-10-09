@@ -12,7 +12,7 @@ from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -57,7 +57,7 @@ from app.services.query_service import (
 from app.services.spec_service import SpecService
 from app.services.prd_review import PrdReviewService
 from app.services.prd_prototype import PrdPrototypeService
-from app.services.prd_presentation import PrdPresentationService
+from app.services.prd_presentation import PresentationPlan, PrdPresentationService, render_preview_html
 from app.services.lifecycle_decision import LifecycleDecisionService
 from app.services.agent_backends import AgentBackendService
 
@@ -156,6 +156,17 @@ def build_router(
         return {"ready": presentation is not None, "frozen": frozen,
                 "title": presentation.title if presentation else None,
                 "created_at": presentation.created_at.isoformat() if presentation else None}
+
+    @router.get("/{session_id}/presentations/{audience}/preview", response_class=HTMLResponse)
+    def preview_presentation(session_id: str, audience: Literal["team", "external"]) -> HTMLResponse:
+        """Serve the frozen-PRD deck as a browsable page (public-by-URL, like the prototype page)."""
+
+        presentation = presentation_service.current(session_id, audience) if presentation_service else None
+        if presentation is None:
+            raise HTTPException(status_code=404, detail={
+                "code": "PPT_NOT_FOUND", "message": "当前 PRD 尚无可在线浏览的 PPT 预览页。"})
+        plan = PresentationPlan.model_validate(presentation.plan)
+        return HTMLResponse(render_preview_html(plan, bytes(presentation.pptx), audience, stage="frozen"))
 
     @router.post("/{session_id}/presentations/{audience}")
     async def generate_presentation(session_id: str, audience: Literal["team", "external"], request: Request,
@@ -292,7 +303,7 @@ def build_router(
     def parse_imported_prd(request_body: PrdSourceImportRequest) -> PrdSourceImportResult:
         try:
             return PrdSourceImportResult.model_validate(
-                import_prd_source(request_body.filename, request_body.content_base64)
+                import_prd_source(request_body.filename, request_body.content_base64, keep_file=True)
             )
         except ValueError as error:
             raise HTTPException(

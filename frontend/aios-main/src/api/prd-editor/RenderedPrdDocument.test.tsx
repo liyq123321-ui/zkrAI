@@ -30,7 +30,7 @@ afterEach(cleanup);
 it('reuses a finished Mermaid diagram when an unchanged snapshot arrives', async () => {
   const diagramBlock = { ...block, content: '```mermaid\nflowchart TD\n  A --> B\n```' };
   const props = {
-    comments: [], selectedBlockId: diagramBlock.id,
+    comments: [], selectedBlockId: diagramBlock.id, navSeq: 0,
     onSelectBlock: vi.fn(), onCreateComment: vi.fn(), onEditSource: vi.fn(), onOpenComment: vi.fn(),
   };
   const view = render(<RenderedPrdDocument {...props} blocks={[diagramBlock]} />);

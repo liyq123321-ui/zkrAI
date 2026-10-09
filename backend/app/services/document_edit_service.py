@@ -7,7 +7,7 @@ import os
 import re
 from copy import deepcopy
 
-from app.ai.provider import BlockPlan, BulkEditRule, DocumentEditPlan, PlanNode
+from app.ai.provider import BlockTree, BulkEditRule, DocumentEditPlan, PlanNode, TargetSelection
 from app.domain.types import ErDiagram
 from app.services.block_service import BlockError
 from app.services.drawio_diagrams import diagram_anchor, diagram_review_projection
@@ -210,7 +210,67 @@ def _table_ranges(lines: list[str]) -> list[tuple[int, int]]:
     return found
 
 
-def _table_edit(content: str, step) -> str:
+def _table_rows(content: str, table_index: int) -> list[list[str]] | None:
+    """Snapshot a table's data rows, or None when the table does not exist."""
+    lines = content.splitlines()
+    ranges = _table_ranges(lines)
+    if table_index >= len(ranges):
+        return None
+    start, end = ranges[table_index]
+    return [_cells(line) for line in lines[start + 2:end]]
+
+
+def _squash(text: str) -> str:
+    """markdown 单元格两侧的填充空格不该参与行名比较。"""
+    return re.sub(r"\s+", "", text or "")
+
+
+def _row_hits(row_match: str, row: list[str]) -> bool:
+    """一行是否命中行名锚点。
+
+    锚点有三种形态，模型三种都给过 —— 而 `row` 是**单元格列表**，
+    所以只做单元格级比较是不够的：
+
+    1. 单元格值（`P1`、`协同`）—— 最精确；
+    2. **整行按 markdown 的 ` | ` 拼起来的文本** —— 模型看到的表格就是这一行，
+       所以它最常这么填。这种锚点与单元格永远不相交：既不等于任一单元格，
+       也不可能是任一单元格的子串（整行比单元格长得多），于是必然 0 匹配、
+       把一次完全正确的方案判死；
+    3. 半行片段（只抄了前几列）—— 逐段落格即可。
+    """
+    if row_match in row or any(row_match in cell for cell in row):
+        return True
+    probe = _squash(row_match)
+    if not probe:
+        return False
+    if probe in _squash(" | ".join(row)):
+        return True
+    parts = [piece for piece in (_squash(piece) for piece in row_match.split("|")) if piece]
+    # 逐段落格：每一段都要落在某个单元格里。仅在多段时启用，避免把普通子串放大成任意匹配。
+    if len(parts) > 1 and all(any(piece in _squash(cell) for cell in row) for piece in parts):
+        return True
+    # 末路退回首列：抄整行时最容易记错的是靠后的长文本，首列通常可靠。
+    # 首列不唯一会命中多行，上层照旧报「匹配到 N 行」；若与 step.row 冲突，
+    # 上层会报「表格行号与行内容不一致」—— 都不会静默改错行。
+    return bool(parts) and any(parts[0] in _squash(cell) for cell in row)
+
+
+def _match_rows(row_match: str, rows: list[list[str]], anchor: list[list[str]] | None) -> list[int]:
+    """Resolve a text row anchor.
+
+    A pre-edit snapshot wins whenever the table still has the same shape. Without it a step that
+    rewrites the very text used as the anchor destroys the anchor for every later step: swapping two
+    rows by their labels leaves the first label missing and the second one duplicated, so the second
+    write can no longer address the row it meant.
+    """
+    if anchor is not None and len(anchor) == len(rows):
+        matched = [index for index, row in enumerate(anchor) if _row_hits(row_match, row)]
+        if matched:
+            return matched
+    return [index for index, row in enumerate(rows) if _row_hits(row_match, row)]
+
+
+def _table_edit(content: str, step, row_anchor: list[list[str]] | None = None) -> str:
     lines = content.splitlines()
     ranges = _table_ranges(lines)
     if step.table_index >= len(ranges):
@@ -251,10 +311,14 @@ def _table_edit(content: str, step) -> str:
                 headers[column] = step.value
                 row_index = None
             elif step.row_match:
-                matched = [index for index, row in enumerate(rows) if step.row_match in row or
-                           any(step.row_match in cell for cell in row)]
-                if len(matched) != 1:
-                    raise BlockError("表格行定位不唯一，请补充行名", 422)
+                matched = _match_rows(step.row_match, rows, row_anchor)
+                if not matched:
+                    present = "、".join(row[0] for row in rows[:8] if row and row[0]) or "（无可定位行）"
+                    raise BlockError(f"未找到匹配「{step.row_match}」的数据行；现有行首列：{present}", 422)
+                if len(matched) > 1:
+                    where = "、".join(f"第 {index + 1} 行" for index in matched[:8])
+                    raise BlockError(f"「{step.row_match}」匹配到 {len(matched)} 行（{where}），"
+                                     "请补充更完整的行名或直接给出行号", 422)
                 row_index = matched[0]
                 if step.row and row_index != step.row - 1:
                     raise BlockError("表格行号与行内容不一致", 422)
@@ -350,6 +414,9 @@ class DocumentEditService:
 
     def _simulate(self, source, plan, image_asset_ids=None):
         items = {block["id"]: deepcopy(block) for block in source}
+        # Row anchors are captured before the first table step of this plan touches a table, so later
+        # steps of the same plan still resolve the rows the Agent saw. See _match_rows.
+        table_anchors: dict[tuple[str, int], list[list[str]] | None] = {}
         for step_index, step in enumerate(plan.steps):
             block = items.get(step.block_id)
             if not block:
@@ -388,14 +455,17 @@ class DocumentEditService:
                             or "draft-" + hashlib.sha256(raw).hexdigest()[:12])
                 block["content"] = _image_edit(block["content"], step, asset_id)
             else:
-                block["content"] = _table_edit(block["content"], step)
+                anchor_key = (step.block_id, step.table_index)
+                if anchor_key not in table_anchors:
+                    table_anchors[anchor_key] = _table_rows(block["content"], step.table_index)
+                block["content"] = _table_edit(block["content"], step, table_anchors[anchor_key])
             if len(block["content"]) > 100000:
                 raise BlockError("修改后的章节超过长度限制", 422)
         nodes = [PlanNode(key=item["id"], title=item["title"], parent_key=item["parent_id"],
                           instruction=item["instruction"], dependencies=item["dependencies"])
                  for item in items.values()]
         try:
-            validate_plan(BlockPlan(blocks=nodes))
+            validate_plan(BlockTree(blocks=nodes))
         except ValueError as error:
             raise BlockError(str(error), 422) from error
         return items
@@ -432,6 +502,44 @@ class DocumentEditService:
                             "old_order": block["order"], "order": after["order"],
                             "diagram_previews": diagram_previews})
         return preview
+
+    MAX_SCOPE_CHAPTERS = 8
+
+    async def select_targets(self, document_id, actor, instruction, knowledge=None, limit=MAX_SCOPE_CHAPTERS):
+        """未指定章节时，先让 Agent 在整篇目录里挑出这次要改的章节。
+
+        命令的执行范围只有三个来源：指令里写明的章节名、文档目录中**勾选**的章节
+        （两者已由前端解析进 `target_ids`），以及这里——默认的「面向整篇全文」。
+        **在目录里点击高亮只是查看，不划定范围。**
+
+        为什么单独跑一次而不是直接规划：模型必须拿到被改章节的正文才能给出精确步骤，
+        而整篇 PRD 的正文远超单次上下文（本机那份 236 块 / 25.5 万字）。所以这一步只喂
+        「目录 + 摘要」，定位完再把命中的章节正文交给 `plan()`。
+        """
+        with self.blocks.write() as db:
+            doc = self.blocks.document(db, document_id, actor)
+            rows = self.blocks.blocks(db, doc)
+            titles = {row.id: row.title for row in rows}
+            document_map = [{
+                "id": row.id, "title": row.title, "order": row.order,
+                "parent_title": titles.get(row.parent_id) or "",
+                # 摘要是定位的关键线索：指令里点的往往是正文/表格里的词，而不是章节名。
+                "excerpt": " ".join((row.summary or row.content or "").split())[:200],
+            } for row in rows]
+            if knowledge is None:
+                from app.services.document_decisions import knowledge_context
+                knowledge = knowledge_context(db, doc, [{"id": row.id, "content": row.content or ""} for row in rows], consume=True)
+        if not hasattr(self.provider, "select_chat_targets"):
+            raise BlockError("当前 Agent 尚不支持按全文目录自动定位章节，请在文档目录中勾选要修改的章节", 503)
+        picked = TargetSelection.model_validate(await self.provider.select_chat_targets({
+            "instruction": instruction, "document_map": document_map,
+            "confirmed_knowledge": knowledge, "limit": limit,
+        }))
+        known = {row["id"] for row in document_map}
+        ids = [block_id for block_id in dict.fromkeys(picked.block_ids) if block_id in known][:limit]
+        if not ids:
+            raise BlockError("未能在整篇目录中确定要修改的章节，请在文档目录中勾选章节，或在指令里写明章节名称", 422)
+        return ids, picked.reason
 
     async def plan(self, document_id, actor, instruction, target_ids, selected_text="", screenshot_anchor="", conversation_context="", object_target=None, knowledge=None, strict_targets=False):
         with self.blocks.write() as db:
@@ -600,7 +708,7 @@ class DocumentEditService:
                    ("title", "content", "parent_id", "order", "instruction", "dependencies", "fragment")}}
                    for block in source}
         try:
-            validate_plan(BlockPlan(blocks=[PlanNode(key=b["id"], title=b["title"], parent_key=b["parent_id"],
+            validate_plan(BlockTree(blocks=[PlanNode(key=b["id"], title=b["title"], parent_key=b["parent_id"],
                           instruction=b["instruction"], dependencies=b["dependencies"]) for b in changed.values()]))
         except ValueError as error:
             raise BlockError("历史目录无法恢复：" + str(error), 422) from error

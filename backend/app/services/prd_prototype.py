@@ -193,6 +193,96 @@ class PrdPrototypeService:
             project_id = project.id
         return await self.ensure_for_project(project_id)
 
+    async def generate_draft_payload(
+        self,
+        project_id: str,
+        *,
+        document_id: str,
+        revision: int,
+        content_hash: str,
+        markdown: str,
+    ) -> HtmlPrototypePayload | None:
+        """Generate prototype HTML for an **unfrozen** PRD draft.
+
+        Uses the same Agent/skill route as the frozen PRD prototype
+        (``generate_prd_prototype``); only the source differs: the current block
+        document draft instead of an immutable ``SpecVersion``. The result is not
+        persisted here — the caller stores it as a document artifact keyed by
+        document revision.
+        """
+
+        if not self.enabled:
+            return None
+        request = {
+            "project_id": project_id,
+            "document_id": document_id,
+            "document_revision": revision,
+            "spec_content_hash": content_hash,
+            "prd_markdown": markdown,
+            "stage": "draft",
+            "constraints": {
+                "prd_is_read_only": True,
+                "single_file_html": True,
+                "network_access_from_prototype": False,
+            },
+        }
+        return await self._generate_payload(project_id, request)
+
+    async def _generate_payload(
+        self, project_id: str, request: dict
+    ) -> HtmlPrototypePayload | None:
+        """Run one prototype Agent call, reusing an identical prior request."""
+
+        with self._session_factory() as db:
+            reusable = next(
+                (
+                    call
+                    for call in db.query(AgentCall)
+                    .filter_by(
+                        project_id=project_id,
+                        operation="generate_prd_prototype",
+                        status="RESULT_READY",
+                    )
+                    .order_by(desc(AgentCall.started_at), desc(AgentCall.id))
+                    .all()
+                    if call.request == request
+                ),
+                None,
+            )
+            if reusable is not None:
+                return HtmlPrototypePayload.model_validate(reusable.response)
+            agent_session = self._agent_session(db, project_id)
+            call = AgentCall(
+                id=_new_id(),
+                project_id=project_id,
+                agent_session_id=agent_session.id,
+                operation="generate_prd_prototype",
+                request=request,
+                status="PENDING",
+            )
+            db.add(call)
+            db.commit()
+            call_id = call.id
+        try:
+            output = await self._agent.generate_prd_prototype(request)
+        except Exception:
+            with self._session_factory() as db:
+                failed = db.get(AgentCall, call_id)
+                if failed is not None and failed.status == "PENDING":
+                    failed.status = "FAILED"
+                    failed.error = "prototype generation failed"
+                    failed.completed_at = utc_now()
+                    db.commit()
+            return None
+        with self._session_factory() as db:
+            call = db.get(AgentCall, call_id)
+            if call is not None and call.status == "PENDING":
+                call.response = output.model_dump(mode="json")
+                call.status = "RESULT_READY"
+                call.completed_at = utc_now()
+                db.commit()
+        return output
+
     def automatic_generation_allowed(self, project_id: str) -> bool:
         """Return false when the current PRD has any review finding."""
 

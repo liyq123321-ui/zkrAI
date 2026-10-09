@@ -2,6 +2,7 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Block, Draft } from './types';
+import { DocumentAssetImage, assetIdFromSrc, assetUrlTransform } from './DocumentAssetImage';
 
 export function BlockEditor({ block, draft, blocks, onEdit, onRange }: {
   block: Block; draft: Draft; blocks: Block[]; onEdit: (patch: Partial<Draft>) => void;
@@ -14,7 +15,13 @@ export function BlockEditor({ block, draft, blocks, onEdit, onRange }: {
     <details className="prd-dependencies"><summary>上游依赖 · {draft.dependencies.length} 项</summary>
       {blocks.filter(b => b.id !== block.id).map(b => <label key={b.id}><input type="checkbox" checked={draft.dependencies.includes(b.id)} onChange={e => onEdit({ dependencies: e.target.checked ? [...draft.dependencies, b.id] : draft.dependencies.filter(id => id !== b.id) })} />{b.title}</label>)}
     </details>
-    {preview ? <article className="prd-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.content || '此 Block 尚未编写。'}</ReactMarkdown></article> :
+    {preview ? <article className="prd-preview"><ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={assetUrlTransform} components={{
+      img({ src, alt, title }) {
+        const assetId = assetIdFromSrc(src);
+        if (assetId) return <DocumentAssetImage documentId={block.document_id} assetId={assetId} alt={alt ?? ''} title={title} />;
+        return <img src={src} alt={alt ?? ''} title={title} />;
+      },
+    }}>{draft.content || '此 Block 尚未编写。'}</ReactMarkdown></article> :
       <div className="prd-code-editor"><pre aria-hidden="true">{draft.content.split('\n').map((_, i) => i + 1).join('\n')}</pre>
         <textarea className="prd-block-content" aria-label="Block 正文" spellCheck={false} value={draft.content} placeholder="在这里编写当前章节，或点击「生成当前块」。" wrap="off"
           onScroll={e => { const gutter = e.currentTarget.previousElementSibling; if (gutter) gutter.scrollTop = e.currentTarget.scrollTop; }}

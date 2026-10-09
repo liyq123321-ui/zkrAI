@@ -75,8 +75,7 @@ export function FullDocumentView({ snapshot, changed, active, loading, resolving
   deferReport?: boolean;
 }) {
   return <>
-    {changed && <div className="prd-conflict">正文已更新，审核留待手动触发或进入下一阶段前进行。<button onClick={onRefresh} disabled={loading}>刷新全文</button></div>}
-    <div className="prd-toolbar"><button className="prd-primary" onClick={onReview} disabled={active || loading || !snapshot.blocks.some(b => b.content.trim())}>{active ? '审核全文中…' : '审核全文'}</button><button onClick={onRefresh} disabled={loading}>刷新全文</button></div>
+    {changed && <div className="prd-conflict" role="status">正文已更新，审核留待手动触发或进入下一阶段前进行。请使用左侧「刷新全文」按钮同步最新快照。</div>}
     {!deferReport && <FullDocumentReport snapshot={snapshot} loading={loading} resolving={resolving} report={report} reviewError={reviewError} onSelect={onSelect} onOpenIssue={onOpenIssue} onResolve={onResolve} />}
   </>;
 }

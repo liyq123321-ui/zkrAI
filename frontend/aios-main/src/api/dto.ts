@@ -62,6 +62,8 @@ export interface ImportedPrdSourceDto {
   media_type: string;
   title: string;
   content: string;
+  /** Server-side handle for the original file; lets the images come back. */
+  import_id?: string;
 }
 
 export interface SpecReviewDto {

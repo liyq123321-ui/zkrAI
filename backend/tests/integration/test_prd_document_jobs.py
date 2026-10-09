@@ -105,3 +105,62 @@ async def test_changed_document_rejects_old_candidate_and_retry_keeps_old_record
     await jobs.tasks[retry['id']]
     assert jobs.get(doc, 'owner', job['id'])['status'] == 'ready'
     assert jobs.get(doc, 'owner', retry['id'])['result']['base_revision'] == changed['document']['revision']
+
+
+class LocatingPlanner(Planner):
+    """记录「先定位、后规划」两步各自拿到什么上下文。"""
+
+    def __init__(self, block_ids):
+        self.block_ids = block_ids
+        self.select_context = None
+        self.plan_context = None
+
+    async def select_chat_targets(self, context):
+        self.select_context = context
+        return {"block_ids": self.block_ids, "reason": "指令点名了该章节正文里的表格"}
+
+    async def plan_chat_edit(self, context):
+        self.plan_context = context
+        return await super().plan_chat_edit(context)
+
+
+@pytest.mark.asyncio
+async def test_document_scope_locates_chapters_before_planning(service):
+    """未勾选章节、指令里也没写章节名时：先读整篇目录定位，再只拿命中的章节去规划。"""
+    snap = prepared(service, '# A')
+    doc = snap['document']['id']
+    snap = manual(service, doc, snap['blocks'][0], 'Original\n\n待确认登录方式？')
+    target_id = snap['blocks'][0]['id']
+    provider = LocatingPlanner([target_id])
+    edits = DocumentEditService(service, provider)
+    jobs = DocumentJobs(DocumentWorkbench(service, edits))
+
+    job = jobs.enqueue(doc, 'owner', 'doc-scope', dict(kind='chat', instruction='把这个表重排一下',
+                                                       target_ids=[], scope='document'), snap['document']['revision'])
+    await jobs.tasks[job['id']]
+
+    assert jobs.get(doc, 'owner', job['id'])['status'] == 'ready'
+    # 第一步只喂目录 + 摘要，绝不喂整篇正文（本机那份 236 块根本进不了单次上下文）。
+    assert provider.select_context['document_map']
+    assert 'blocks' not in provider.select_context
+    # 第二步才把命中的章节正文交给规划。
+    assert [block['id'] for block in provider.plan_context['blocks']] == [target_id]
+
+
+@pytest.mark.asyncio
+async def test_document_scope_fails_with_a_usable_message_when_nothing_is_located(service):
+    snap = prepared(service, '# A')
+    doc = snap['document']['id']
+    snap = manual(service, doc, snap['blocks'][0], 'Original\n\n待确认登录方式？')
+    provider = LocatingPlanner([])
+    edits = DocumentEditService(service, provider)
+    jobs = DocumentJobs(DocumentWorkbench(service, edits))
+
+    job = jobs.enqueue(doc, 'owner', 'doc-scope-empty', dict(kind='chat', instruction='优化一下',
+                                                            target_ids=[], scope='document'), snap['document']['revision'])
+    await jobs.tasks[job['id']]
+
+    detail = jobs.get(doc, 'owner', job['id'])
+    assert detail['status'] == 'failed'
+    assert '勾选' in detail['error']
+    assert provider.plan_context is None  # 定位失败就不该再去规划

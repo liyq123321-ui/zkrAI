@@ -1360,10 +1360,23 @@ class SpecService:
             saved = dict(decision)
             saved.setdefault("decision_id", request.get("command_id"))
             decision_history.append(saved)
+        artifacts = self._artifact_snapshot(db, project.id)
+        source = project.brief.get("source_prd") if isinstance(project.brief, dict) else None
+        if isinstance(source, dict) and isinstance(source.get("content"), str) and len(source["content"]) > 100_000:
+            # The original artifact and the Brief contain the same imported text.
+            # Keep the full baseline once in the Agent request, with its artifact
+            # identity and content hash still available for traceability.
+            for artifact in artifacts:
+                content = artifact.get("content")
+                if artifact.get("kind") == "ORIGINAL_REQUIREMENT" and isinstance(content, dict) and content.get("source_prd") == source:
+                    artifact["content"] = {**content, "source_prd": {
+                        **{key: value for key, value in source.items() if key != "content"},
+                        "content_ref": "brief.source_prd.content",
+                    }}
         payload: dict[str, object] = {
             "brief": project.brief,
             "input_refs": self._input_refs(db, project),
-            "artifacts": self._artifact_snapshot(db, project.id),
+            "artifacts": artifacts,
             "clarification_history": self._clarification_history(db, project.id),
             "change_summary": comments,
             "parent_version_id": parent.id if parent is not None else None,

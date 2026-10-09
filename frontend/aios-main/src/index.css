@@ -711,6 +711,45 @@ button:disabled {
   font-size: 10px;
 }
 
+.ff-agent-events-group {
+  margin: 7px 0 7px 37px;
+}
+
+.ff-agent-events-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--ff-border-soft);
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: #3f4b5d;
+  cursor: pointer;
+  font-size: 10px;
+  list-style: none;
+}
+
+.ff-agent-events-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ff-agent-events-group > summary strong {
+  flex: 1;
+  font-weight: 600;
+}
+
+.ff-agent-events-group > summary > svg {
+  transition: transform 150ms ease;
+}
+
+.ff-agent-events-group[open] > summary > svg {
+  transform: rotate(180deg);
+}
+
+.ff-agent-events-group .ff-agent-event {
+  margin: 7px 0 0;
+}
+
 .ff-agent-event strong {
   display: block;
   font-weight: 600;
@@ -913,8 +952,9 @@ button:disabled {
 .ff-chat-attachment button { position: absolute; top: -5px; right: -5px; border: 0; border-radius: 50%; background: #263244; color: #fff; cursor: pointer; }
 .ff-chat-image { display: block; max-width: 100%; max-height: 180px; margin-top: 8px; border-radius: 8px; cursor: zoom-in; }
 .ff-chat-image-loading { display: block; margin-top: 8px; font-size: 11px; color: #718096; }
-.ff-chat-image-button { display: grid; grid-column: 2; grid-row: 2; place-items: center; width: 30px; height: 30px; border: 0; background: transparent; color: #53667e; cursor: pointer; }
-.ff-chat-image-button:hover { color: #147d4b; }
+.ff-chat-quick-actions { display: flex; grid-column: 2; grid-row: 2; align-items: center; gap: 2px; }
+.ff-chat-image-button, .ff-prd-tasks-icon-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: #53667e; cursor: pointer; }
+.ff-chat-image-button:hover, .ff-prd-tasks-icon-button:hover { background: #edf5f0; color: #147d4b; }
 
 .ff-stream-composer {
   display: grid;
@@ -6522,8 +6562,163 @@ button.ff-top-level-agent-card:hover { border-color: #3d9dd9; transform: transla
   .wk-detail-hero dl { display: none; }
 }
 .ff-prd-chat-context { display: grid; gap: 5px; margin: 6px 12px; padding: 8px 10px; background: #f2f8f5; border: 1px solid #d9e7de; border-radius: 8px; font-size: 12px; }
+.ff-prd-chat-context-collapsible { display: block; position: relative; }
+.ff-prd-chat-context-collapsible > summary { display: grid; gap: 3px; padding-right: 30px; cursor: pointer; list-style-position: inside; }
+.ff-prd-chat-context-collapsible > summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ff-prd-chat-context-collapsible[open] > summary { margin-bottom: 8px; }
+.ff-prd-chat-context-collapsible > .ff-prd-chat-context-collapse { display: none; position: absolute; top: 8px; right: 8px; place-items: center; width: 26px; height: 26px; padding: 0; }
+.ff-prd-chat-context-collapsible[open] > .ff-prd-chat-context-collapse { display: grid; }
 .ff-prd-chat-context label { display: flex; align-items: center; gap: 8px; }
 .ff-prd-chat-context select { min-width: 0; flex: 1; padding: 4px; border: 1px solid #cbd8d0; border-radius: 5px; background: white; }
 .ff-prd-chat-context small { max-height: 42px; overflow: auto; color: #536477; }
 .ff-prd-chat-context > div { display: flex; flex-wrap: wrap; gap: 5px; max-height: 60px; overflow: auto; }
 .ff-prd-chat-context button { font-size: 11px; border: 1px solid #cbd8d0; padding: 3px 6px; border-radius: 4px; background: white; cursor: pointer; }
+
+/* ---------------------------------------------------------------------------
+   待执行指令队列
+   后端单进程单 worker，一个回合未结束时新指令直发只会被拒。忙时改为把指令
+   挂在输入框上侧排队，↑ 按钮可选择「取消当前任务并立即执行」，否则等当前
+   回合结束后自动依次执行。
+--------------------------------------------------------------------------- */
+.ff-pending-queue {
+  margin-bottom: 8px;
+  border: 1px solid #d8e2ec;
+  border-radius: 10px;
+  background: #f2f6fa;
+  overflow: hidden;
+}
+
+.ff-pending-queue > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #dbe5ef;
+  background: #e8eff7;
+  color: #3c4d63;
+  font-size: 11px;
+}
+
+.ff-pending-queue > header strong { color: #1f2d40; font-size: 11px; }
+
+.ff-pending-queue > header small {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #6b7c92;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ff-queue-notice {
+  margin: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f0e0c0;
+  background: #fff7e6;
+  color: #8a5a00;
+  font-size: 10px;
+}
+
+.ff-pending-queue ol {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 168px;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.ff-pending-queue li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border: 1px solid #dfe8f1;
+  border-radius: 8px;
+  background: #fff;
+  color: #33435a;
+  font-size: 11px;
+}
+
+.ff-pending-queue li.is-next { border-color: #9dc3a8; background: #f4fbf6; }
+
+.ff-queue-order {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e4ebf3;
+  color: #56687f;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.ff-pending-queue li.is-next .ff-queue-order { background: var(--ff-green); color: #fff; }
+
+.ff-queue-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.ff-queue-now,
+.ff-queue-remove {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7c92;
+  cursor: pointer;
+}
+
+.ff-queue-now { border-color: #c3d4e6; background: #f4f8fc; color: #1f6fd0; }
+.ff-queue-now:hover { border-color: #8fb8e4; background: #e6f0fb; }
+.ff-queue-remove:hover { background: #fdecec; color: #c0392b; }
+
+.ff-chat-send-button.is-queued { border-color: #d8a53a; background: #e0a92c; }
+.ff-chat-send-button.is-queued:hover:not(:disabled) { background: #c9942a; }
+
+.ff-queue-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(15 23 42 / 38%);
+}
+
+.ff-queue-dialog {
+  width: min(460px, 100%);
+  padding: 18px 20px;
+  border: 1px solid #d3dce6;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgb(15 23 42 / 24%);
+}
+
+.ff-queue-dialog h2 { margin: 0 0 10px; color: #172033; font-size: 15px; }
+
+.ff-queue-dialog-quote {
+  max-height: 132px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  border-left: 3px solid var(--ff-green);
+  border-radius: 6px;
+  background: #f5f8fb;
+  color: #33435a;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ff-queue-dialog-state { margin: 0 0 14px; color: #667085; font-size: 11px; }
+
+.ff-queue-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.ff-queue-dialog-actions .ff-primary-button { display: inline-flex; align-items: center; gap: 6px; }

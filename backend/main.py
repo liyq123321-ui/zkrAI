@@ -46,8 +46,11 @@ from app.services.agent_runtime_events import AgentRuntimeEventStore
 from app.services.weknora import WeKnoraClient
 from app.services.workspace_portal import WorkspacePortalService
 from app.api.documents import build_router as build_documents_router
+from app.api.document_prototypes import build_router as build_document_prototype_router
+from app.api.document_presentations import build_router as build_document_presentation_router
 from app.api.blocks import build_router as build_blocks_router
 from app.services.block_service import BlockService, BlockError
+from app.services.imported_hierarchy import ImportedHierarchyService
 from app.services.document_edit_service import DocumentEditService
 from app.services.document_workbench import DocumentWorkbench
 from app.services.document_jobs import DocumentJobs
@@ -210,9 +213,20 @@ def create_app(
             asset_service,
             docx_service,
             prototype_service,
+            ImportedHierarchyService(block_service, session_factory, agent_gateway),
         )
     )
     application.include_router(build_blocks_router(block_service, block_ai, actor_resolver, document_edits))
+    application.include_router(
+        build_document_prototype_router(
+            block_service, asset_service, prototype_service, actor_resolver
+        )
+    )
+    application.include_router(
+        build_document_presentation_router(
+            block_service, asset_service, presentation_service, actor_resolver
+        )
+    )
     application.include_router(build_workbench_router(document_workbench, actor_resolver, document_jobs))
 
     if settings.cors_allowed_origins:

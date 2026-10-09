@@ -163,6 +163,22 @@ class DocumentAssetService:
     def bytes_for(self, asset: DocumentAsset) -> bytes:
         return self._path(asset.storage_key).read_bytes()
 
+    def discard_blocks(self, db, document_id: str, block_ids: set[str]) -> int:
+        """Delete the assets anchored to Blocks that are about to disappear.
+
+        Without this, replacing a draft leaves image rows pointing at Block ids
+        that no longer exist: unreachable from the document, but still on disk.
+        """
+
+        rows = [
+            asset for asset in db.query(DocumentAsset).filter_by(document_id=document_id)
+            if asset.block_id in block_ids
+        ]
+        for asset in rows:
+            self._path(asset.storage_key).unlink(missing_ok=True)
+            db.delete(asset)
+        return len(rows)
+
     def artifact_for_revision(self, db, document_id: str, revision: int, kind: str = "docx"):
         return db.query(DocumentArtifact).filter_by(
             document_id=document_id, revision=revision, kind=kind
@@ -178,6 +194,8 @@ class DocumentAssetService:
         file_name: str,
         content: bytes,
         kind: str = "docx",
+        mime_type: str = DOCX_MIME_TYPE,
+        extension: str = "docx",
         created_paths: list[Path] | None = None,
     ) -> DocumentArtifact:
         if not content or len(content) > MAX_DOCX_BYTES:
@@ -187,7 +205,7 @@ class DocumentAssetService:
         if existing is not None:
             return existing
         artifact_id = uid("artifact")
-        storage_key = f"{document_id}/documents/{revision}-{artifact_id}.docx"
+        storage_key = f"{document_id}/documents/{revision}-{artifact_id}.{extension}"
         path = self._path(storage_key)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
@@ -201,8 +219,8 @@ class DocumentAssetService:
             revision=revision,
             kind=kind,
             storage_key=storage_key,
-            file_name=_safe_name(file_name, "PRD.docx"),
-            mime_type=DOCX_MIME_TYPE,
+            file_name=_safe_name(file_name, f"PRD.{extension}"),
+            mime_type=mime_type,
             size_bytes=len(content),
             content_hash=digest,
             created_by=actor,

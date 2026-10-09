@@ -252,8 +252,13 @@ describe('workspace regression', () => {
       target: { value: '把当前 PRD 的项目目标补充指标' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送消息' }));
-    expect(await screen.findByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeTruthy();
+    // 模拟的 PRD Agent 仍在生成：指令先进入队列，而不是撞上被占用的后端。
+    const queue = await screen.findByRole('region', { name: '待执行指令队列' });
+    expect(within(queue).getByText('把当前 PRD 的项目目标补充指标')).toBeTruthy();
+    expect(screen.queryByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeNull();
+
     fireEvent.click(screen.getByRole('button', { name: '模拟 PRD 完成' }));
+    expect(await screen.findByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeTruthy();
     await waitFor(() => expect(storedChatMessages['session-1']).toHaveLength(3));
 
     first.unmount();
@@ -261,7 +266,8 @@ describe('workspace regression', () => {
     expect(await screen.findByText('把当前 PRD 的项目目标补充指标')).toBeTruthy();
     expect(await screen.findByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeTruthy();
     expect(await screen.findByText('全文自动修订已完成')).toBeTruthy();
-    expect(storedChatMessages['session-1'].map(item => item.role)).toEqual(['user', 'agent', 'agent']);
+    // 排队改变了落库顺序：上一轮任务先报完成，排队指令随后才被发出。
+    expect(storedChatMessages['session-1'].map(item => item.role)).toEqual(['agent', 'user', 'agent']);
   });
 
   it('uses the open PRD as context for chat edits and still honors other commands', async () => {
@@ -275,7 +281,10 @@ describe('workspace regression', () => {
       target: { value: '请把项目规划部分的验收标准写清楚' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送消息' }));
+    expect(await screen.findByRole('region', { name: '待执行指令队列' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '模拟 PRD 完成' }));
     expect(await screen.findByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('region', { name: '待执行指令队列' })).toBeNull());
 
     fireEvent.change(screen.getByRole('textbox', { name: '给 Project Agent 发送消息' }), {
       target: { value: '打开看板' },
@@ -299,6 +308,8 @@ describe('workspace regression', () => {
       target: { value: '产品概念设计里的信息结构图和产品结构图请重新生成' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送消息' }));
+    expect(await screen.findByRole('region', { name: '待执行指令队列' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '模拟 PRD 完成' }));
     expect(await screen.findByText('已将修改指令交给「项目规划」章节的 Agent。')).toBeTruthy();
     expect(screen.queryByText(/为保持阶段门禁/)).toBeNull();
   });
@@ -2011,18 +2022,60 @@ describe('顶层图的「查看 PRD / 查看原型」入口', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it('PRD 尚未定型时提示先完成「进入下一阶段」，不请求原型', async () => {
+  it('PRD 尚未定型时弹窗确认后基于当前草稿生成原型（草稿版）', async () => {
     resourceOverrides['/sessions/session-1/state'] = {
       ...state, current_spec_version_id: null, current_spec_status: null,
     };
+    resourceOverrides['/prd-documents'] = {
+      document: { id: 'doc-draft', revision: 5, session_id: 'session-1' }, blocks: [], runs: [], comments: [],
+    };
+    resourceOverrideSequences['/prd-documents/doc-draft/prototype'] = [
+      { document_id: 'doc-draft', revision: 5, status: 'missing' },
+      { document_id: 'doc-draft', revision: 5, status: 'ready', content_url: '/prd-documents/doc-draft/prototype/content' },
+    ];
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     await openTopLevel();
 
     await clickWhenEnabled('查看原型');
 
-    expect(await screen.findByText(/PRD 尚未定型/)).toBeTruthy();
+    // 不再硬性要求「进入下一阶段」，改为弹窗说明将基于当前草稿生成。
+    const dialog = await screen.findByRole('dialog', { name: '基于当前 PRD 草稿生成原型' });
     expect(open).not.toHaveBeenCalled();
-    expect(fetchSpy.mock.calls.some(([input]) => new URL(String(input)).pathname === '/prd/root-1')).toBe(false);
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认生成原型草稿' }));
+
+    await waitFor(() => expect(open).toHaveBeenCalledWith(
+      'http://127.0.0.1:8088/prd-documents/doc-draft/prototype/content', '_blank', 'noopener,noreferrer',
+    ));
+  });
+
+  it('PRD 尚未定型时弹窗确认后基于当前草稿生成 PPT 并打开在线预览页（草稿版）', async () => {
+    resourceOverrides['/sessions/session-1/state'] = {
+      ...state, current_spec_version_id: null, current_spec_status: null,
+    };
+    resourceOverrides['/prd-documents'] = {
+      document: { id: 'doc-draft', revision: 5, session_id: 'session-1' }, blocks: [], runs: [], comments: [],
+    };
+    resourceOverrideSequences['/prd-documents/doc-draft/presentations/team'] = [
+      { document_id: 'doc-draft', revision: 5, audience: 'team', status: 'missing' },
+      { document_id: 'doc-draft', revision: 5, audience: 'team', status: 'ready', content_url: '/prd-documents/doc-draft/presentations/team/file' },
+    ];
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await openTopLevel();
+
+    await clickWhenEnabled('团队 PPT');
+
+    // 不再硬性要求「进入下一阶段」，改为弹窗说明将基于当前草稿生成。
+    const dialog = await screen.findByRole('dialog', { name: '基于当前 PRD 草稿生成 PPT' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认生成并预览' }));
+
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([input, options]) =>
+      options?.method === 'POST'
+      && new URL(String(input)).pathname === '/prd-documents/doc-draft/presentations/team'
+    )).toBe(true));
+    // 生成后在新标签页打开在线预览页（下载按钮在页面内）。
+    await waitFor(() => expect(open).toHaveBeenCalledWith(
+      'http://127.0.0.1:8088/prd-documents/doc-draft/presentations/team/preview', '_blank', 'noopener,noreferrer',
+    ));
   });
 
   it('关闭 PRD 后直接回到该项目的顶层图，而不是用户主页', async () => {

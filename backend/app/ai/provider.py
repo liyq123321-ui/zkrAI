@@ -26,6 +26,34 @@ class BlockPlan(BaseModel):
     blocks: list[PlanNode] = Field(min_length=1, max_length=100)
 
 
+class BlockTree(BlockPlan):
+    """本地目录自检用的模型 —— 不受「模型输出」的条数上限约束。
+
+    `BlockPlan.max_length = 100` 是给「生成 / 解析大纲」的输出契约用的（防模型一次吐几百章）。
+    但同一形状也被拿来校验**既有文档**的目录树（`_simulate` 收尾、`save()` 改依赖、恢复历史版本），
+    而真实导入的 PRD 可以有几百个块（本机那份 236 块）——
+    于是**任何一次聊天修改都会在收尾自检时被判死**：
+    `1 validation error for BlockPlan blocks List should have at most 100 items, not 236`。
+    自检的是我们自己的快照，不是模型输出，所以这里不设条数上限。
+    """
+
+    blocks: list[PlanNode] = Field(min_length=1)
+
+
+class TargetSelection(BaseModel):
+    """未指定章节时，先单独让 Agent 在整篇目录里挑出要改的章节。
+
+    为什么不和 `plan_chat_edit` 合成一次调用：模型必须拿到**被改章节的正文**才能给出
+    精确的修改步骤，而整篇 PRD 的正文远超单次上下文（本机那份 236 块 / 25.5 万字）。
+    所以分两步——先用「目录 + 摘要」定位章节（这次调用不带正文，很便宜），
+    再只把这些章节的正文交给 `plan_chat_edit`。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    block_ids: list[str] = Field(default_factory=list, max_length=8)
+    reason: str = Field(default="", max_length=2000)
+
+
 class BlockResult(BaseModel):
     decision_conflicts: list[str] = Field(default_factory=list, max_length=30)
     model_config = ConfigDict(extra="forbid")

@@ -1,12 +1,13 @@
 import { Children, cloneElement, isValidElement, memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { ElementType, ReactElement, ReactNode } from 'react';
+import type { ElementType, ReactElement, ReactNode, UIEvent } from 'react';
 import mermaid from 'mermaid';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MessageSquareText } from 'lucide-react';
 import { DrawioErDiagram } from '../DrawioErDiagram';
-import { appConfig } from '../config';
-import { documentPath } from './api';
+import { DocumentAssetImage, assetIdFromSrc, assetUrlTransform } from './DocumentAssetImage';
+import { INSERT_HREF, highlightByBlock } from './versionHighlight';
+import { isNearBottom } from '../scrollPin';
 import type { Block, Comment } from './types';
 import { orderedBlocks } from './univer/blockDocumentAdapter';
 
@@ -169,7 +170,7 @@ function decorateChildren(children: ReactNode, highlights: ReadingHighlight[], o
 }
 
 interface MarkdownBodyProps {
-  block: Block; streaming: boolean; highlights: ReadingHighlight[];
+  block: Block; content?: string; streaming: boolean; highlights: ReadingHighlight[];
   onOpenComment: OpenComment;
 }
 
@@ -182,15 +183,15 @@ function sameHighlights(left: ReadingHighlight[], right: ReadingHighlight[]) {
   });
 }
 
-const MarkdownBody = memo(function MarkdownBody({ block, streaming, highlights, onOpenComment }: MarkdownBodyProps) {
+const MarkdownBody = memo(function MarkdownBody({ block, content, streaming, highlights, onOpenComment }: MarkdownBodyProps) {
   const renderedContent = useMemo(() => {
     let diagramNumber = 0;
-    return block.content
-      .replace(/^```mermaid\s*$/gim, () => `\`\`\`mermaid-${++diagramNumber}`)
-      .replace(/(!\[[^\]]*\]\()asset:\/\/([A-Za-z0-9_-]+)(\))/g,
-        (_, before: string, assetId: string, after: string) =>
-          `${before}${appConfig.apiBaseUrl}${documentPath(block.document_id)}/assets/${encodeURIComponent(assetId)}${after}`);
-  }, [block.content, block.document_id]);
+    // `asset://<id>` 引用要留给下面的 `img` 组件解析成带鉴权的请求，
+    // **不能**在这里改写成裸的后端 URL —— `<img src>` 带不上 Authorization 头。
+    // `content` 是「对比上一版」注入高亮标记后的正文；不对比时它就是原文。
+    return (content ?? block.content)
+      .replace(/^```mermaid\s*$/gim, () => `\`\`\`mermaid-${++diagramNumber}`);
+  }, [content, block.content]);
 
   const forNode = (node: unknown) => {
     const position = (node as { position?: { start?: { line?: number }; end?: { line?: number } } } | undefined)?.position;
@@ -198,11 +199,23 @@ const MarkdownBody = memo(function MarkdownBody({ block, streaming, highlights, 
     if (!first || !last) return highlights;
     return highlights.filter(highlight => !highlight.startLine || !highlight.endLine || (highlight.startLine <= last && highlight.endLine >= first));
   };
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={assetUrlTransform} components={{
     p({ children, node, ...props }) { return <p {...props}>{decorateChildren(children, forNode(node), onOpenComment)}</p>; },
     li({ children, node, ...props }) { return <li {...props}>{decorateChildren(children, forNode(node), onOpenComment)}</li>; },
     td({ children, node, ...props }) { return <td {...props}>{decorateChildren(children, forNode(node), onOpenComment)}</td>; },
     th({ children, node, ...props }) { return <th {...props}>{decorateChildren(children, forNode(node), onOpenComment)}</th>; },
+    img({ src, alt, title }) {
+      const assetId = assetIdFromSrc(src);
+      if (assetId) return <DocumentAssetImage documentId={block.document_id} assetId={assetId} alt={alt ?? ''} title={title} />;
+      return <img src={src} alt={alt ?? ''} title={title} />;
+    },
+    del({ children, ...props }) { return <del className="ff-diff-removed" {...props}>{children}</del>; },
+    a({ href, children, ...props }) {
+      // 「对比上一版」把新增内容写成 `[文本](#ff-ins)`：纯 markdown 没有"插入"语法，
+      // 又不能用内联 <ins>（本项目没装 rehype-raw），所以借链接当载体在这里翻译回来。
+      if (href === INSERT_HREF) return <ins className="ff-diff-added">{children}</ins>;
+      return <a href={href} {...props}>{children}</a>;
+    },
     pre({ children, ...props }) {
       const child = Array.isArray(children) ? children[0] : children;
       if (isValidElement(child) && child.type === MermaidDiagram) return child;
@@ -219,14 +232,22 @@ const MarkdownBody = memo(function MarkdownBody({ block, streaming, highlights, 
     },
   }}>{renderedContent}</ReactMarkdown>;
 }, (previous, next) => previous.block.id === next.block.id && previous.block.title === next.block.title
-  && previous.block.content === next.block.content && previous.streaming === next.streaming
+  && previous.block.content === next.block.content && previous.content === next.content
+  && previous.streaming === next.streaming
   && sameHighlights(previous.highlights, next.highlights));
 
-export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streamingBlockId, streamingLabel = '正在流式写入', reviewSelection, onSelectBlock, onSelectionChange, onCreateComment, onEditSource, onOpenComment, onChooseObject }: {
+export function RenderedPrdDocument({ blocks, comments, selectedBlockId, navSeq, streamingBlockId, streamingLabel = '正在流式写入', reviewSelection, compareBaseline, onSelectBlock, onSelectionChange, onCreateComment, onEditSource, onOpenComment, onChooseObject }: {
   blocks: Block[]; streamingBlockId?: string; streamingLabel?: string;
   comments: Comment[];
   selectedBlockId: string;
+  /**
+   * 显式导航计数（点目录/导图/批注/进度）。正文内点选章节只更新选中态，
+   * 不递增它，因此不会把读者的浏览位置拽走。
+   */
+  navSeq: number;
   reviewSelection?: ReadingSelection | null;
+  /** 勾选「对比上一版」时传入；为空即普通图文阅读。 */
+  compareBaseline?: { version: number; blocks: Block[] } | null;
   onSelectBlock: (blockId: string) => void;
   onSelectionChange?: (selection: ReadingSelection | null) => void;
   onCreateComment: (selection: ReadingSelection, text: string, action: ReadingAnnotationAction) => Promise<void>;
@@ -235,7 +256,29 @@ export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streami
   onChooseObject?: (blockId: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  /**
+   * Whether the reading pane is pinned to the bottom. The Agent streams block
+   * by block during generation; blindly following every block yanks the view
+   * away while the reader is browsing elsewhere.
+   */
+  const readPinnedRef = useRef(true);
+  function handleReadScroll(event: UIEvent<HTMLDivElement>) {
+    readPinnedRef.current = isNearBottom(event.currentTarget);
+  }
   const ordered = useMemo(() => orderedBlocks(blocks), [blocks]);
+  const comparison = useMemo(() => {
+    if (!compareBaseline) return null;
+    const previous = new Map(compareBaseline.blocks.map(block => [block.id, block]));
+    const { highlighted, added } = highlightByBlock(
+      new Map([...previous].map(([id, block]) => [id, block.content ?? ''])),
+      new Map(blocks.map(block => [block.id, block.content ?? ''])),
+    );
+    const renamed = new Set(blocks.filter(block => {
+      const before = previous.get(block.id);
+      return before !== undefined && before.title !== block.title;
+    }).map(block => block.id));
+    return { previous, highlighted, added, renamed, version: compareBaseline.version };
+  }, [compareBaseline, blocks]);
   const [selection, setSelection] = useState<(ReadingSelection & { x: number; y: number }) | null>(null);
   const [composing, setComposing] = useState(false);
   const [commentText, setCommentText] = useState('');
@@ -255,11 +298,20 @@ export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streami
       endLine: reviewSelection.endLine, temporary: true }] : persisted;
   }, [comments, reviewSelection]);
 
+  // 显式导航才把目标滚入视野。在正文里点选章节、划选文字，或在目录里取消选中，
+  // 都只更新选中态，保持读者当前的浏览位置（selectedBlockId 可能为空，即无选中）。
   useEffect(() => {
-    const targetId = streamingBlockId ?? selectedBlockId;
-    const target = hostRef.current?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(targetId)}"]`);
-    target?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  }, [selectedBlockId, streamingBlockId]);
+    if (!navSeq || !selectedBlockId) return;
+    hostRef.current?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(selectedBlockId)}"]`)
+      ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [navSeq]);
+
+  // Agent 逐块流式写入时只在读者仍贴着底部时才跟随，避免把正在向上翻看的用户拽回。
+  useEffect(() => {
+    if (!streamingBlockId || !readPinnedRef.current) return;
+    hostRef.current?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(streamingBlockId)}"]`)
+      ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [streamingBlockId]);
 
   useEffect(() => {
     if (!reviewSelection) return;
@@ -305,7 +357,11 @@ export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streami
     } finally { setSubmitting(false); }
   }
 
-  return <div ref={hostRef} className="prd-rendered-document" aria-label="PRD 图文阅读" onMouseUp={readSelection}>
+  return <div ref={hostRef} className="prd-rendered-document" aria-label="PRD 图文阅读" onScroll={handleReadScroll} onMouseUp={readSelection}>
+    {comparison && <div className="prd-diff-banner" role="status">
+      <strong>对比上一版 v{comparison.version}</strong>
+      <span><i className="is-removed">删除线</i> 为上一版原有内容 · <i className="is-added">高亮</i> 为本次新增</span>
+    </div>}
     {selection && <div className={`prd-reading-selection-menu${composing ? ' is-composing' : ''}`} style={{ left: selection.x, top: selection.y }}
       onMouseDown={event => event.preventDefault()} onMouseUp={event => event.stopPropagation()} role="toolbar" aria-label="选中文字操作">
       {!composing ? <><button onClick={() => setComposing(true)}>加批注</button>
@@ -317,13 +373,19 @@ export function RenderedPrdDocument({ blocks, comments, selectedBlockId, streami
     </div>}
     {ordered.map(({ block, depth }) => {
       const Heading = `h${Math.min(depth + 1, 6)}` as ElementType;
-      const className = [block.id === selectedBlockId && 'is-selected', block.id === streamingBlockId && 'is-ai-revising'].filter(Boolean).join(' ');
+      const before = comparison?.previous.get(block.id);
+      const isAdded = comparison?.added.has(block.id) ?? false;
+      const isChanged = (comparison?.highlighted.has(block.id) ?? false) || (comparison?.renamed.has(block.id) ?? false);
+      const className = [block.id === selectedBlockId && 'is-selected', block.id === streamingBlockId && 'is-ai-revising',
+        isAdded && 'is-diff-added', isChanged && 'is-diff-changed'].filter(Boolean).join(' ');
       return <section key={block.id} data-block-id={block.id} className={className}
         onClick={() => onSelectBlock(block.id)}>
-        <Heading>{block.title}</Heading>
+        <Heading>{block.title}{isAdded && <span className="ff-diff-badge">新增</span>}
+          {comparison?.renamed.has(block.id) && <span className="ff-diff-badge is-rename">原名「{before?.title ?? ''}」</span>}</Heading>
         {onChooseObject && /```mermaid|\|\s*:?-{3,}/.test(block.content) && <button type="button" onClick={event => { event.stopPropagation(); onChooseObject(block.id); }}>选择本章表格 / 图中对象</button>}
         {block.id === streamingBlockId && <div className="prd-stream-progress" role="status"><span />{streamingLabel}…</div>}
-        <div className="prd-rendered-block-body"><MarkdownBody block={block} streaming={block.id === streamingBlockId}
+        <div className="prd-rendered-block-body"><MarkdownBody block={block} content={comparison?.highlighted.get(block.id)}
+          streaming={block.id === streamingBlockId}
           highlights={highlights.filter(highlight => highlight.blockId === block.id)} onOpenComment={openComment} />
           {block.fragment?.er_diagrams?.map(diagram => {
             const anchor = block.content.match(new RegExp(`firstflight-er-${diagram.diagram_id}-[0-9a-f]{8}`))?.[0]
